@@ -1028,7 +1028,9 @@ function qs() {
   return q;
 }
 async function loadState() {
+  const myDrive = drive;                    // 换盘守卫：响应到达时盘符已变则丢弃
   STATE = await apiJSON(`${API}/__oc__/state?${qs()}`);
+  if (drive !== myDrive) return;
   $("ver").textContent = STATE.app?.version ? "v" + STATE.app.version : "";
   $("upCur").textContent = $("ver").textContent || "";
   // 后端 tagline 是中文；英文界面下用字典文案，避免覆盖掉翻译
@@ -1045,10 +1047,12 @@ async function loadState() {
 }
 async function scan() {
   const b = $("btnScan");
+  const myDrive = drive, myScope = scope;   // 换盘守卫：在途响应若盘符已变则整体丢弃
   const old = b.textContent; b.disabled = true; b.textContent = t("scan.running","扫描中…");
   $("scantime").innerHTML = `<span class="spin"></span>${t("scan.tallying","正在统计…")}`;
   try {
     const data = await apiJSON(`${API}/__oc__/scan?${qs()}`);
+    if (drive !== myDrive || scope !== myScope) return;   // 旧盘的迟到响应，不渲染
     SCAN = {};
     (data.results || []).forEach(r => SCAN[r.id] = r);
     renderDisk(data.disk);
@@ -1056,6 +1060,7 @@ async function scan() {
     applyPreset(STATE.presets.find(p => p.id === "safe"));
     updateFooter();
   } catch (e) {
+    if (drive !== myDrive) return;                        // 旧盘的失败也不打扰新盘
     $("scantime").innerHTML = '<span class="res-err">' + t("scan.fail","扫描失败：") + esc(e.message) + "</span>";
   } finally { b.disabled = false; b.textContent = old; }
 }
