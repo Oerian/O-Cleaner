@@ -1446,9 +1446,10 @@ function renderDisk(d) {
   drawDiskTrend();
 }
 
-/* ---- 磁盘空间趋势：本盘近 30 天的「可用空间」折线 ----
-   数据来自服务端每天至多一条的快照（disk-trend.json，运行数据不入库）。
-   少于两个点时如实写「积累中」，不画假图。 */
+/* ---- 清理活动图（2026-10-17 改版）：纵轴是「每次清理释放了多少」 ----
+   数据来自清理历史（/history），只统计当前盘的事件（新记录带盘符；
+   早期记录没有盘符字段，不计入、也不混入别的盘）。柱高 = 该次释放量；
+   没有事件时如实说明，不画空图。 */
 function cssVar(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
@@ -1457,7 +1458,7 @@ function hexToRgba(hex, alpha) {
   let h = hex.replace("#", "");
   if (h.length === 3) h = [...h].map(c => c + c).join("");
   const n = parseInt(h, 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+  return `rgba(${(n >> 16) & 255},${n >> 8 & 255},${n & 255},${alpha})`;
 }
 let DISK_TREND = null;
 /* 悬停提示：记录最近一次绘制的几何信息，mousemove 时找最近的事件点 */
@@ -1469,14 +1470,10 @@ async function loadDiskTrend() {
   } catch { DISK_TREND = []; }
   drawDiskTrend();
 }
-/* ---- 磁盘空间趋势（2026-10-14 改版）：阶梯折线，转折点 = 每次清理行为 ----
-   数据来自清理历史（/history），按「当前可用空间 - 之后历次清理释放量」
-   反推每个时点的可用空间。形状：两端水平 —— 首个清理事件之前与最后一个
-   事件之后都是平线，只有清理发生时才抬升（释放空间 → 可用空间跳高）。 */
 function drawDiskTrend() {
   const cv = $("trendCv"), lbl = $("trendLbl");
   if (!cv) return;
-  const freeNow = STATE.disk && STATE.disk.free;
+  const hasDisk = !!(STATE.disk && STATE.disk.total);
   const dpr = window.devicePixelRatio || 1;
   cv.width = Math.max(120, cv.clientWidth) * dpr;
   cv.height = 64 * dpr;
@@ -1484,60 +1481,50 @@ function drawDiskTrend() {
   ctx.scale(dpr, dpr);
   const W = cv.width / dpr, H = cv.height / dpr;
   ctx.clearRect(0, 0, W, H);
-  if (!freeNow) {
+  if (!hasDisk) {
     _TREND_GEO = null;              // 换盘/无数据：清掉旧几何，悬停不再显示上一块盘的点
     if (lbl) lbl.textContent = "";
     return;
   }
-  // 清理事件（旧 → 新），只保留近 30 天、释放量 > 0 的
+  // 当前盘的清理事件（旧 → 新）：只统计释放量 > 0 且盘符匹配的记录
+  // （跨盘的回收站清理记为 "C,D" 形式，包含当前盘即算）。
   const now = Date.now(), CUT = 30 * 86400e3;
-  const evs = (DISK_TREND || [])
-    .map(e => ({ t: Date.parse((e.time || "").replace(" ", "T")), freed: +e.freed || 0 }))
+  const all = (DISK_TREND || [])
+    .map(e => ({ t: Date.parse((e.time || "").replace(" ", "T")),
+                 freed: +e.freed || 0, drive: e.drive || "" }))
     .filter(e => e.freed > 0 && isFinite(e.t) && now - e.t <= CUT)
     .sort((a, b) => a.t - b.t);
-  // 反推事件后的可用空间：从当前值往回减
-  let acc = freeNow;
-  for (let i = evs.length - 1; i >= 0; i--) {
-    evs[i].after = acc;
-    acc -= evs[i].freed;
-    evs[i].before = acc;
-  }
-  const free0 = evs.length ? evs[0].before : freeNow;
-  const lo = Math.min(free0, freeNow, ...evs.map(e => e.after)) || 0;
-  const hi = Math.max(free0, freeNow, ...evs.map(e => e.after)) || 1;
-  const span = (hi - lo) || 1, pad = 6;
-  const t0 = evs.length ? Math.min(evs[0].t, now - CUT) : now - CUT;
-  const X = t => 2 + (t - t0) / (now - t0) * (W - 8);
-  const Y = v => pad + (H - pad * 2) * (1 - (v - lo) / span);
-  // 阶梯折线：左端水平 → 每个事件处竖直抬升 → 右端水平到画布边缘
-  const accent = cssVar("--accent", "#60a5fa");
-  ctx.beginPath();
-  ctx.moveTo(2, Y(free0));
-  evs.forEach(e => { ctx.lineTo(X(e.t), Y(e.before)); ctx.lineTo(X(e.t), Y(e.after)); });
-  ctx.lineTo(W - 2, Y(freeNow));
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 1.6;
-  ctx.stroke();
-  // 轻量填充衬托趋势
-  ctx.lineTo(W - 2, H); ctx.lineTo(2, H); ctx.closePath();
-  ctx.fillStyle = hexToRgba(accent, 0.10);
-  ctx.fill();
-  // 转折点圆点 + 最新值圆点
-  ctx.fillStyle = accent;
-  evs.forEach(e => {
-    ctx.beginPath(); ctx.arc(X(e.t), Y(e.after), 2.2, 0, Math.PI * 2); ctx.fill();
-  });
-  // 记录几何信息供悬停查询（鼠标放到转折点附近 → 显示该次清理的时间与释放量）
-  _TREND_GEO = evs.length ? { evs, X, Y, W } : null;
+  const evs = all.filter(e => e.drive && e.drive.split(",").includes(drive));
   if (lbl) {
     lbl.textContent = evs.length
-      ? t("trend.withEvents","近 30 天 {n} 次清理 · 可用 {a} → {b}（+{d}），转折点即清理行为")
-        .replace("{n}", evs.length).replace("{a}", fmt(free0)).replace("{b}", fmt(freeNow)).replace("{d}", fmt(freeNow - free0))
-      : t("trend.noEvents","近 30 天暂无清理记录（可用 {a}）；执行清理后这里会出现转折点").replace("{a}", fmt(freeNow));
+      ? t("trend.withEvents","近 30 天 {n} 次清理 · 共释放 {d}，柱高即该次释放的空间")
+          .replace("{n}", evs.length).replace("{d}", fmt(evs.reduce((s, e) => s + e.freed, 0)))
+      : t("trend.noEvents","近 30 天本盘暂无清理记录；执行清理后，这里会显示每次释放的空间");
   }
+  if (!evs.length) { _TREND_GEO = null; return; }
+  // 柱状图：纵轴从 0 起，顶 = 最大单次释放量（至少 1 MiB，避免除零）
+  const hi = Math.max(1024 * 1024, ...evs.map(e => e.freed));
+  const t0 = evs[0].t, pad = 6, bw = Math.min(26, Math.max(5, (W - 12) / evs.length - 8));
+  const X = tt => 6 + (tt - t0) / Math.max(1, now - t0) * (W - 14);
+  const Y = v => pad + (H - pad * 2) * (1 - v / hi);
+  const accent = cssVar("--accent", "#60a5fa");
+  ctx.fillStyle = hexToRgba(accent, 0.85);
+  evs.forEach(e => {
+    const x = X(e.t), y = Y(e.freed), h = Math.max(2, H - pad - y);
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      const r = Math.min(3, bw / 2);
+      ctx.roundRect(x - bw / 2, H - pad - h, bw, h, [r, r, 0, 0]);
+      ctx.fill();
+    } else {
+      ctx.fillRect(x - bw / 2, H - pad - h, bw, h);
+    }
+  });
+  // 记录几何信息供悬停查询（鼠标放到柱子附近 → 显示该次清理的时间与释放量）
+  _TREND_GEO = { evs, X, W, bw };
 }
 
-/* 趋势图悬停：鼠标靠近转折点时显示该次清理的时间与释放容量（简略）。
+/* 清理活动图悬停：鼠标靠近柱子时显示该次清理的时间与释放容量。
    提示框挂在 body 上用固定定位，不挤占面板布局。 */
 let _trendTip = null;
 function trendTipEl() {
@@ -1561,7 +1548,7 @@ window.addEventListener("mousemove", ev => {
     return;
   }
   const mx = ev.clientX - r.left;
-  let best = null, bestD = 14;                  // 14px 命中半径
+  let best = null, bestD = 20;                  // 命中半径略大于半柱宽
   for (const e of g.evs) {
     const d = Math.abs(g.X(e.t) - mx);
     if (d < bestD) { bestD = d; best = e; }
@@ -1571,7 +1558,7 @@ window.addEventListener("mousemove", ev => {
   const timeStr = new Date(best.t).toLocaleString([], {
     year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
   tip.innerHTML = `<b>${t("trend.tipFreed","释放")}: ${fmt(best.freed)}</b><br>` +
-    `<span style="color:var(--dim2)">${esc(timeStr)} · ${t("trend.tipAfter","清理后可用")} ${fmt(best.after)}</span>`;
+    `<span style="color:var(--dim2)">${esc(timeStr)}${best.drive.includes(",") ? " · " + esc(best.drive) : ""}</span>`;
   tip.style.display = "block";
   const tw = tip.offsetWidth;
   tip.style.left = Math.min(window.innerWidth - tw - 8, ev.clientX + 12) + "px";
@@ -4993,10 +4980,9 @@ const I18N_EN = {
   "disk.unknownErr": "Unknown error",
   "disk.total": "Total", "disk.used": "Used", "disk.free": "Free",
   "sel.items": "items", "sel.free": "Estimated free", "sel.picked": "Picked",
-  "trend.withEvents": "Last 30 days: {n} cleanups · free {a} → {b} (+{d}); each bend is a cleanup",
-  "trend.noEvents": "No cleanups in the last 30 days (free {a}); bends appear here after you clean",
+  "trend.withEvents": "Last 30 days: {n} cleanups · {d} freed in total; bar height = space freed by that cleanup",
+  "trend.noEvents": "No cleanups on this drive in the last 30 days; each cleanup will appear here as a bar",
   "trend.tipFreed": "Freed",
-  "trend.tipAfter": "free after cleanup",
   "cr.lockHint": "Hint",
   "btn.cleanSelected": "Clean selected",
   "pane.sched": "Scheduled Auto-Clean",

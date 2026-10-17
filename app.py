@@ -4698,6 +4698,7 @@ def _run_scheduled(s: dict) -> None:
     targets = build_targets(drive)
     selected = _apply_preset_to_targets(targets, s.get("preset") or "safe")
     entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+             "drive": drive,
              "trigger": f"定时自动清理（{drive}:）",
              "results": [], "freed": 0, "failed": 0, "targets": len(selected)}
     for t in selected:
@@ -5842,6 +5843,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.busy = True
             try:
                 entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                         "drive": drive,
                          "trigger": f"手动清理（{drive}:）",
                          "results": [], "freed": 0, "failed": 0,
                          "targets": len(selected)}
@@ -5893,8 +5895,13 @@ class Handler(BaseHTTPRequestHandler):
                 out = purge_recycle_paths(paths)
             finally:
                 self.server.busy = False
-            # 释放量如实入账：与常规清理同一统计通道
+            # 释放量如实入账：与常规清理同一统计通道。
+            # 回收站条目可能跨盘：从各结果路径提取盘符集合，逗号连接。
+            drives = ",".join(sorted({
+                (r.get("path") or "")[:1].upper() for r in out["results"]
+                if r.get("path")}))
             entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                     "drive": drives,
                      "trigger": "清空所选项的回收站",
                      "results": out["results"], "freed": out["freed"],
                      "failed": 0, "targets": len(paths),
@@ -5980,6 +5987,7 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 append_history({
                     "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "drive": letter,
                     "trigger": f"删除游戏（{letter}:）",
                     "results": [result], "freed": freed,
                     "failed": result["failed"], "targets": 1,
@@ -6292,6 +6300,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.busy = True
             try:
                 entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                         "drive": drive,
                          "trigger": f"规则「{rule['name']}」（{drive}:）",
                          "rule": rule["name"],
                          "results": [], "freed": 0, "failed": 0,
