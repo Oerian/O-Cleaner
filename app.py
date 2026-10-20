@@ -3954,7 +3954,19 @@ def clean_target(t: dict, only_paths: list | None = None,
         if m.get("error"):
             result["partial_notes"] = [m["error"]]
         if only_paths:
+            # only_paths 通道的安全护栏（2026-10-20 审计）：这里的 p 来自请求体，
+            # 但 rm() 没有其它防线 —— 必须校验每条路径都位于**本目标对应盘**的
+            # $Recycle.Bin 之内，绝不信任前端只传回收站里的路径。
+            # 这与 /clean 其它通道「服务端重新校验，绝不信任前端」的边界一致。
+            dl = expand(str(t.get("drive_letter") or ""), drive).rstrip(":") or letter
+            bin_root = os.path.normpath(dl + ":\\$Recycle.Bin").lower() + "\\"
             for p in only_paths:
+                plow = os.path.normpath(os.path.abspath(str(p))).lower()
+                if not plow.startswith(bin_root) or plow == bin_root.rstrip("\\"):
+                    result["failed"] += 1
+                    result["skipped"].append(
+                        {"path": str(p)[:200], "reason": "拒绝：路径不在本盘回收站内"})
+                    continue
                 sz = _size_of(p)
                 if rm(p):
                     result["deleted"] += 1
