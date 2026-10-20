@@ -1373,10 +1373,14 @@ async function aiRun(which, body, btn, label) {
  * 只送可清理项是刻意的：模型根本没有机会提到不该删的东西，
  * 后面就算它编出一个不在清单里的 id，后端也会直接丢掉。 */
 function aiCandidates() {
+  // 预定义清理目标本身就是「本工具判定可清理」的项——它们正是界面上
+  // 带勾选框、可被预设一键清理的那批。只要扫描确认它在盘上真实存在
+  // （已量出体积、没丢、没报错）就是候选；扫描未完成时不猜。
   return (STATE?.targets || []).map(t => {
     const s = SCAN[t.id] || {};
+    const measured = s && !s.missing && !s.error && s.size_h;
     return { id: t.id, label: t.label, size_h: s.size_h || "",
-             category: t.category, cleanable: !!t.cleanable && !s.missing,
+             category: t.category, cleanable: !!measured,
              path: t.path };
   }).filter(c => c.cleanable);
 }
@@ -1406,7 +1410,7 @@ function aiPlanHTML(r) {
   const picks = r.picks || [];
   const note = r.candidate_count
     ? t("ai.pickedFrom","从 {n} 个内置判定为可清理的项里挑出 {m} 个").replace("{n}", r.candidate_count).replace("{m}", picks.length)
-    : t("ai.noCandidates","当前没有可清理的候选项");
+    : t("ai.noCandidates","暂无可清理候选：常规扫描确认本盘的清理项后才会交给模型");
   return `
     <div class="dtip" style="margin-top:0">${esc(r.summary || t("ai.noSummary","（模型没有给出说明）"))}</div>
     <div style="color:var(--dim2);font-size:11.5px;margin:7px 0">${esc(note)}${
@@ -4828,7 +4832,7 @@ const I18N_EN = {
   "ai.testOk": "Connection OK, model replied: ", "ai.empty": "(empty)",
   "ai.testFail": "Connection failed: ", "ai.genFail": "Generation failed",
   "ai.pickedFrom": "Picked {m} of {n} items the built-in rules marked cleanable",
-  "ai.noCandidates": "No cleanable candidates right now",
+  "ai.noCandidates": "No candidates yet — they appear after the regular scan confirms cleanable items on this drive",
   "ai.noSummary": "(the model gave no summary)",
   "ai.dropped": "; the model also mentioned {n} ids not in the list, dropped",
   "ai.applyPicks": "Select only these {n} items",
