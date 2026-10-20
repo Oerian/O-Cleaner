@@ -3372,6 +3372,28 @@ def check_deletable(path: str, kind: str = "tree") -> tuple[bool, str]:
     if low in (home, os.path.join(home, "appdata").lower()):
         return False, "拒绝：不允许清理用户主目录"
 
+    # 仓库自身与仓库内数据（history.json / config/ 等）此前只靠「没被推荐」
+    # 兜底，没有硬护栏 —— 在这里显式拒绝。清理工具不该有能力删掉自己。
+    try:
+        base_low = str(BASE_DIR).lower()
+        if low == base_low or low.startswith(base_low.rstrip("\\") + "\\"):
+            return False, "拒绝：目标是 O-Cleaner 自身或其数据目录"
+    except Exception:
+        pass
+
+    # junction / 符号链接防护（2026-10-20 审计）：以上全部规则都基于路径
+    # **字符串分段名**，而一个指向受保护目录的 junction（如 D:\cache-link
+    # → C:\Windows）段名是自选的，不会命中任何名单；Windows 上 Python 的
+    # islink() 对 junction 返回 False，shutil.rmtree 会穿过去删真实目标。
+    # 因此对真实存在的目标解析真实路径，并对解析结果重新执行同一套检查 ——
+    # 只会让护栏**更严**（多拒绝），符合「宁可少推荐，也不误删」的取向。
+    try:
+        real = os.path.realpath(norm)
+    except OSError:
+        real = norm
+    if os.path.normpath(real).lower() != low:
+        return check_deletable(real, kind)
+
     # 不可读时不在这里判定拒绝，交由上层报「需要管理员权限」，
     # 这样 C:\\Windows\\Temp 能给出可读提示而不是硬性拒绝
     return True, ""
