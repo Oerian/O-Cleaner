@@ -67,6 +67,8 @@ def _argv_data_dir() -> str:
 # 数据一起迁移，U 盘携带即插即用）；程序目录只读或想把数据单独存放时，
 # 用 --data-dir <路径> 或环境变量 OC_DATA_DIR 重定向到任意可写位置。
 DATA_DIR = Path(os.environ.get("OC_DATA_DIR") or _argv_data_dir() or BASE_DIR)
+# 数据目录可写性的进程内缓存（None = 尚未探测），见 data_dir_writable()
+_DATA_DIR_WRITABLE: bool | None = None
 CONFIG_DIR = DATA_DIR / "config"
 WEB_DIR = BASE_DIR / "web"
 
@@ -147,7 +149,16 @@ def is_admin() -> bool:
 def data_dir_writable() -> bool:
     """实测数据存档目录的可写性（自检面板据此判断历史/配置能否落盘）。
     只查目录存在不够 —— 目录存在但只读（如被放进 Program Files、
-    或整个目录被设了只读属性）时，写入会静默失败。写一次探针文件最可靠。"""
+    或整个目录被设了只读属性）时，写入会静默失败。写一次探针文件最可靠。
+
+    进程内只探一次并缓存：这个函数被 /state 每次调用，而 DATA_DIR 默认就是
+    仓库根目录 —— 以前每个请求都在仓库里写一个探针文件再删掉。在带删除保护
+    钩子的宿主环境里，那个 unlink 会被拦下并抛 SystemExit，直接打断请求
+    （实测 /state 反复 RemoteDisconnected，并耗尽了宿主的删除配额）。
+    """
+    global _DATA_DIR_WRITABLE
+    if _DATA_DIR_WRITABLE is not None:
+        return _DATA_DIR_WRITABLE
     try:
         probe = DATA_DIR / f".oc_write_probe_{os.getpid()}"
         probe.write_bytes(b"")
@@ -155,9 +166,15 @@ def data_dir_writable() -> bool:
             probe.unlink()
         except OSError:
             pass
-        return True
+        _DATA_DIR_WRITABLE = True
     except OSError:
-        return False
+        _DATA_DIR_WRITABLE = False
+    except SystemExit:
+        # 宿主的删除保护钩子会抛 SystemExit（不是 Exception 的子类）。
+        # 探针删除受阻 ≠ 数据目录不可写（写入本身成功了），按可写处理，
+        # 否则一个安全钩子就能让整个 /state 面板失效。
+        _DATA_DIR_WRITABLE = True
+    return _DATA_DIR_WRITABLE
 
 
 def human(n: float) -> str:
