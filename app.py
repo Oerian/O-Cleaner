@@ -4798,11 +4798,30 @@ def _resolve_preset(targets: list[dict], preset: dict) -> list[str]:
             if t.get("risk") in risks and (allow_admin or not t.get("needs_admin"))]
 
 
+def _schedule_run_interval(s: dict) -> float:
+    """把 interval_hours 归一成合法小时数。
+
+    配置可能是手改的、被旧版本写坏的、或前端 bug 传进来的字符串。
+    这里一律钳到 [0.25, 24*30]：非法值回落到默认 24 小时，绝不抛异常 ——
+    抛异常会让 next_run 不推进，守护线程 30 秒后又来跑一次（见 _run_scheduled）。
+    """
+    try:
+        hrs = float(s.get("interval_hours"))
+    except (TypeError, ValueError):
+        return float(DEFAULT_SCHEDULE["interval_hours"])
+    if not (hrs > 0) or hrs != hrs or hrs == float("inf"):   # 含 NaN / inf
+        return float(DEFAULT_SCHEDULE["interval_hours"])
+    return max(0.25, min(hrs, 24 * 30))
+
+
 def _apply_preset_to_targets(targets: list[dict], preset_id: str) -> list[dict]:
     cfg = load_targets()
     preset = next((p for p in cfg.get("presets", []) if p["id"] == preset_id), None)
     if not preset:
-        return [t for t in targets if not t.get("needs_admin")]
+        # 未知预设名（被资源包移除 / 手改配置）**不能**回落成「所有不需要管理员的
+        # 目标」—— 那会比用户预期宽得多（实测 safe=9 项，回落=22 项），
+        # 而定时任务会照这个范围真删。返回空集，由调用方如实报告。
+        return []
     ids = set(_resolve_preset(targets, preset))
     return [t for t in targets if t["id"] in ids]
 
@@ -4815,34 +4834,59 @@ def _scheduler_loop() -> None:
             if s.get("enabled"):
                 nxt = float(s.get("next_run") or 0)
                 if nxt and time.time() >= nxt:
+                    # _run_scheduled 内部会锁内重读配置并推进 next_run，
+                    # 所以这里传进去的 s 只供它读取 drive/preset 初值。
                     _run_scheduled(s)
         except Exception:
+            # 兜底日志：即便 _run_scheduled 自身抛异常（它已有 finally 推进
+            # next_run），也不能让守护线程静默空转。
             traceback.print_exc()
 
 
 def _run_scheduled(s: dict) -> None:
     drive = (s.get("drive") or "C").rstrip(":").upper()
-    targets = build_targets(drive)
-    selected = _apply_preset_to_targets(targets, s.get("preset") or "safe")
     entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
              "drive": drive,
              "trigger": f"定时自动清理（{drive}:）",
-             "results": [], "freed": 0, "failed": 0, "targets": len(selected)}
-    for t in selected:
-        try:
-            r = clean_target(t, drive=drive)
-        except Exception as exc:  # noqa: BLE001
-            traceback.print_exc()
-            r = _error_result(t, drive, exc)
-        entry["results"].append(r)
-        entry["freed"] += r["freed"]
-        entry["failed"] += r["failed"]
-    entry["freed_h"] = human(entry["freed"])
-    append_history(entry)
-    with _lock:
-        s["last_run"] = time.time()
-        s["next_run"] = time.time() + float(s.get("interval_hours", 24)) * 3600
-        _atomic_write(SCHEDULE_PATH, s)
+             "results": [], "freed": 0, "failed": 0, "targets": 0}
+    try:
+        targets = build_targets(drive)
+        selected = _apply_preset_to_targets(targets, s.get("preset") or "safe")
+        if not selected:
+            # 预设找不到 / 展开为空：不清理，只记一条可读的原因。
+            # 以前这里会静默跑空并推进 next_run，用户永远不知道定时任务没生效。
+            entry["results"].append({
+                "id": "-", "label": (f"预设「{s.get('preset')}」不存在或没有匹配项"),
+                "path": "", "drive": drive, "freed": 0, "deleted": 0,
+                "failed": 0, "skipped": [], "before": 0, "after": 0,
+                "seconds": 0.0, "renews": None,
+                "error": "本次未执行任何清理（预设无效），请检查定时清理设置",
+            })
+        entry["targets"] = len(selected)
+        for t in selected:
+            try:
+                r = clean_target(t, drive=drive)
+            except Exception as exc:  # noqa: BLE001
+                traceback.print_exc()
+                r = _error_result(t, drive, exc)
+            entry["results"].append(r)
+            entry["freed"] += r["freed"]
+            entry["failed"] += r["failed"]
+    finally:
+        # 无论本轮成功、失败还是抛异常，next_run 都必须推进 ——
+        # 否则守护线程 30 秒后会认为「又到期了」并再删一次。历史上
+        # interval_hours 被写成非法值时，这里抛 ValueError 导致 next_run
+        # 停在过去，实测在 2 分钟内连续触发了 6 次真实清理。
+        entry["freed_h"] = human(entry["freed"])
+        append_history(entry)
+        with _lock:
+            cur = schedule_state()          # 锁内重读，别用过期的快照
+            now = time.time()
+            hrs = _schedule_run_interval(cur)
+            cur["interval_hours"] = hrs     # 顺手把非法值就地修正
+            cur["last_run"] = now
+            cur["next_run"] = now + hrs * 3600
+            _atomic_write(SCHEDULE_PATH, cur)
 
 
 def _error_result(t: dict, drive: str | None, exc: Exception) -> dict:
@@ -6211,7 +6255,17 @@ class Handler(BaseHTTPRequestHandler):
                 s["next_run"] = time.time() + hrs * 3600
             else:
                 s["next_run"] = 0
-            _atomic_write(SCHEDULE_PATH, s)
+            # 持锁写入：与 _run_scheduled 的锁内写回串行化，否则定时任务刚算好的
+            # next_run 会被这里的陈旧快照覆盖（用户一改设置就立刻又触发一次）
+            with _lock:
+                cur = schedule_state()
+                cur.update({k: s[k] for k in
+                            ("enabled", "interval_hours", "preset", "drive",
+                             "next_run") if k in s})
+                if not cur.get("enabled"):
+                    cur["next_run"] = 0
+                _atomic_write(SCHEDULE_PATH, cur)
+                s = cur
             return self._json(s)
 
         # ---- 自定义换算单位 ----
