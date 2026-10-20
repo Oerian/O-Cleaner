@@ -5957,7 +5957,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         route = self.path.split("?")[0]
         if route == "/__oc__/history":
-            _atomic_write(HISTORY_PATH, [])
+            # 持锁：与 append_history 的读-改-写串行化。以前这里裸写，
+            # 清空瞬间若有清理任务完成，那条记录会被「清空」覆盖掉（或反过来
+            # 用户以为清空了却多出一条）。
+            with _lock:
+                _atomic_write(HISTORY_PATH, [])
             return self._json({"ok": True})
         if route == "/__oc__/custom-rules":
             save_custom_rules([])
