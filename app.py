@@ -3722,10 +3722,11 @@ def dedup_nested_targets(selected: list[dict]) -> tuple[list[dict], list[dict]]:
 
     外层路径包含内层勾选项时（占用排行里「大项和子项体积近似」的重复内容）：
     * 外层是**游戏本体** → 同一项目，保留外层整删、跳过它里面的勾选项
-     （游戏文件夹拆出子项单独删，剩下的游戏壳毫无意义）；
+      （游戏文件夹拆出子项单独删，剩下的游戏壳毫无意义）；
+    * 外层是**回收站** → 同样保留外层：清空回收站会带走里面的一切，
+      内层勾选项（占用排行里 $Recycle.Bin 下钻出的行）被它覆盖；
     * 其他项目（压缩包、download 这类**可继续拆分**的目录）→ 保留最小项、
       跳过外层，不重复删除、不重复计体积。
-    没有实体路径的目标（如回收站）不参与。
     返回 (保留列表, 被跳过列表)。
     """
 
@@ -3734,6 +3735,7 @@ def dedup_nested_targets(selected: list[dict]) -> tuple[list[dict], list[dict]]:
 
     paths = [norm(t.get("path")) for t in selected]
     is_game = [_is_game_body_path(t.get("path")) for t in selected]
+    is_bin = [t.get("kind") == "recyclebin" for t in selected]
     dropped: dict[int, dict] = {}
     for i, t in enumerate(selected):
         p = paths[i]
@@ -3744,14 +3746,16 @@ def dedup_nested_targets(selected: list[dict]) -> tuple[list[dict], list[dict]]:
                 and j not in dropped]
         if not desc:
             continue
-        if is_game[i]:
-            # 游戏本体：整删，它里面的勾选项一并跳过
+        if is_game[i] or is_bin[i]:
+            # 同一项目整删不拆：外层（游戏本体/回收站）会一并覆盖内层
             for j in desc:
                 dropped[j] = {"label": selected[j].get("label")
                               or selected[j].get("id", ""),
                               "path": selected[j].get("path", ""),
                               "kept": t.get("path", ""),
-                              "reason": "已在同一游戏本体内，整删不拆分"}
+                              "reason": ("已在同一游戏本体内，整删不拆分"
+                                         if is_game[i] else
+                                         "清空回收站会一并覆盖该勾选项")}
         else:
             # 可拆分项目：保留最小项，跳过外层
             inner = selected[desc[0]]
