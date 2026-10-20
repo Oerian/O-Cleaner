@@ -2259,24 +2259,41 @@ def _looks_like_browser_profile(path: str) -> bool:
     实测有台机器上一个与浏览器同名的目录里装的是论文和 ComfyUI 压缩包 —— 是个误命名目录。
     若不加判断，会告诉用户「这里面有书签和密码」，纯属误导。
     真实资料目录一定有 User Data / Default / Profile 这类结构。
+
+    注意 `cache` / `blob_storage` / `code cache` 这类**通用名不能单独作为证据**：
+    几乎任何开发项目都有 node_modules/.cache，业务程序也可能用 blob_storage
+    存用户上传的数据。把它们当判定依据，普通项目目录会被认成浏览器资料目录，
+    进而把里面的业务数据划成「可清理、删掉会自动重建」—— 实测已发生。
     """
     if not os.path.isdir(path):
         return False
-    markers = {"user data", "default", "profile", "profiles", "cache",
-               "code cache", "gpucache", "local storage", "indexeddb"}
+    # 强特征：只有浏览器资料目录才有的结构
+    strong = {"user data", "local storage", "indexeddb", "session storage",
+              "service worker", "extensions", "web data", "bookmarks",
+              "preferences", "login data", "history"}
+    # 弱特征：通用缓存目录名，必须与强特征同时出现才算数
+    weak = {"cache", "code cache", "gpucache", "shadercache", "blob_storage",
+            "default", "profile", "profiles"}
     try:
         names = {e.name.lower() for e in os.scandir(path)}
     except OSError:
         return False
-    if names & markers:
+    if names & strong:
+        return True
+    # 「Default」目录本身也是一层强特征（Chrome/Edge 的多用户结构），
+    # 但要求它旁边还有 Profile/User Data 之类，避免同样是通用名的误判
+    if names & weak and (names & {"default", "profile", "profiles"}) and \
+            ("user data" in path.lower().replace("/", "\\")):
         return True
     # 也有可能是「上层」目录（如 ...\Google\Chrome），往下看一层
     for sub in list(names)[:12]:
         try:
             sp = os.path.join(path, sub)
-            if os.path.isdir(sp):
-                if {e.name.lower() for e in os.scandir(sp)} & markers:
-                    return True
+            if not os.path.isdir(sp):
+                continue
+            sub_names = {e.name.lower() for e in os.scandir(sp)}
+            if sub_names & strong:
+                return True
         except OSError:
             continue
     return False
@@ -2562,9 +2579,18 @@ def analyze_dir_partition(path: str) -> dict:
             entry = {"name": name, "path": dp, "type": "dir",
                      "modified": str(d.get("modified") or ""), "size": 0}
             if name.strip().lower() in BROWSER_CACHE_DIRS:
-                entry["why"] = "浏览器/程序缓存目录，删掉会自动重建"
                 entry["role"] = "cache"
-                cleanable.append(entry)
+                if is_browser:
+                    entry["why"] = "浏览器/程序缓存目录，删掉会自动重建"
+                    cleanable.append(entry)
+                else:
+                    # 非浏览器目录下只有名字像缓存 —— 业务程序常把**用户数据**
+                    # 放在 blob_storage / cache 里。按「疑似缓存」归类但不给
+                    # 「可安全删除」的结论，也不计入可释放体积，交给用户判断。
+                    entry["role"] = "maybe-cache"
+                    entry["why"] = ("名字像缓存，但这个目录不是浏览器资料目录，"
+                                    "无法确认内容可重建 —— 请自行确认后再决定")
+                    keep.append(entry)
             else:
                 entry["role"] = "keep"
                 if is_browser:
