@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import fnmatch
+import hashlib
 import json
 import os
 import platform
@@ -851,7 +852,7 @@ _HIDDEN_SYS_NAMES = {
 def _wiztree_raw_nodes(root: str, table: dict,
                        max_depth: int, min_child: int, ratio: float,
                        floor: int, max_per_dir: int, max_nodes: int,
-                       max_descents: int) -> tuple[list[dict], int]:
+                       max_descents: int) -> tuple[list[dict], list[dict], int]:
     """用 WizTree 的体积表复刻 PS_TREE_WALK 的展开策略，产出同一形状的原始节点。
 
     刻意**逐行对应** PowerShell 那版的逻辑（同样的 minChild 过滤、同样的
@@ -1918,7 +1919,13 @@ def load_fs_groups() -> list:
         if not str(g.get("name") or "").strip() or not paths:
             continue
         out.append({
-            "id": str(g.get("id") or "").strip() or f"grp-{abs(hash(str(g))) % 10**8}",
+            # id 兜底必须跨进程稳定：内置 hash() 受 PYTHONHASHSEED 随机化，
+            # 同一份数据重启后会算出不同 id，前端按 id 管理组就会错乱。
+            # 用内容摘要（名字 + 首路径）保证同一数据永远得到同一 id。
+            "id": (str(g.get("id") or "").strip()
+                   or "grp-" + hashlib.md5(
+                       (str(g.get("name") or "") + "|" + str(g.get("paths") or "")[:1])
+                       .encode("utf-8")).hexdigest()[:10]),
             "name": str(g["name"]).strip(),
             "paths": paths,
             "created": g.get("created") or "",
@@ -5844,34 +5851,30 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/fsgroups":
             op = str(body.get("op") or "")
             groups = load_fs_groups()
-            if op == "set":
-                # 前端回传完整列表整体替换；条目合法性由 load/save 两端共同把关
-                incoming = body.get("groups")
-                if not isinstance(incoming, list):
-                    return self._json({"error": "groups 必须是列表"}, 400)
-                groups = incoming
-            elif op == "add":
+            if op == "add":
                 gid, name, paths = (body.get("id") or ""), (body.get("name") or ""), (body.get("paths") or [])
                 if not isinstance(paths, list) or not paths:
                     return self._json({"error": "paths 不能为空"}, 400)
-                if not str(name).strip():
+                if not str(name).strip() and not gid:
                     return self._json({"error": "组名不能为空"}, 400)
+                norm = [str(p).replace("/", "\\").rstrip("\\").strip().lower()
+                        for p in paths if str(p).strip()]
                 if gid:
                     for g in groups:
                         if g["id"] == gid:
-                            for p in paths:
-                                np = str(p).replace("/", "\\").rstrip("\\").strip().lower()
-                                if np and np not in g["paths"]:
-                                    g["paths"].append(np)
+                            for p in norm:
+                                if p not in g["paths"]:
+                                    g["paths"].append(p)
                             break
                     else:
                         return self._json({"error": "找不到该聚合组"}, 404)
                 else:
+                    if not norm:
+                        return self._json({"error": "paths 不能为空"}, 400)
                     groups.append({
                         "id": "grp-" + str(int(time.time() * 1000))[-9:],
                         "name": str(name).strip(),
-                        "paths": [str(p).replace("/", "\\").rstrip("\\").strip().lower()
-                                  for p in paths if str(p).strip()],
+                        "paths": norm,
                         "created": time.strftime("%Y-%m-%d %H:%M"),
                     })
             elif op == "remove":

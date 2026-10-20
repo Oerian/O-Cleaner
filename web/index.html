@@ -2422,6 +2422,9 @@ async function fsGroupOp(op, body) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ op, ...body }),
   });
+  // 后端的 400/404 也是 200 JSON 体：不在这里抛错的话，调用方会把失败
+  // 当成功处理（比如把列表项删掉、关掉弹窗），界面与落盘数据脱节。
+  if (r && r.error) throw new Error(r.error);
   if (r.groups) STATE.fs_groups = r.groups;
   return r;
 }
@@ -2449,13 +2452,13 @@ function openGroupDialog(node) {
     try {
       await fsGroupOp("add", { id: b.dataset.in, paths: [node.path] });
       b.closest("li").remove(); renderChart();
-    } catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+    } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   }));
   $("modal").querySelectorAll("[data-out]").forEach(b => b.addEventListener("click", async () => {
     try {
       await fsGroupOp("remove", { id: b.dataset.out, paths: [node.path] });
       b.closest("li").remove(); renderChart();
-    } catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+    } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   }));
   $("grpNewGo").addEventListener("click", async () => {
     const name = $("grpNewName").value.trim();
@@ -2463,7 +2466,7 @@ function openGroupDialog(node) {
     try {
       await fsGroupOp("add", { name, paths: [node.path] });
       closeModal(); renderChart();
-    } catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+    } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   });
 }
 function openGroupMgrDialog(node) {
@@ -2489,19 +2492,19 @@ function openGroupMgrDialog(node) {
     const name = $("grpRename").value.trim();
     if (!name) return;
     try { await fsGroupOp("rename", { id: node.gid, name }); renderChart(); }
-    catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+    catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   });
   $("modal").querySelectorAll("[data-out]").forEach(b => b.addEventListener("click", async () => {
     try {
       await fsGroupOp("remove", { id: node.gid, paths: [b.dataset.out] });
       closeModal(); renderChart();
-    } catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+    } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   }));
   $("grpDel").addEventListener("click", async () => {
     try {
       await fsGroupOp("delete", { id: node.gid });
       closeModal(); renderChart();
-    } catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+    } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   });
 }
 
@@ -4999,7 +5002,7 @@ const I18N_EN = {
   "grp.dlgTitle": "File \"{v}\" into a group", "grp.alreadyIn": "Already in these groups:",
   "grp.canJoin": "Available groups:", "grp.remove": "Remove", "grp.join": "Add",
   "grp.newNamePh": "New group name, e.g. Games", "grp.create": "Create and file",
-  "grp.close": "Close", "grp.fail": "Grouping failed: ",
+  "grp.close": "Close", "grp.fail": "Operation failed: ",
   "grp.mgrTitle": "Manage group \"{v}\"", "grp.rename": "Rename",
   "grp.members": "Members ({n}):", "grp.noMembers": "(no members)",
   "grp.delete": "Delete group",

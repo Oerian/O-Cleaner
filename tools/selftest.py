@@ -1966,6 +1966,58 @@ def phase6c_packs() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def phase6d_fsgroups() -> None:
+    """自定义聚合组的加载校验与备份快照。
+
+    load_fs_groups 必须丢掉畸形条目（缺名字 / paths 为空）、归一化路径
+    （统一斜杠、去尾分隔符、小写）并去重；save_fs_groups 每次写入前
+    要留上一版完整快照（.bak），这是用户手工归组数据的唯一恢复途径。
+    全程临时目录 + 模块属性打补丁，不碰真实 config/。
+    """
+    print("\n=== 阶段六D：自定义聚合组（临时目录）===")
+    saved_path = app.FS_GROUPS_PATH
+    tmp = Path(tempfile.mkdtemp(prefix="oc_fsgroups_"))
+    try:
+        app.FS_GROUPS_PATH = tmp / "fs-groups.json"
+        # 1. 畸形条目被丢弃、路径归一化去重、缺 id 时按内容补稳定 id
+        (tmp / "fs-groups.json").write_text(json.dumps({"groups": [
+            {"id": "g-ok", "name": "正常组",
+             "paths": ["D:/Steam/", "d:\\steam", "D:\\Steam\\Sub"], "created": "x"},
+            {"name": "没有 paths 的组", "paths": []},
+            {"id": "g-noname", "name": "   ", "paths": ["C:/x"]},
+            {"name": "没写 id 的组", "paths": ["C:/y"]},
+            "not-a-dict",
+        ]}, ensure_ascii=False), encoding="utf-8")
+        groups = app.load_fs_groups()
+        check("畸形条目被丢弃，只留合法组", len(groups) == 2, str(len(groups)))
+        ok = next(g for g in groups if g["id"] == "g-ok")
+        check("路径归一化（斜杠/大小写/尾分隔符）并去重",
+              ok["paths"] == ["d:\\steam", "d:\\steam\\sub"], str(ok["paths"]))
+        noid = next(g for g in groups if g["name"] == "没写 id 的组")
+        check("缺 id 时按内容补稳定 id（两次加载一致）",
+              noid["id"] == next(g for g in app.load_fs_groups()
+                                 if g["name"] == "没写 id 的组")["id"]
+              and noid["id"].startswith("grp-"), noid["id"])
+        # 2. save 前留 .bak：第二版写坏也有第一版可救
+        app.save_fs_groups([{"id": "g1", "name": "第一版",
+                             "paths": ["c:/a"], "created": ""}])
+        app.save_fs_groups([{"id": "g1", "name": "第二版",
+                             "paths": ["c:/b"], "created": ""}])
+        bak = json.loads((tmp / "fs-groups.json.bak").read_text(encoding="utf-8"))
+        check("每次写入前留上一版 .bak 快照",
+              bak["groups"][0]["name"] == "第一版", str(bak))
+        cur = json.loads((tmp / "fs-groups.json").read_text(encoding="utf-8"))
+        check("当前文件是最新版",
+              cur["groups"][0]["name"] == "第二版", str(cur))
+        # 3. 空列表合法（用户删完全部组）：落盘为空表，不再抛错
+        app.save_fs_groups([])
+        check("空列表合法（全部删除后落盘为空表）",
+              app.load_fs_groups() == [])
+    finally:
+        app.FS_GROUPS_PATH = saved_path
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def phase7_scoping_and_accel() -> None:
     """盘符归属 + 自动发现的安全护栏 + WizTree 加速。
 
@@ -2521,6 +2573,7 @@ def main() -> int:
         _phase("阶段六（分区分析）", phase6_partition)
         _phase("阶段六B（多平台游戏）", phase6b_multiplatform)
         _phase("阶段六C（资源包覆盖语义）", phase6c_packs)
+        _phase("阶段六D（自定义聚合组）", phase6d_fsgroups)
         _phase("阶段七（盘符与加速）", phase7_scoping_and_accel)
         _phase("阶段八（识别正确性金标准）", phase8_identify_correctness)
     finally:
