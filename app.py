@@ -27,7 +27,6 @@ import fnmatch
 import hashlib
 import json
 import os
-import platform
 import re
 import shutil
 import socket
@@ -647,14 +646,6 @@ def acquire_wiztree(timeout: int = 300) -> dict:
     result.update(ok=True, path=st["path"], version=st["version"])
     result["log"].append(f"已就绪：{st['path']}")
     return result
-
-
-def _wiz_ok() -> bool:
-    """是否启用 WizTree 加速。可用环境变量 OC_NO_WIZTREE=1 关掉
-    （自检与排查时要能强制走 PowerShell 路径做对照）。"""
-    if os.environ.get("OC_NO_WIZTREE"):
-        return False
-    return bool(wiztree_available().get("found"))
 
 
 def _wiztree_cleanup(csv_path: str) -> bool:
@@ -4506,11 +4497,14 @@ def build_targets(drive: str | None, custom_path: str | None = None) -> list[dic
     return out
 
 
-# 自定义目录内视为垃圾的子路径与文件夹名（仅限可重建内容；用户数据目录不在此列，
-# 因为这里的结果会直接成为可清理目标）。
+# 自定义目录下的已知垃圾位置：固定子路径 + 顶层目录名两类。
+# 这份清单生成的是**可清理**目标 —— 宁可漏掉也不能把用户数据当垃圾，
+# 所以只收「删错也无大碍、内容可重建」的名字；Downloads / Documents
+# 之类的常见目录一律不收。
 JUNK_SUBPATHS = ["$Recycle.Bin", "Temp", "tmp", "Config.Msi", "$WinREAgent"]
 JUNK_FOLDER_NAMES = {"temp", "tmp", "cache", "caches", "log", "logs",
                      "crashdumps", "crash dumps", "dumps", "minidumps"}
+# 自动补齐的目标公共字段：识别来源标记 + 默认低风险可清理
 _CUSTOM_TEMPLATE = {
     "category": "缓存",
     "needs_admin": False,

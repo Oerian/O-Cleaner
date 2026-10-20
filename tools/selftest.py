@@ -14,7 +14,6 @@ from __future__ import annotations
 import glob
 import json
 import os
-import random
 import re
 import shutil
 import socket
@@ -1537,7 +1536,6 @@ def phase4_repo() -> None:
     check("app.py 不带 BOM（Python 会把它当 \\ufeff 留在字面量里）",
           not _has_bom(py))
     check("提供编码自动修复工具", (TOOLS_DIR / "fix-encoding.ps1").exists())
-    allfiles_ok = True
     bad_enc = []
     for f in list(HERE.rglob("*.py")) + list(HERE.rglob("*.json")):
         if "__pycache__" in str(f) or "dist" in str(f):
@@ -1727,8 +1725,8 @@ def phase6_partition() -> None:
               isinstance(r, list) or (isinstance(r, dict) and r.get("error")),
               f"返回类型 {type(r).__name__} 内容 {str(r)[:140]}")
         if isinstance(r, dict) and r.get("error"):
-            skip2("run_ps 单元素形状（脚本瞬时失败，重跑自测即可）："
-                  + str(r.get("error"))[:100])
+            skip("run_ps 单元素形状",
+                 "脚本瞬时失败，重跑自测即可：" + str(r.get("error"))[:100])
         if isinstance(r, list):
             check("数组元素带 path/size 且体积非零",
                   bool(r) and int(r[0].get("size") or 0) > 0,

@@ -1031,9 +1031,9 @@ function qs() {
   return q;
 }
 async function loadState() {
-  const myDrive = drive;                    // 换盘守卫：响应到达时盘符已变则丢弃
+  const myDrive = drive, myScope = scope;   // 换盘/换范围守卫：响应到达时已变则丢弃
   STATE = await apiJSON(`${API}/__oc__/state?${qs()}`);
-  if (drive !== myDrive) return;
+  if (drive !== myDrive || scope !== myScope) return;
   $("ver").textContent = STATE.app?.version ? "v" + STATE.app.version : "";
   $("upCur").textContent = $("ver").textContent || "";
   // 后端 tagline 是中文；英文界面下用字典文案，避免覆盖掉翻译
@@ -1063,7 +1063,7 @@ async function scan() {
     // 扫描后不自动套预设：勾选只由用户点「一键预设」或手动勾选决定
     updateFooter();
   } catch (e) {
-    if (drive !== myDrive) return;                        // 旧盘的失败也不打扰新盘
+    if (drive !== myDrive || scope !== myScope) return;   // 旧盘/旧范围的失败同样不打扰
     $("scantime").innerHTML = '<span class="res-err">' + t("scan.fail","扫描失败：") + esc(e.message) + "</span>";
   } finally { b.disabled = false; b.textContent = old; }
 }

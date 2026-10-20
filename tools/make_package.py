@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import os
 import re
 import subprocess
@@ -77,7 +76,7 @@ INCLUDE = [
 ZIP_STAMP = (2026, 1, 1, 0, 0, 0)
 
 
-def fail(msg: str) -> "NoReturn":  # type: ignore[valid-type]
+def fail(msg: str) -> None:
     print(f"  [错误] {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -153,7 +152,7 @@ def build_zip(out_path: Path, ver: str) -> None:
     print("\n  包含文件:")
     for name, data in payloads:
         print(f"    {name:<44} {len(data) / 1024:>8,.1f} KB")
-    print(f"\n  在别的电脑上：解压 -> 确认已装 Python 3 -> 双击 start-ocleaner.bat\n")
+    print("\n  在别的电脑上：解压 -> 确认已装 Python 3 -> 双击 start-ocleaner.bat\n")
 
 
 def main() -> None:
