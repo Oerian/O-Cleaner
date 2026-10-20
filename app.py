@@ -3314,7 +3314,9 @@ def game_install_dirs() -> tuple[dict, set]:
     但 GOG 要现场测体积，所以加 60 秒缓存避免每次展开子项都重扫注册表。
     Steam 不走这里：它有自己更精确的 steamapps\\common 双亲判定。"""
     now = time.time()
-    if now - _GAME_DIRS_CACHE["ts"] < 60 and _GAME_DIRS_CACHE["dirs"]:
+    # 注意不要写 `and _GAME_DIRS_CACHE["dirs"]`：没装 Epic/GOG 的机器上目录集恒为空，
+    # 加了这个条件等于「空结果永不缓存」，每次展开子项都重扫注册表 + 测体积。
+    if now - _GAME_DIRS_CACHE["ts"] < 60:
         return _GAME_DIRS_CACHE["dirs"], _GAME_DIRS_CACHE["libs"]
     dirs: dict[str, str] = {}
     libs: set[str] = set()
