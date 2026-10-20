@@ -590,8 +590,8 @@
   .grouplist li{display:flex;align-items:center;justify-content:space-between;gap:10px;
                 padding:7px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px}
   .warnpane{background:var(--danger-bg);border:1px solid var(--danger-bd);color:var(--danger-fg);padding:11px 13px;
-  .warnpane.warm{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn-fg)}
             border-radius:9px;margin-bottom:14px;font-size:13px}
+  .warnpane.warm{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn-fg)}
   .warnpane ul{margin:7px 0 0;padding-left:19px}
   .warnpane li{margin:3px 0;overflow-wrap:anywhere}
   table{width:100%;border-collapse:collapse;font-size:13px}
@@ -3400,9 +3400,8 @@ function renderChart() {
    徽章文字进 badge_label、说明进 note，后端 mk() 用同一套键在扫描时套用，
    本地同步改节点对象让显示立即生效（不必重扫）。这只是你自己看的显示文字：
    不改变工具的风险判定，更不会把「建议保留」变成「可清理」。 */
-function normOvKey(p) {
-  return String(p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
-}
+/* normOvKey 曾在此处有一份独立实现，与 normKey 契约漂移（少做 /→\ 全量
+   替换）。2026-10-20 审计后删除：路径归一化契约全站只此 normKey 一份。 */
 /* 行的「有效显示类别」：徽章文字、徽章底色、柱条颜色三者都由它决定。
    优先级：用户显式选的标签样式（label_kind）> 徽章文字恰好是三档标准文案
    （中文或英文，中英都收 —— 用户在中文界面填的字不会因切到英文界面失效）
