@@ -6043,8 +6043,14 @@ class Handler(BaseHTTPRequestHandler):
 
         # ---- 大文件排行（只读全盘遍历，列出最大的单个文件）----
         if route == "/__oc__/bigfiles":
+            # limit 必须是整数：传非数字时 400 而不是 ValueError 崩成 500
+            # （与 GET /subdirs 对 limit 的校验同一口径）
+            try:
+                limit_n = int(body.get("limit") or 0)
+            except (TypeError, ValueError):
+                return self._json({"error": "limit 必须是整数"}, 400)
             return self._json(big_files(str(body.get("drive") or ""),
-                                        limit=int(body.get("limit") or 0)))
+                                        limit=limit_n))
 
         # ---- 一键清空「所选项」的回收站 ----
         # 按原始路径精确匹配回收站条目，只删配对的 $I/$R 文件，不动回收站
@@ -6177,7 +6183,13 @@ class Handler(BaseHTTPRequestHandler):
                 if k in body:
                     s[k] = body[k]
             if s.get("enabled"):
-                hrs = max(0.25, float(s.get("interval_hours") or 24))
+                # interval_hours 必须是数字：历史数据损坏或前端 bug 传入字符串时
+                # 直接 400，而不是 float() 崩成 500，更不能把垃圾值原样落盘
+                try:
+                    hrs = max(0.25, float(s.get("interval_hours") or 24))
+                except (TypeError, ValueError):
+                    return self._json(
+                        {"error": "interval_hours 必须是数字"}, 400)
                 s["interval_hours"] = hrs
                 s["next_run"] = time.time() + hrs * 3600
             else:
