@@ -2053,7 +2053,8 @@ def _bundle_unit_bytes(u: dict) -> int | None:
             bpu = float(bpu)
         except (TypeError, ValueError):
             return None
-        if bpu > 0 and bpu == bpu and bpu != float("inf"):
+        # NaN 已被 `bpu > 0` 排除（NaN 与任何数比较均为 False），无需 bpu == bpu
+        if bpu > 0 and bpu != float("inf"):
             return int(bpu)
         return None
     size = u.get("size")
@@ -4948,7 +4949,7 @@ def _error_result(t: dict, drive: str | None, exc: Exception) -> dict:
 #   packs/*.json               随仓库分发，可在 GitHub 上直接下载
 #   config/packs-user/*.json   用户导入的包（.gitignore，不随仓库走）
 #
-# 匹配语义（见 pack_entry_hit）：
+# 匹配语义（见 pack_score）：
 #   match.any  列表里**任一**项命中即可；不含 "re:" 前缀时按子串匹配，
 #              同时比对「文件/目录名」与「完整路径」，两边任一命中都算
 #   match.all  列表里**全部**项都必须命中，用来加范围约束
@@ -5067,10 +5068,6 @@ def pack_score(rec: dict, name: str, path: str):
         if best is None or h > best:
             best = h
     return best
-
-
-def pack_entry_hit(rec: dict, name: str, path: str) -> bool:
-    return pack_score(rec, name, path) is not None
 
 
 def load_packs(use_cache: bool = True) -> dict:
