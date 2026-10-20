@@ -4506,6 +4506,20 @@ def build_targets(drive: str | None, custom_path: str | None = None) -> list[dic
     return out
 
 
+# 自定义目录内视为垃圾的子路径与文件夹名（仅限可重建内容；用户数据目录不在此列，
+# 因为这里的结果会直接成为可清理目标）。
+JUNK_SUBPATHS = ["$Recycle.Bin", "Temp", "tmp", "Config.Msi", "$WinREAgent"]
+JUNK_FOLDER_NAMES = {"temp", "tmp", "cache", "caches", "log", "logs",
+                     "crashdumps", "crash dumps", "dumps", "minidumps"}
+_CUSTOM_TEMPLATE = {
+    "category": "缓存",
+    "needs_admin": False,
+    "cleanable": True,
+    "discovered": True,
+    "custom": True,
+}
+
+
 def discover_junk_folders(root: str) -> list[dict]:
     """在自定义目录下发现已知的垃圾文件夹，生成临时目标。"""
     out: list[dict] = []
