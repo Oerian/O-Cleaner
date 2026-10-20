@@ -5,6 +5,8 @@ disk-trend.json
 receipts/
 config/custom-rules.json
 config/custom-overrides.json
+# 用户自定义聚合组（占用树自由归组，本机数据）
+config/fs-groups.json
 # 资源包的启用状态与远端地址（本机选择，不该跟着仓库走）
 config/packs-state.json
 # 用户自己导入的资源包。内置包在 packs/，是仓库的一部分，不受这条影响。

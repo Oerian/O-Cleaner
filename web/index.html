@@ -586,6 +586,9 @@
   .mfoot{padding:13px 20px;border-top:1px solid var(--line);display:flex;gap:10px;
          justify-content:flex-end;align-items:center;flex-wrap:wrap}
   .mfoot .left{margin-right:auto;font-size:13px;color:var(--dim)}
+  .grouplist{list-style:none;margin:6px 0;padding:0}
+  .grouplist li{display:flex;align-items:center;justify-content:space-between;gap:10px;
+                padding:7px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px}
   .warnpane{background:var(--danger-bg);border:1px solid var(--danger-bd);color:var(--danger-fg);padding:11px 13px;
   .warnpane.warm{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn-fg)}
             border-radius:9px;margin-bottom:14px;font-size:13px}
@@ -2413,6 +2416,95 @@ function confirmDialog() {
 }
 function closeModal() { $("mask").classList.remove("on"); }
 
+/* ==================== 自定义聚合组 ==================== */
+async function fsGroupOp(op, body) {
+  const r = await apiJSON(`${API}/__oc__/fsgroups`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ op, ...body }),
+  });
+  if (r.groups) STATE.fs_groups = r.groups;
+  return r;
+}
+function openGroupDialog(node) {
+  if (node.custom_group) return openGroupMgrDialog(node);
+  const nk = normKey(node.path);
+  const inG = (STATE.fs_groups || []).filter(g => g.paths.includes(nk));
+  const other = (STATE.fs_groups || []).filter(g => !g.paths.includes(nk));
+  $("modal").innerHTML = `
+    <h3>${t("grp.dlgTitle","把「{v}」归入聚合组").replace("{v}", esc(node.name))}</h3>
+    ${inG.length ? `<p class="dim">${t("grp.alreadyIn","已在以下聚合组：")}</p><ul class="grouplist">${
+      inG.map(g => `<li>${esc(g.name)} <button class="tiny ghost" data-out="${esc(g.id)}">${t("grp.remove","移出")}</button></li>`).join("")}</ul>` : ""}
+    ${other.length ? `<p class="dim">${t("grp.canJoin","可加入：")}</p><ul class="grouplist">${
+      other.map(g => `<li>${esc(g.name)} <button class="tiny ghost" data-in="${esc(g.id)}">${t("grp.join","加入")}</button></li>`).join("")}</ul>` : ""}
+    <div class="ab" style="margin-top:12px">
+      <input id="grpNewName" placeholder="${t("grp.newNamePh","新聚合组名称，如：游戏")}" style="flex:1">
+      <button id="grpNewGo" class="go">${t("grp.create","新建并归入")}</button>
+    </div>
+    <div class="modal-foot" style="display:flex;justify-content:flex-end;margin-top:10px">
+      <button id="grpClose" class="ghost">${t("grp.close","关闭")}</button>
+    </div>`;
+  $("mask").classList.add("on");
+  $("grpClose").addEventListener("click", () => { closeModal(); renderChart(); });
+  $("modal").querySelectorAll("[data-in]").forEach(b => b.addEventListener("click", async () => {
+    try {
+      await fsGroupOp("add", { id: b.dataset.in, paths: [node.path] });
+      b.closest("li").remove(); renderChart();
+    } catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+  }));
+  $("modal").querySelectorAll("[data-out]").forEach(b => b.addEventListener("click", async () => {
+    try {
+      await fsGroupOp("remove", { id: b.dataset.out, paths: [node.path] });
+      b.closest("li").remove(); renderChart();
+    } catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+  }));
+  $("grpNewGo").addEventListener("click", async () => {
+    const name = $("grpNewName").value.trim();
+    if (!name) return;
+    try {
+      await fsGroupOp("add", { name, paths: [node.path] });
+      closeModal(); renderChart();
+    } catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+  });
+}
+function openGroupMgrDialog(node) {
+  const members = (FS.hiddenKids || {})[normKey(node.path)] || [];
+  const g = (STATE.fs_groups || []).find(x => x.id === node.gid) || {};
+  $("modal").innerHTML = `
+    <h3>${t("grp.mgrTitle","管理聚合组「{v}」").replace("{v}", esc(g.name || node.name))}</h3>
+    <div class="ab" style="margin:8px 0">
+      <input id="grpRename" value="${esc(g.name || "")}" style="flex:1">
+      <button id="grpRenameGo" class="go">${t("grp.rename","改名")}</button>
+    </div>
+    <p class="dim">${t("grp.members","成员（{n}）：").replace("{n}", members.length)}</p>
+    <ul class="grouplist">${members.map(m =>
+      `<li>${esc(m.name)} <button class="tiny ghost" data-out="${esc(m.path)}">${t("grp.remove","移出")}</button></li>`).join("")
+      || `<li class="dim">${t("grp.noMembers","（无成员）")}</li>`}</ul>
+    <div class="modal-foot" style="display:flex;justify-content:space-between;margin-top:12px">
+      <button id="grpDel" class="ghost res-err">${t("grp.delete","删除聚合组")}</button>
+      <button id="grpClose" class="ghost">${t("grp.close","关闭")}</button>
+    </div>`;
+  $("mask").classList.add("on");
+  $("grpClose").addEventListener("click", () => { closeModal(); renderChart(); });
+  $("grpRenameGo").addEventListener("click", async () => {
+    const name = $("grpRename").value.trim();
+    if (!name) return;
+    try { await fsGroupOp("rename", { id: node.gid, name }); renderChart(); }
+    catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+  });
+  $("modal").querySelectorAll("[data-out]").forEach(b => b.addEventListener("click", async () => {
+    try {
+      await fsGroupOp("remove", { id: node.gid, paths: [b.dataset.out] });
+      closeModal(); renderChart();
+    } catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+  }));
+  $("grpDel").addEventListener("click", async () => {
+    try {
+      await fsGroupOp("delete", { id: node.gid });
+      closeModal(); renderChart();
+    } catch (e) { toast(t("grp.fail","归档失败：") + esc(e.message)); }
+  });
+}
+
 async function doClean() {
   busy = true;
   $("mGo").disabled = true; $("mCancel").disabled = true;
@@ -2852,7 +2944,36 @@ function fsChildren() {
   // 下钻进了「隐藏系统项」聚合组：直接返回组成员
   if (FS.hiddenKids && FS.hiddenKids[key]) return FS.hiddenKids[key];
   const raw = (FS.kids && FS.kids[key]) || FS.nodes.filter(n => n.parent === key);
-  return groupHiddenSys(raw, key);
+  return groupHiddenSys(groupCustom(raw, key), key);
+}
+
+/** 用户自定义聚合组：STATE.fs_groups 里命中当前层的路径 → 合成组节点。
+    自定义归组优先于「默认隐藏的系统项」执行（用户显式的归组意图更强，
+    例如把 $Recycle.Bin 挂进自己建的组，此时它不再进隐藏组）。
+    组员从本层消失，进组的下钻列表（复用 hiddenKids 的纯前端合成下钻，
+    不发请求）。同一组的成员可跨多次归组累积，也可随时移出。 */
+function groupCustom(raw, key) {
+  const groups = STATE.fs_groups || [];
+  if (!groups.length || !raw.length) return raw;
+  let rest = raw;
+  groups.forEach(g => {
+    const members = rest.filter(n => !n.hidden_group && g.paths.includes(normKey(n.path)));
+    if (!members.length) return;
+    const gpath = key + "\\__cgrp_" + g.id;
+    FS.hiddenKids = FS.hiddenKids || {};
+    FS.hiddenKids[normKey(gpath)] = members;
+    rest = rest.filter(n => !members.includes(n));
+    rest.push({
+      name: g.name, path: gpath,
+      size: members.reduce((a, n) => a + (n.size || 0), 0),
+      type: "dir", depth: members[0].depth || 1,
+      hidden_group: true, custom_group: true, gid: g.id,
+      recognized: false, cleanable: false, can_drill: true,
+      modified: "", size_h: "", category: "",
+    });
+  });
+  rest.sort((a, b) => (b.size || 0) - (a.size || 0));
+  return rest;
 }
 
 /** 把本层「默认隐藏的系统项」（$RECYCLE.BIN / System Volume Information 等，
@@ -3105,7 +3226,9 @@ function renderChart() {
   else rows = here;
   // 排序方式可选：默认按占用降序；「按名称」用中文locale排序（2026-10-13
   // 用户要求下钻后支持其他排序方式）。全部视图取前 30。
-  rows = rows.filter(n => n.size > 0)
+  // 聚合组（hidden_group）不受 size>0 门槛约束：组员的体积可能全是 0
+  // （快速扫描量不出隐藏系统文件），但组本身必须可见，否则归组形同虚设。
+  rows = rows.filter(n => n.size > 0 || n.hidden_group)
     .sort(FS_SORT === "name"
       ? (a, b) => String(a.name).localeCompare(String(b.name), "zh-Hans-CN")
       : (a, b) => b.size - a.size)
@@ -3199,6 +3322,8 @@ function renderChart() {
           ${drillable && !it.hidden_group ? `<button class="tiny ghost expinline" data-tree="${idx}" title="${t("sub.expandTitle","就地展开查看子目录")}">${t("sub.expand","展开 ▾")}</button>` : ""}
           <span class="fname">${esc(it.name)}${badge}${pinBadge}${
             drillable ? `<span class="vgo">${t("fs.drillHint","点开看子项 ›")}</span>` : ""}</span>
+          ${!it.hidden_group ? `<button class="tiny ghost rowgrp" data-grp="${idx}" title="${t("fs.grpTitle","把这项归进自定义聚合组")}">${t("fs.grp","归档")}</button>` : ""}
+          ${it.custom_group ? `<button class="tiny ghost rowgrp" data-grp="${idx}" title="${t("fs.grpMgrTitle","管理这个聚合组的成员与名称")}">${t("fs.grpMgr","管理")}</button>` : ""}
           <button class="tiny ghost rowinfo" data-info="${idx}">${t("fs.detailBtn","详情")}</button>
           <span class="fsize">${fmt(it.size)}</span>
         </div>
@@ -3220,8 +3345,13 @@ function renderChart() {
   $("fsChart").querySelectorAll(".vrow").forEach(el =>
     el.addEventListener("click", ev => {
       if (ev.target.closest("[data-info]") || ev.target.closest(".expinline")
-          || ev.target.closest(".rowsel")) return;
+          || ev.target.closest(".rowsel") || ev.target.closest(".rowgrp")) return;
       fsDrill(rows[+el.dataset.i]);
+    }));
+  $("fsChart").querySelectorAll(".rowgrp").forEach(b =>
+    b.addEventListener("click", ev => {
+      ev.stopPropagation();
+      openGroupDialog(rows[+b.dataset.grp]);
     }));
   // 勾选与展开互不影响：勾选框只改选择集，绝不触发行的下钻；
   // 行点击/下钻重绘时勾选状态从集合回填，不随渲染丢失。
@@ -4864,6 +4994,15 @@ const I18N_EN = {
   "cc.nonCleanBody": "These are not caches; they may be program data, personal files, or folders whose purpose cannot be judged. Deletion may be unrecoverable. Please make sure you have inspected the contents yourself.",
   "cc.andMore": "…and {n} more", "cc.riskyHead": "Irreversible or diagnosis-affecting items are included:",
   "cc.risk": "risk", "cc.trashNote": "unrecoverable once the bin is emptied",
+  "fs.grp": "Group", "fs.grpTitle": "File this item into a custom group",
+  "fs.grpMgr": "Manage", "fs.grpMgrTitle": "Manage members and name of this group",
+  "grp.dlgTitle": "File \"{v}\" into a group", "grp.alreadyIn": "Already in these groups:",
+  "grp.canJoin": "Available groups:", "grp.remove": "Remove", "grp.join": "Add",
+  "grp.newNamePh": "New group name, e.g. Games", "grp.create": "Create and file",
+  "grp.close": "Close", "grp.fail": "Grouping failed: ",
+  "grp.mgrTitle": "Manage group \"{v}\"", "grp.rename": "Rename",
+  "grp.members": "Members ({n}):", "grp.noMembers": "(no members)",
+  "grp.delete": "Delete group",
   "cc.diagNote": "deleting loses historical diagnosis clues",
   "cc.trashOpt": "Send high-risk items to the Recycle Bin (recoverable; space is only freed when the bin is emptied and is not counted above)",
   "cc.adminNote": "These need administrator rights and will fail with normal rights:",

@@ -83,6 +83,9 @@ DRIVES_PATH = CONFIG_DIR / "drives.json"
 CONVERT_PATH = CONFIG_DIR / "convert.json"
 FILETYPES_PATH = CONFIG_DIR / "filetypes.json"
 CUSTOM_PATH = CONFIG_DIR / "custom-rules.json"
+# 用户自定义聚合组：把占用树里任意路径归拢进自己命名的组（如「游戏」「工作」）。
+# 纯显示层组织，不影响识别与清理判定；只存本机、不进版本库、不进分发包。
+FS_GROUPS_PATH = CONFIG_DIR / "fs-groups.json"
 # 用户自定义释义 / 结论覆盖：按清理项改写说明文案或翻转「可清理」结论。
 # 用户显式操作的最后一手，优先级高于资源包与内置知识库；
 # 只存本机、不进版本库、不进分发包，见 .gitignore。
@@ -1891,6 +1894,48 @@ def load_custom_rules() -> list:
 def save_custom_rules(rules: list) -> None:
     _cache.pop(str(CUSTOM_PATH), None)
     _atomic_write(CUSTOM_PATH, {"rules": rules})
+
+
+def load_fs_groups() -> list:
+    """用户自定义聚合组：把任意路径归拢进自己命名的组。
+
+    结构：{"id","name","paths","created"}。paths 存归一化小写路径
+    （与前端 normKey 同口径：统一斜杠方向、去结尾分隔符、转小写），
+    匹配时前端按同口径比对，大小写与结尾反斜杠差异不影响归组。
+    畸形条目（缺 id/名字、paths 为空）直接丢弃，不参与显示。
+    """
+    data = _load_json(FS_GROUPS_PATH, {"groups": []}, use_cache=False)
+    groups = data.get("groups", []) if isinstance(data, dict) else []
+    out = []
+    for g in groups:
+        if not isinstance(g, dict):
+            continue
+        paths = []
+        for p in (g.get("paths") or []):
+            np = (str(p).replace("/", "\\").rstrip("\\").strip().lower())
+            if np and np not in paths:
+                paths.append(np)
+        if not str(g.get("name") or "").strip() or not paths:
+            continue
+        out.append({
+            "id": str(g.get("id") or "").strip() or f"grp-{abs(hash(str(g))) % 10**8}",
+            "name": str(g["name"]).strip(),
+            "paths": paths,
+            "created": g.get("created") or "",
+        })
+    return out
+
+
+def save_fs_groups(groups: list) -> None:
+    # 先留一份 .bak：用户手工整理的归组数据没有别的恢复途径，
+    # 覆盖写坏一次就全没了；写成功后 .bak 是上一版完整快照。
+    try:
+        if FS_GROUPS_PATH.exists():
+            shutil.copyfile(FS_GROUPS_PATH, str(FS_GROUPS_PATH) + ".bak")
+    except OSError:
+        pass                     # 备份失败不影响主写入
+    _cache.pop(str(FS_GROUPS_PATH), None)
+    _atomic_write(FS_GROUPS_PATH, {"groups": groups})
 
 
 def load_overrides() -> dict:
@@ -5537,6 +5582,8 @@ def build_state(drive: str | None = None, custom_path: str | None = None,
         "stats": history_stats(),
         "units": resolve_units(load_convert().get("units", [])),
         "custom_rules": load_custom_rules(),
+        # 用户自定义聚合组：前端把占用树里命中的路径归拢进这些组
+        "fs_groups": load_fs_groups(),
         "config_dir": str(CONFIG_DIR),
         # 数据存档目录：运行数据（含 config/）所在位置，界面自检面板展示，
         # 迁移/备份时整目录拷走即可
@@ -5692,6 +5739,8 @@ class Handler(BaseHTTPRequestHandler):
                            q.get("scope", "all")), q.get("lang")))
         if route == "/__oc__/history":
             return self._json(load_history())
+        if route == "/__oc__/fsgroups":
+            return self._json({"groups": load_fs_groups()})
         if route == "/__oc__/disk-trend":
             data = _load_json(DISK_TREND_PATH, [], use_cache=False)
             return self._json(data if isinstance(data, list) else [])
@@ -5790,6 +5839,64 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.wiz_busy = False
             return self._json({**r, "status": wiztree_status()},
                               200 if r.get("ok") else 500)
+
+        # ---- 用户自定义聚合组（占用树的自由归组，纯显示层）----
+        if route == "/__oc__/fsgroups":
+            op = str(body.get("op") or "")
+            groups = load_fs_groups()
+            if op == "set":
+                # 前端回传完整列表整体替换；条目合法性由 load/save 两端共同把关
+                incoming = body.get("groups")
+                if not isinstance(incoming, list):
+                    return self._json({"error": "groups 必须是列表"}, 400)
+                groups = incoming
+            elif op == "add":
+                gid, name, paths = (body.get("id") or ""), (body.get("name") or ""), (body.get("paths") or [])
+                if not isinstance(paths, list) or not paths:
+                    return self._json({"error": "paths 不能为空"}, 400)
+                if not str(name).strip():
+                    return self._json({"error": "组名不能为空"}, 400)
+                if gid:
+                    for g in groups:
+                        if g["id"] == gid:
+                            for p in paths:
+                                np = str(p).replace("/", "\\").rstrip("\\").strip().lower()
+                                if np and np not in g["paths"]:
+                                    g["paths"].append(np)
+                            break
+                    else:
+                        return self._json({"error": "找不到该聚合组"}, 404)
+                else:
+                    groups.append({
+                        "id": "grp-" + str(int(time.time() * 1000))[-9:],
+                        "name": str(name).strip(),
+                        "paths": [str(p).replace("/", "\\").rstrip("\\").strip().lower()
+                                  for p in paths if str(p).strip()],
+                        "created": time.strftime("%Y-%m-%d %H:%M"),
+                    })
+            elif op == "remove":
+                gid, paths = body.get("id") or "", (body.get("paths") or [])
+                rest = [g for g in groups if g["id"] != gid] if not paths else groups
+                if paths:
+                    drop = {str(p).replace("/", "\\").rstrip("\\").strip().lower() for p in paths}
+                    for g in rest:
+                        if g["id"] == gid:
+                            g["paths"] = [p for p in g["paths"] if p not in drop]
+                    rest = [g for g in rest if g["paths"]]
+                groups = rest
+            elif op == "rename":
+                gid, name = body.get("id") or "", str(body.get("name") or "").strip()
+                if not name:
+                    return self._json({"error": "组名不能为空"}, 400)
+                for g in groups:
+                    if g["id"] == gid:
+                        g["name"] = name
+            elif op == "delete":
+                groups = [g for g in groups if g["id"] != (body.get("id") or "")]
+            else:
+                return self._json({"error": f"未知操作：{op}"}, 400)
+            save_fs_groups(groups)
+            return self._json({"ok": True, "groups": load_fs_groups()})
 
         # ---- 执行清理 ----
         if route == "/__oc__/clean":
