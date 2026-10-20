@@ -2082,10 +2082,43 @@ def _bundle_unit_bytes(u: dict) -> int | None:
 
 
 def _atomic_write(path: Path, data) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    """原子写 JSON：先写临时文件再 os.replace，避免读到半个文件。
+
+    临时文件名必须唯一（带 pid + 线程 id + 随机串），不能用固定的 `.tmp` 后缀：
+    并发写同一个目标文件时，两个线程会同时打开**同一个** tmp 并互相覆盖，
+    随后 os.replace 争抢同一个源路径，Windows 上直接抛
+    PermissionError: [WinError 5] 拒绝访问。实测并发 POST /__oc__/schedule
+    20 路时有 3 路 500（调用点虽然持了 _lock，但 _atomic_write 还被
+    append_history 等其他路径调用，锁不住所有组合）。
+
+    os.replace 在 Windows 上偶发共享冲突（杀软/索引器短暂持有目标文件），
+    这里做几次短重试 —— 写配置失败是绝对不可接受的。
+    """
+    tmp = path.with_name(
+        f"{path.name}.{os.getpid()}.{threading.get_ident()}."
+        f"{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+        last: Exception | None = None
+        for attempt in range(4):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError as exc:   # WinError 5 / 32：被短暂占用
+                last = exc
+                time.sleep(0.02 * (attempt + 1))
+        raise last if last else RuntimeError("os.replace 失败")
+    finally:
+        # 成功时 tmp 已被 replace 掉；失败时清理残留，避免在仓库里堆垃圾
+        # （本项目的安全删除钩子会把这类残留当删除目标拦下，见 HANDOFF）
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        except SystemExit:
+            pass
 
 
 def load_history() -> list:
