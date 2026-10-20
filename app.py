@@ -118,6 +118,18 @@ PROTECTED_DIR_NAMES = {
     "programdata", "recovery", "system volume information", "$recycle.bin",
     "users", "default", "public", "appdata", "boot", "perflogs", "msocache",
     "onedrive", "documents and settings",
+    # 用户自己的数据目录（2026-10-21 对抗测试发现漏保护）。
+    # 这些目录里是照片、账本、论文、工作文档 —— 删掉不会自动重建，
+    # 更不该被清理工具"顺手"建议删除。原先它们既不在保护名单里，也不像
+    # 「已安装程序」，于是整条护栏放行：实测 C:\Users\<name>\Documents 里的
+    # 3 个文件被 clean_target 真实删除（freed=14336, deleted=3）。
+    # 中文系统显示为「文档 / 桌面 / 下载」，但磁盘上的真实目录名仍是英文
+    # （本地化只是 desktop.ini 重定向），所以按英文名保护。
+    # 只收真正的用户数据目录；templates / cookies / recent 这类通用名
+    # 会误伤程序自己的子目录（如 node_modules\templates），故意不收。
+    "documents", "desktop", "downloads", "pictures", "videos", "music",
+    "favorites", "links", "contacts", "searches", "saved games",
+    "my documents", "my pictures", "my music", "my videos", "3d objects",
 }
 # 这些名字只有在“盘符根目录的直接子目录”层级才整体保护；
 # 更深的同名目录（例如 C:\Windows\Temp）允许清理，由更深层的规则把关。
@@ -3398,6 +3410,18 @@ def check_deletable(path: str, kind: str = "tree") -> tuple[bool, str]:
     leaf = parts[-1].lower()
     if leaf in PROTECTED_DIR_NAMES and leaf not in ALLOWED_CONTAINER_NAMES:
         return False, f"拒绝：{parts[-1]} 属于受保护的目录"
+
+    # 位置保护（2026-10-21）：C:\Users\<用户名>\ 的直接子目录一律不许整体删除。
+    # 光靠上面的名字名单挡不干净 —— 中文系统的「文档 / 桌面 / 下载」在磁盘上
+    # 可能被 OneDrive 重定向成中文目录名，用户也可能自建「工作资料」之类的
+    # 一级目录，名单永远列不全。按**位置**保护才是兜底：一个用户 Home 下的
+    # 一级目录 = 这个人的全部个人数据，不属于任何清理工具该碰的范围。
+    # 只放行明确的缓存/临时容器，它们删掉会自动重建。
+    if len(parts) == 3 and parts[0].lower() == "users" \
+            and leaf not in ALLOWED_CONTAINER_NAMES \
+            and leaf not in {"appdata", "local settings"}:
+        return False, (f"拒绝：{parts[1]}\\{parts[2]} 是用户 Home 下的一级目录，"
+                       f"属于个人数据，不允许整体删除")
 
     # P0-3（外部审计 2026-10-13）：末级目录名是 cache/temp/logs 这类通用容器
     # **不代表**它是系统缓存 —— 许多程序把 cache/temp 放在安装目录里
