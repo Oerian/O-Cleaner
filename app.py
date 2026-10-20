@@ -38,6 +38,7 @@ import tempfile
 import threading
 import time
 import traceback
+import uuid
 import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2594,7 +2595,13 @@ def analyze_dir_partition(path: str) -> dict:
     need_size = [c["path"] for c in cleanable] + [k["path"] for k in keep
                                                   if k["type"] == "dir"]
     if need_size:
-        lst = BASE_DIR / ".oc-partition.tmp"
+        # 临时清单必须放系统临时目录、且文件名唯一：
+        # 1) 以前写在 BASE_DIR 下（仓库目录），与 HANDOFF 踩坑史里
+        #    oc-steam-orphans.tmp 是同一模式 —— 在带安全删除钩子的宿主环境里
+        #    会耗尽删除配额，钩子抛 SystemExit 直接打断请求（实测已复现：
+        #    safe-delete 钩子拦下 E:\O-Cleaner\.oc-partition.tmp，请求被断开）。
+        # 2) 固定文件名在并发请求下会互相覆盖，A 读到 B 的路径列表。
+        lst = Path(tempfile.gettempdir()) / f"oc-partition-{os.getpid()}-{uuid.uuid4().hex[:8]}.tmp"
         try:
             lst.write_text("\n".join(need_size[:80]), encoding="utf-8")
             rs = run_ps(PS_STEAM_ORPHAN_SIZE.replace(
