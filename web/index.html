@@ -1057,7 +1057,7 @@ async function scan() {
     (data.results || []).forEach(r => SCAN[r.id] = r);
     renderDisk(data.disk);
     $("scantime").textContent = t("scan.lastTime","上次扫描 {v}").replace("{v}", data.scan_time);
-    applyPreset(STATE.presets.find(p => p.id === "safe"));
+    // 扫描后不自动套预设：勾选只由用户点「一键预设」或手动勾选决定
     updateFooter();
   } catch (e) {
     if (drive !== myDrive) return;                        // 旧盘的失败也不打扰新盘
