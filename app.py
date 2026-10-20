@@ -834,10 +834,14 @@ def _wiztree_parse(csv_path: str, on_progress=None) -> dict:
 # 默认隐藏的系统项：资源管理器勾着「隐藏受保护的操作系统文件」时不显示，
 # 但 MFT/完整递归都能扫到。前端把这些聚成一个可展开的独立项，
 # 避免「扫出来的和资源管理器看到的不一样」让用户困惑。
+# 除目录外还收 NTFS 的根级元文件（$MFT / $LogFile / $Extend 等）：
+# 它们是文件系统自身的记账数据，只存在于盘根，用户删不了也不该删。
 _HIDDEN_SYS_NAMES = {
     "$recycle.bin", "recycler", "system volume information", "config.msi",
     "pagefile.sys", "hiberfil.sys", "swapfile.sys",
     "dumpstack.log", "dumpstack.log.tmp", "$winreagent",
+    "$mft", "$mftmirr", "$logfile", "$volume", "$attrdef", "$bitmap",
+    "$boot", "$badclus", "$secure", "$upcase", "$extend",
 }
 
 
