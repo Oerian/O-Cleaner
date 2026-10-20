@@ -1,8 +1,8 @@
 # O-Cleaner 完整交接文档与需求规格书
 
-> **文档版本**：v2.3（资源包 + 自有 AI 接入版；本文最后更新 2026-10-13）
+> **文档版本**：v2.8（本文最后更新 2026-10-20；对应应用版本 v2.7，HEAD = `7f73219`）
 > **项目定位**：Windows 原生、本地零第三方依赖的磁盘清理与空间占用查看工具。
-> **代码仓库**：`github.com/Oerian/O-Cleaner`（公开），`main` 分支，CI 已接入。
+> **代码仓库**：`github.com/Oerian/O-Cleaner`（公开），`main` 分支，CI 已接入（快慢两级）。
 > **分发包**：由 `tools/make_package.py` 生成（内存打包，无暂存目录；版本号 import 自 `app.APP_VERSION`），输出到 `dist\O-Cleaner-<版本>.zip`；免安装版由 `tools/make_exe.py` 生成。
 
 ## 零、接手快速通道（先读这个）
@@ -12,13 +12,15 @@
   ```bash
   python -X utf8 tools/lint_rules.py --strict
   python -X utf8 tools/_lint_selftest.py
-  python -X utf8 tools/selftest.py          # 条数依环境浮动，失败 0 即绿
-  node tools/cdp_check.js http://127.0.0.1:<PORT>   # 需先启动 app.py
+  python -X utf8 tools/selftest.py          # 条数依环境浮动，失败 0 即绿；本机受删除配额限制跑不完，权威验证走 CI
+  node tools/cdp_check.js http://127.0.0.1:<PORT>   # 需先启动 app.py，必须显式传 URL
+  python -m pyflakes app.py tools/*.py      # Python 改动的前置检查（py_compile 抓不到死导入/未定义名）
   ```
-- **当前状态快照**（2026-10-13，HEAD = `07cb89b`）：
-  - 最新全量 CI（run 38375367710）**全绿**：规则 linter ✓ / 自测 **343 通过 / 0 失败 / 11 跳过** / 界面渲染检查 **28 / 0 / 49**（CI 机器扫不完 → 门控跳过是正常形态）。
-  - 分发产物：`dist/O-Cleaner-v2.3.zip`（便携版 32 文件）+ `O-Cleaner-v2.3-win64-embed.zip`（免安装版，内嵌官方运行时）；两者均与 HEAD 源码 sha256 核验一致。
-  - 剩余规划内任务：**#37 i18n / 英文规则**（见第八节第 9 条），其余已交付。
+- **当前状态快照**（2026-10-20，HEAD = `7f73219`，应用版本 v2.7）：
+  - 远端 `main`（= `050888b`）的每晚定时全量 CI 最近一次（run 39330308150，2026-10-19）**全绿**；本地领先远端 **14 个提交**（2026-10-17 起的清理活动图、自定义聚合组、NTFS 元文件归纳、i18n 补全、全库审计等），按「版本更新时才推送 + 跑 CI」的约定暂未推送——下次升版时一次性推送并手动触发全量 CI。
+  - 本机门禁终态（2026-10-20）：`lint_rules.py --strict` 0 错 0 警 / `_lint_selftest.py` 44/0 / `cdp_check.js` 85 通过 0 失败 5 跳过 / 编码契约全符；pyflakes 全库 0 告警（Python 改动的前置检查）。
+  - 分发产物：`dist/O-Cleaner-v2.7.zip`（便携版 33 文件）；v2.6 起发布走 **GitHub Releases**（tag + zip + 说明），发布前必须重建并核验包内文件与源码 sha256 一致。
+  - 剩余规划内任务：**无既定未完项**。i18n 英文界面已于 v2.4–v2.5 全量落地；下次升版时执行推送 + 门禁 + 重建发布包即可。
 - **三条最容易踩的纪律**：
   1. 提交说明首行只写「这次改动做了什么」，不写评价性文字、不写 `[ci]`（详见第六节第 13 条）；
   2. 断言总数依环境浮动且持续增长，文档/CI/提交说明**一律不写死数字**，判定标准是「失败 0」；
@@ -65,6 +67,7 @@
 | **REQ-18** | 可移动便携与引导 | “能否把 WizTree 中调用的内核直接放到可以移动的 Ocleaner 中，以确认其在不同设备上的可用性，最后标明即可；设置简介快捷有效的引导” | 鉴于官方 EULA 禁止随包捆绑分发，实现**一键自动拉取官方面携版 ZIP 解压至 `portable\WizTree\`**，随 O-Cleaner 文件夹整体拷贝即插即用；右侧置顶「运行环境自检与引导」面板；详尽标明 Antibody Software Limited 授权信息与出处 |
 | **REQ-19** | 树形就地折叠展开 | “返回上一级太过死板烦琐，更换方式，所有清理项可以继续无限展开，但在打开时再扫描，这样是否更快捷” | **全面废弃切页和面包屑返回**，重构为**树形折叠面板（Tree-Accordion）**；不管是全盘扫描列表还是清理卡片，均支持**按需懒加载（Lazy Loading）**就地展开与无限级递进下钻 |
 | **REQ-20** | v2.3 资源包 / 自有 AI / 界面与真实进度 | “右侧 ui 进行堆叠，点击可展开查看详情，右侧磁盘概览整合到左侧磁盘概览里，扫描实际速度与进度条不匹配，左右两侧 ui 滚动分别做，支持接入 api，使用自己的 ai 使用此工具，包括可清理项解释，自定义清理方案以及其他可自定义内容，支持 Esc 键快捷返回上一级子目录，写入更多 steam 和 epic 等等游戏中文名称和解释数据，整合成可供下载的资源包，让使用者的 api 可以自主识别这些内容，Windows 系统固定可清理项的解释也完善补充，整合成资源包，可清理项释义覆盖不够完善，可以整合更多资源包，支持自定义资源包，把资源包也放在 GitHub 上面，运行环境自检板块的跨设备兼容改为兼容性分析” | 12 项全部落地，详见 §6 第 11 条：右栏 11 个面板折叠堆叠（`localStorage` 记忆）；磁盘概览并入左栏、全盘页改名「扫描概览」；进度改为服务端按真实阶段上报（新增 `/__oc__/progress`，无分母阶段用流动条纹）并删除按时间估算的旧公式；两栏独立滚动（命名为 `grid-template-areas` 网格）；新增 `packs/` 4 个内置资源包 148 条 + 自定义导入 + GitHub 更新接口；新增自有 AI 接入（解释单项 / 生成方案，AI 不能删除）；Esc 返回上一级；「跨设备兼容」改为「兼容性分析」（9 项，逐条给实测依据） |
+| **REQ-21** | v2.4–v2.7 连续迭代（2026-10-14 ~ 10-20） | 「英文界面全量补齐」「扫描要快、排行只看首层」「回收站要能精确清空所选」「仓库公开、检查更新、清理回执、大文件排行」「折线/柱图看清理趋势」「占用树里自定义聚合组、NTFS 元文件也要归纳」 | 分五个批次全部落地：v2.4 界面全量双语（§33）；v2.5 回收站精确清空 + 默认 1 层扫描 + 英文知识库（§34）；v2.6 仓库公开 + 代码整理（§35）；v2.7 检查更新 / 清理回执 / 大文件排行（§36）；10-20 批次聚合组与元文件 + 全库审计（§37） |
 
 ---
 
@@ -209,6 +212,8 @@
 | `/__oc__/overrides` | 无 | 自定义释义集合 | `custom-overrides.json` 内容 |
 | `/__oc__/custom-rules` | 无 | 命名规则列表 | 自定义清理规则 |
 | `/__oc__/bundle/export` | 无 | bundle JSON | 三类自定义数据整体导出（AI 生成验收器） |
+| `/__oc__/bigfiles` | `drive`, `limit` | 大文件排行 | 全盘最大文件 Top N（WizTree 内存表直查，无加速时回退提示） |
+| `/__oc__/fsgroups` | 无 | `{groups}` | 自定义聚合组列表（`config/fs-groups.json`，gitignore，带 `.bak` 备份） |
 
 **POST（写/查询动作）**
 
@@ -230,6 +235,7 @@
 | `/__oc__/ai/config` / `test` | 配置对象 | 自有 AI 接入的保存与连通性测试（Key 只存 `config/ai.json`，不回传） |
 | `/__oc__/ai/explain` / `plan` | `{id}` / 候选集 | AI 解释单项 / 生成方案（**AI 不能删除**：只产出建议与勾选） |
 | `/__oc__/bundle/import` | bundle JSON | 三类自定义整体导入（逐项校验，跳过项带原因，绝不半途失败） |
+| `/__oc__/fsgroups` | `{op, ...}` | 自定义聚合组增删改：`add`（归入现有组或新建）/ `remove`（移出，空组自动删除）/ `rename` / `delete`；路径经后端归一化去重（与前端 `normKey` 同一契约：`/`→`\`、去尾反斜杠、小写） |
 
 **DELETE**
 
@@ -1169,6 +1175,42 @@ CI 的「自测」作业；阶段八可单跑。
 删除（进回收站白占空间）。已统一为分级表述；游戏专用删除接口确为直接删除，
 SECURITY 该处表述未动。
 
+### 33. v2.4：界面全量英文 i18n（2026-10-14，用户长期需求落地）
+- **范围**：界面静态文案（`I18N_EN` 词典 + `data-i18n` 扫描）、动态弹窗与行内文案（`c30ebc6`）、面板标题/引擎统计/换算单位（`20df3f9`）、排行行识别名接入英文知识库 L3 label（`6317074`）、资源包/预设英文识别名与长文本全覆盖（`ca6be7a`）。
+- **机制**：三层数据流——L1 前端词典 → L2 知识库 `kb-en.json`（识别名/解释/风险等级，含 `risk_labels` 映射如「无→None」）→ L3 资源包条目 `name_en`/`what_en`；后端 `apply_lang_payload(lang=)` 按层回退合并，`?lang=en` 切换。动态构造的 key（如 `head("cr.onceHead")`）容易在键对账时产生假阳性，`ffbe3c2` 把对账限定在词典对象内。
+- **配套**：切语言同步重画列表（`36ad143` 修 setLang 漏网渲染器）、英文版使用指南 `docs/USAGE-en.md`（`59a7d3a`）、自检面板修复批次（`0fba56f`）、CDP 探针 `tools/probe_ui.js`（`510aac7`，量几何/截图/验证语言切换）与本机自检编排 `tools/selfcheck.ps1`。
+- **教训**：i18n 最大的成本不在翻译，而在 selftest/CDP 里大量中文字面量断言——新加断言时文案相关判定一律走 `t(key)` 或双语集合，不要写死单一语言字符串。
+
+### 34. v2.5：回收站精确清空 + 默认 1 层扫描（2026-10-15，性能与安全双线）
+- **回收站链路修复**（`69c72e7` → `70c7092`）：清空回收站曾被路径护栏误拦导致链路不可达；精确放行「盘根的 `$Recycle.Bin` + recyclebin kind」（tree kind 与子路径照常拒），普通权限下 PS 统计被拒时 `partial_notes` 如实透传「释放量未知」。清空实现改为按 `$I`/`$R` 文件**配对精确直删**（只删本次 trash_paths 匹配到的项，绝不动回收站里其它内容），覆盖非系统盘。
+- **默认扫描层数改 1 层**（`cd934c0`）：排行只列首层实体，深层点击下钻。此前默认 2 层时 CI 快扫永远超时、内容断言成片 skip 掩盖缺陷；改 1 层后快扫首次跑完、13 条断言第一次真执行就全炸。由此确立**两条门控原则**：①内容依赖断言必须带「盘内容肥瘦」门控（如 `FS.nodes>=8` 才严格）；②文案断言必须收双语 + 页面多形态（CI runner 是英文系统；细分合计卡有两种形态；缓存命中时 hint 换文案）。
+- **渲染检查加固**（`06fac5c`/`e557ca9`）：双语断言、细分弹窗两形态、缓存命中态适配；`d7faac5` 让 CDP 求值支持返回 Promise。
+- **汇总口径**（`d5e4a85`）：汇总条按去重口径统计，隐藏系统项（$Recycle.Bin 等默认隐藏项）聚合成可展开的组，`51b08a0` 让 CDP 跳过前端合成的隐藏聚合组。
+- **其它**：路径归一化三份实现合并为一（`decf72b`）、AI 模型列表自动识别与接入引导（`7066c6e`）、磁盘趋势悬停显示清理活动（`db20847`）、清理结果按「会再生 / 一次性」分组展示（`1509938`）、`tools/selfcheck.ps1` 本机自检编排（`37ddb7f`）。
+
+### 35. v2.6：仓库公开 + 代码整理（2026-10-16 ~ 10-17）
+- **仓库公开（PUBLIC）**：`ece37dd` 公开前暴露面清理（历史已用 git-filter-repo 清除本机用户名，匿名克隆复扫 0 命中）；2026-10-17 翻转为公开仓，billing 冻结解除，Actions 恢复；GitHub 账号改名 **Oerian**（用户自行操作），`ca45be9` 统一全部 12 处引用，旧地址靠 GitHub 重定向兜底。
+- **推送通道切 SSH**：origin 改 ed25519 部署密钥 + `~/.ssh/config` 把 github.com 路由到 `ssh.github.com:443`。HTTPS 在晚高峰会被按 IP 阻断，SSH 通道在阻断窗口内仍秒推。部署密钥一把只能绑一个仓库；给其他仓库（如 packs 分发仓）推送走 GitHub Contents API。
+- **资源包分发**：`b92f289` 「检查更新」默认远端指向独立公开仓 `Oerian/O-Cleaner-packs`（只放 packs 数据），`4763965` 新增 `tools/sync_packs.py`（check 只读比对 / push 走 Contents API；**坑：API 的现状 sha 是 git blob sha1**，`sha1("blob <len>\0"+内容)`，裸 sha1 报 409）。
+- **代码整理**：`bd7d380` 清死常量、提取三处重复模式为具名助手；`f24a83b` 提取 `apiJSON` 统一 fetch+JSON 入口；`a35cfae` 升版 2.6；新增 `docs/ROADMAP.md` 与 README CI 徽章（`6cd5606`）。
+- **趋势图改版**：`2feafbb` 磁盘趋势图改为「每次清理释放量」柱图、历史条目补盘符字段；`1298863` 修复换盘后旧盘在途扫描响应覆盖新盘 UI；`e316624` 修复 AI 生成方案候选清单恒为空；`af8ad80` 修复回收站勾选项被嵌套去重跳过；`7eec54f` 清理活动图改折线 + 浅色透明填充。
+
+### 36. v2.7：检查更新 / 清理回执 / 大文件排行（2026-10-17，`bb98538`）
+- **应用内检查更新**：对 GitHub Releases 最新 tag 做版本比较，新版本时给出发布页链接；UA 与版本号统一走 `APP_UA`/`APP_VERSION` 单点定义。
+- **清理回执**：每次清理落 `receipts/`（gitignore）一行流水：时间、目标、前后实测释放量、结果；前端「清理活动」图表消费同一数据源。
+- **大文件排行**：新增 `/__oc__/bigfiles`（WizTree 内存表直查 Top N，无加速时回退提示），前端独立面板。
+- **资源包英文补全**：`a6ee716` 给 `packs/games-titles.json` 65 条游戏条目补英文长文本。
+- **发布方式变化**：v2.6 起发布走 **GitHub Releases**（tag + zip + 说明）；「发布包会悄悄变旧」在 v2.6 上又验证了一次——挂 Release 前必须重建并核验包内文件与源码 sha256 一致。dist 只保留当前版本一个包。
+
+### 37. 聚合组 + 元文件 + 全库审计（2026-10-20，本地 14 个提交的最新 8 个）
+- **扫描后不再自动套用预设**（`9b11e05`）：用户反馈勾选被扫描自动覆盖；扫描只出数据，勾选完全由用户掌控。
+- **折线图兼容旧历史**（`9a38bbb`）：旧版 `disk-trend.json` 条目无 `drive` 字段导致图整体不可见；回退从 `trigger` 文本尾部解析盘符。
+- **i18n 补零**（`cddde39`）：`risk_labels` 补「无→None」；`target:auto` 词条用 `label_suffix` 机制（后端剥中文后缀「（自动发现）」再拼英文后缀）。
+- **隐藏系统项归纳补全**（`42aec96`）：`_HIDDEN_SYS_NAMES` 补齐 11 个 NTFS 元文件（$MFT/$LogFile/$Extend 等）。注意：`os.scandir`/PowerShell **永远枚举不到**它们，只有管理员权限的 WizTree MFT 导出才包含；非管理员导出实测 0 行元文件，故用合成 CSV 单测覆盖（格式要点：数字不带引号、目录行以尾反斜杠结尾、前两行跳过）。
+- **自定义聚合组**（`1fa5d50`）：占用树内把任意条目归入自定义组——后端 `config/fs-groups.json`（gitignore，写入前 `.bak` 备份）+ `/__oc__/fsgroups` 四个操作；前端 `groupCustom()` 在 `groupHiddenSys()` **之前**执行（用户意图优先），纯前端下钻不打后端；行尾「归档/管理」按钮。配套修复：size-0 的隐藏组曾被 `size>0` 过滤器吞掉不显示。
+- **功能级审计**（`a5ecab2`）：`fsGroupOp` 对 200-JSON-错误体补 throw（本项目 400 也回 200 + error 体，前端 helper 必须自查 `r.error`）；无 id 条目的回退 id 改稳定 md5；空路径组不再落到盘根。
+- **全库审计**（`dec6894` + `7f73219`）：pyflakes 全库扫描揪出**文档化功能自 v2.0 起就是坏的**——`discover_junk_folders` 引用的三个常量从未定义过，一执行即 NameError。已按保守口径重建（仅可重建内容，用户数据目录不入选）并 E2E 实测。其余：删 `import platform`、重复 `_wiz_ok`、selftest 未定义 `skip2`、死导入死变量、`scan()`/`loadState()` 过期响应守卫补对称（catch 分支此前照旧渲染旧盘数据）。**教训：文档化过的功能要有至少一条断言覆盖**；pyflakes 列为 Python 改动的前置检查（py_compile 抓不到死导入/未定义名）。
+
 ---
 
 ## 七、文件资产与代码清单
@@ -1177,36 +1219,42 @@ SECURITY 该处表述未动。
 
 | 文件相对路径 | 大小概要 | 职责描述 |
 |:---|:---|:---|
-| `app.py` | ~256 KB | 后端全功能核心：HTTP 服务、安全删除校验（含内容指纹与祖先链守卫）、锁定预检与三态删除、WizTree MFT 加速调用与管理、Steam 解析、分区分析、资源包加载与合并、自有 AI 接口、定时任务、被占用文件探测与占用进程候选、游戏本体删除（含后端二次识别）、按路径清理（服务端重新识别校验）、勾选包含关系去重、`--data-dir` 数据目录重定向、快速扫描注入游戏本体；PowerShell 脚本模板经 `ps_scripts.py` 导入（`PS_*` re-export，下游引用方式不变） |
-| `ps_scripts.py` | ~14 KB | PowerShell 系统脚本模板集中地：9 个 `PS_*` 常量（全盘递归、目录测量、回收站、Steam、被占用探测等）+ UTF-8 管道前置；受 linter 第 [7/8] 节括号配平与自测阶段七解析器校验约束 |
-| `web/index.html` | ~191 KB | 前端单文件：命名网格两栏布局、可折叠侧栏、占用排行树形折叠懒加载列表（可清理项行内勾选）、环境自检面板、Steam 面板、资源包面板、AI 助手面板、细分弹窗、占用进程一键查找、游戏删除确认 |
+| `app.py` | ~312 KB | 后端全功能核心：HTTP 服务、安全删除校验（含内容指纹与祖先链守卫）、锁定预检与三态删除、WizTree MFT 加速调用与管理、Steam 解析、分区分析、资源包加载与合并、自有 AI 接口、定时任务、被占用文件探测与占用进程候选、游戏本体删除（含后端二次识别）、按路径清理（服务端重新识别校验）、勾选包含关系去重、`--data-dir` 数据目录重定向、快速扫描注入游戏本体、i18n 载荷三层合并（`apply_lang_payload`）、自定义聚合组（`/fsgroups`）、自定义目录垃圾文件夹发现（`discover_junk_folders`，v2.0 起坏、2026-10-20 复活）、检查更新、大文件排行；PowerShell 脚本模板经 `ps_scripts.py` 导入（`PS_*` re-export，下游引用方式不变） |
+| `ps_scripts.py` | ~16 KB | PowerShell 系统脚本模板集中地：9 个 `PS_*` 常量（全盘递归、目录测量、回收站、Steam、被占用探测等）+ UTF-8 管道前置；受 linter 第 [7/8] 节括号配平与自测阶段七解析器校验约束 |
+| `web/index.html` | ~308 KB | 前端单文件：命名网格两栏布局、可折叠侧栏、占用排行树形折叠懒加载列表（可清理项行内勾选 + 行内归档/管理按钮）、环境自检面板、Steam 面板、资源包面板、AI 助手面板、大文件排行面板、清理活动折线图、细分弹窗、占用进程一键查找、游戏删除确认、自定义聚合组管理弹窗、全量英文 i18n（`I18N_EN` 词典 + `t()`/`data-i18n` 双通道） |
 | `start-ocleaner.bat`| ~1 KB | 双击启动入口：纯 ASCII + CRLF，检测 Python 并拉起默认浏览器 |
 | `config/targets.json` | ~20.6 KB | 26 个预定义系统级目标与 5 个预设（安全/深度/开发者/回收站/清空） |
 | `config/filetypes.json`| ~27.6 KB | 占用识别知识库：28 条目录规则 + 14 条文件规则（合计 42 条），定义识别特征与处置建议 |
 | `config/game-names.json`| ~7.8 KB | 游戏中文译名映射库：58 条条目（纯显示，与 `packs/games-titles.json` 分工见 §九） |
 | `config/convert.json` | ~3.0 KB | 10 种存储体积换算单位（支持表达式引用） |
 | `config/drives.json` | ~1.2 KB | 盘符及应用元数据配置 |
-| `packs/` | ~85 KB | 5 个内置资源包共 172 条（系统项 28 / 平台目录 21 / 游戏作品 65 / 常见软件 34 / 释义增强 24）+ 清单 + 格式说明；受 linter 第 [2/8] 节约束；公开分发仓 `Oerian/O-Cleaner-packs` 与本仓库**两边同步**（`tools/sync_packs.py`） |
-| `tools/selftest.py` | ~123 KB | 断言自动化测试套件（300+ 项，条数依环境浮动；含单文件前端的括号配平与 CSS 变量定义检查、按路径清理端到端用例、勾选去重用例、`--data-dir` 子进程断言） |
-| `tools/cdp_check.js` | ~67 KB | 90+ 处断言点的 CDP 浏览器渲染与交互校验脚本，单次运行登记条数依环境浮动（含 `checkScan`/`checkInit` 环境门控、占用排行量盒断言） |
+| `packs/` | ~109 KB | 5 个内置资源包共 172 条（系统项 28 / 平台目录 21 / 游戏作品 65 / 常见软件 34 / 释义增强 24，游戏条目含英文长文本）+ 清单 + 格式说明；受 linter 第 [2/8] 节约束；公开分发仓 `Oerian/O-Cleaner-packs` 与本仓库**两边同步**（`tools/sync_packs.py`） |
+| `config/kb-en.json` | ~20 KB | 英文知识库（L2）：识别名/解释/风险等级映射（`risk_labels`）、`target:auto` 等 label_suffix 词条；`apply_lang_payload` 消费 |
+| `tools/selftest.py` | ~148 KB | 断言自动化测试套件（300+ 项，条数依环境浮动；含单文件前端的括号配平与 CSS 变量定义检查、按路径清理端到端用例、勾选去重用例、`--data-dir` 子进程断言、自定义聚合组阶段六D）；本机完整跑受宿主删除配额限制不可行，权威验证走 CI 的「自测」作业 |
+| `tools/cdp_check.js` | ~80 KB | 90+ 处断言点的 CDP 浏览器渲染与交互校验脚本，单次运行登记条数依环境浮动（含 `checkScan`/`checkInit` 双环境门控、双语与多形态断言、占用排行量盒断言；调用必须显式传 `http://127.0.0.1:<PORT>`） |
 | `tools/lint_rules.py` | ~33 KB | 知识库规则 + 资源包 + 内嵌脚本模板的静态审查器（8 项检查） |
 | `tools/_lint_selftest.py`| ~14 KB | 针对 linter 自身的缺陷注入自测（知识库 15 类 + 资源包 20 类 + 脚本模板 5 类 + 4 个基线，共 44 项） |
 | `tools/doctor.py` | ~6.6 KB | 新设备 27 项环境自检排查脚本 |
 | `tools/fix-encoding.ps1`| ~4.9 KB | 编码与换行契约的唯一规范化工具（CI 的 `lint` 第一步） |
 | `tools/make_package.py` | ~7.7 KB | 分发包构建工具（分发清单含 `packs/`；打包前跑编码契约预检，包后逐条 sha256 自校验，内存打包无暂存目录） |
+| `tools/sync_packs.py` | ~8 KB | packs 双仓同步：`check` 只读比对 / `push` 走 GitHub Contents API（现状 sha 须为 git blob sha1）；`config/fs-groups.json` 等 gitignore 数据不进包 |
+| `tools/selfcheck.ps1` | ~4 KB | 本机门禁编排（pwsh7：编码契约 + linter + 缺陷注入 + 渲染检查） |
+| `tools/probe_ui.js` | ~8 KB | CDP 界面探针：量几何 / 截图 / 语言切换验证（`node tools/probe_ui.js <url> [--shot f.png] [--lang en] [--eval expr]`）；UI 几何判断用它比看缩略截图可靠 |
 | `tools/make_exe.py` | ~6.5 KB | 免安装版构建工具：内嵌 python.org 官方 embeddable 运行时（版本写死、不用 PyInstaller），复用 `make_package.INCLUDE` 清单，`._pth` 加 `..` 挂项目根，运行时 zip 缓存在 gitignored 的 `build/` |
 | `.github/workflows/ci.yml`| ~6.8 KB | GitHub Actions 持续集成配置（Windows 平台，快慢两级：每次推送跑 lint，自测与界面检查按定时/手动/`[ci]` 触发） |
 | `.gitattributes` | ~1.4 KB | 换行与编码契约的声明（`eol=crlf` 写死，CI 依此校验） |
 | `tools/local-cases.json.example`| ~0.6 KB | `local-cases.json` 的模板（真实用例在 gitignore 中隔离） |
 | `README.md` | ~5.3 KB | 面向使用者的项目简介与快速上手（免安装版 / 能力表 / 数据与迁移 / 安全边界 / FAQ / 文件一览） |
 | `docs/USAGE.md` | ~40 KB | 完整使用指南 |
+| `docs/USAGE-en.md` | — | 英文版使用指南（v2.4 i18n 配套） |
+| `docs/ROADMAP.md` | — | 路线图（2026-10-16 起） |
 | `docs/CUSTOMIZE.md` | ~6 KB | 自定义数据格式规范：三类自定义的字段表、bundle 整体结构、导入行为语义、AI 生成工作流（§23） |
 | `SECURITY.md` | ~9.9 KB | 安全模型、资源包与自有 AI 的信任边界、占用查询的只读边界、对抗性测试结果与漏洞报告流程 |
 | `CONTRIBUTING.md` | ~9.0 KB | 贡献指南与提交前自查清单（含资源包提交流程、CI 快慢两级说明） |
 | `HANDOFF.md` | ~125 KB | 本文档：需求追溯、架构规格、踩坑记录与接手注意事项 |
-| 运行时数据（均 gitignore） | — | `history.json` / `schedule.json` / `disk-trend.json`（仓库根，随 `--data-dir` 重定向）；`config/ai.json`（AI Key）、`config/packs-state.json`、`config/packs-user/`（远程更新的资源包）、`config/custom-overrides.json`（自定义释义）；`tools/local-cases.json`（本机测试用例）；`dist/`、`build/`、`portable/`、`_legacy/` |
+| 运行时数据（均 gitignore） | — | `history.json` / `schedule.json` / `disk-trend.json` / `receipts/`（仓库根，随 `--data-dir` 重定向）；`config/ai.json`（AI Key）、`config/packs-state.json`、`config/packs-user/`（远程更新的资源包）、`config/custom-overrides.json`（自定义释义）、`config/fs-groups.json`（自定义聚合组，写入前自动留 `.bak`）；`tools/local-cases.json`（本机测试用例）；`dist/`、`build/`、`portable/`、`_legacy/` |
 | `_legacy/` | ~180 KB | 前身版本归档（已 gitignore，不属于本仓库） |
-| `dist/` | ~11.2 MB | 当前版本的两个分发产物：`O-Cleaner-v2.3.zip`（便携版，需系统已装 Python，由 `tools/make_package.py` 生成）与 `O-Cleaner-v2.3-win64-embed.zip`（免安装版，内嵌官方运行时，由 `tools/make_exe.py` 生成）；`dist/` 与 `build/`（运行时下载缓存）均已 gitignore |
+| `dist/` | ~11 MB | 当前版本的分发产物：`O-Cleaner-v2.7.zip`（便携版 33 文件，需系统已装 Python，由 `tools/make_package.py` 生成；免安装版由 `tools/make_exe.py` 生成，随发布节奏按需重建）。**v2.6 起发布走 GitHub Releases**（tag + zip + 说明）；`dist/` 与 `build/`（运行时下载缓存）均已 gitignore；发布前必须重建并核验包内文件与源码 sha256 一致（「发布包悄悄变旧」已两次实际踩中） |
 
 ---
 
@@ -1253,12 +1301,12 @@ SECURITY 该处表述未动。
 ### 8. ~~尚未 `git init`~~（已解决）
 - 2026-09-30 已 `git init`（main 分支），初始提交为 v2.0 基线 + selftest 加固；v2.1 优化随后提交。
 - `LICENSE` 版权人已填维护者名称（更换 GitHub ID 时直接改该文件即可）。
-- 仓库已推送至 GitHub（私有）并接入 CI。本机 `gh` CLI 位于 `C:\Program Files\GitHub CLI\gh.exe`，不在 PATH 中，需用全路径调用。
+- 仓库已推送至 GitHub 并接入 CI；**2026-10-17 起为公开仓（PUBLIC）**，账号名 **Oerian**，历史已经 git-filter-repo 清除本机用户名。本机 `gh` CLI 位于 `C:\Program Files\GitHub CLI\gh.exe`，不在 PATH 中，需用全路径调用；push 优先走 SSH（见 §35，晚高峰 HTTPS 会被按 IP 阻断）。
 
 ### 9. 曾经暂缓的方向（2026-10-13 起重新纳入规划，非永久否决）
 - 以下三项**当时**明确暂缓，用户已澄清「只是当时不做」；重启前与用户确认优先级即可，不要再当成永久禁项：
   - **exe / 免 Python 分发**：**（2026-10-13 已实现，见 §29：`tools/make_exe.py` 内嵌官方 embeddable 运行时，`dist/O-Cleaner-v<版本>-win64-embed.zip`；未做代码签名，SmartScreen 提示已在 README-RUN.txt 与文档如实说明。）**
-  - **英文规则 / i18n**：界面与知识库文案均为中文硬编码，重构面最广；牵动 selftest/CDP 中大量中文字面量断言，动手前需先做断言与语言的解耦或固定测试语言。
+  - **英文规则 / i18n**：~~界面与知识库文案均为中文硬编码~~（**2026-10-14 ~ 15 已实现**，见 §33/§34：三层英文数据流 L1 界面词典 → L2 `config/kb-en.json` → L3 资源包英文长文本；新增断言时文案相关判定走 `t(key)` 或双语集合，不要写死单一语言字符串。）
   - **快速模式（2 层浅扫）**：WizTree 加速后全盘已到 14–90 秒，浅扫主要惠及「无 WizTree + 慢机器」场景，成本较低，可做成 scope 选项。**（2026-10-13 已实现，见 §25：档位下拉 + depth=2，语义边界是「少下探」而非秒级速览。）**
 - 仍然有效的约束：不引入安装型依赖（playwright / pip / npm 包）。CDP 测试使用系统自带 Edge + Node 原生 WebSocket 是刻意设计，不要替换为 Puppeteer/Playwright。
 
@@ -1295,3 +1343,10 @@ SECURITY 该处表述未动。
 8. **编码契约（已由 CI 强制）**：
    - 修改任何 `.ps1` 脚本后运行 `tools/fix-encoding.ps1`，确保 UTF-8 BOM 存在，否则 PowerShell 5.1 解析会失败；`.py/.json/.html/.md/.yml/.yaml/.js` 必须无 BOM 且 CRLF。
    - CI 的 `lint` 作业会先跑 `tools/fix-encoding.ps1 -Check`，不符契约直接失败。本地拿不准时先跑 `-Check`。
+9. **i18n 新词条与断言（v2.4 起为硬约定）**：
+   - 新增用户可见文案时必须同步给 `I18N_EN` 词条；识别名/解释类的英文走 `config/kb-en.json` 或资源包英文长文本，不要在前端词典里硬编码知识库内容（层级：前端词典 < kb-en < 资源包）。
+   - 文案相关断言（selftest / CDP）一律 `t(key)` 或双语集合，不写死单一语言字符串——CI runner 是英文系统，写死中文必炸。
+10. **自定义聚合组（`/fsgroups`）扩展约定**：
+    - 前端 `normKey()` 与后端路径归一化是同一契约（`/`→`\`、去尾反斜杠、小写），两边任一改动必须同步，否则组内成员匹配静默失效。
+    - 渲染顺序是 `groupCustom()` 在 `groupHiddenSys()` 之前（用户意图优先于内置隐藏归组）；隐藏组与自定义组都豁免「size>0」过滤器（快速扫描下成员可能全是 0 字节）。
+    - `config/fs-groups.json` 是运行时数据（gitignore），不要把用户的组内容写进任何断言或文档。
