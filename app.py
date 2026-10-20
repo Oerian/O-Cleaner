@@ -6279,15 +6279,18 @@ class Handler(BaseHTTPRequestHandler):
             for k in ("enabled", "interval_hours", "preset", "drive"):
                 if k in body:
                     s[k] = body[k]
+            # interval_hours 必须是数字：历史数据损坏或前端 bug 传入字符串时
+            # 直接 400，而不是 float() 崩成 500，更不能把垃圾值原样落盘。
+            # 注意校验必须在 enabled 判断**之外**：关掉定时任务时传进来的非法值
+            # 一样会写盘，等下次开启时就成了下一次事故的种子（实测 enabled=false
+            # 时 "abc" 被原样落盘，/state 回读到的仍是 "abc"）。
+            try:
+                hrs = max(0.25, float(s.get("interval_hours") or 24))
+            except (TypeError, ValueError):
+                return self._json(
+                    {"error": "interval_hours 必须是数字"}, 400)
+            s["interval_hours"] = hrs
             if s.get("enabled"):
-                # interval_hours 必须是数字：历史数据损坏或前端 bug 传入字符串时
-                # 直接 400，而不是 float() 崩成 500，更不能把垃圾值原样落盘
-                try:
-                    hrs = max(0.25, float(s.get("interval_hours") or 24))
-                except (TypeError, ValueError):
-                    return self._json(
-                        {"error": "interval_hours 必须是数字"}, 400)
-                s["interval_hours"] = hrs
                 s["next_run"] = time.time() + hrs * 3600
             else:
                 s["next_run"] = 0
