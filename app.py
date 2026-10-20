@@ -1773,6 +1773,14 @@ def apply_lang_payload(obj, lang: str):
             # 否则从展开后的绝对路径首字符取（state 的 targets 有）。
             # 拿不到盘符就放弃覆盖 —— 宁可显示中文也不显示「 盘回收站」。
             en_label = entry.get("label")
+            # 自动发现项（rule_id=target:auto）的 label 是「{名}（自动发现）」，
+            # 名字本身来自识别规则、无法在 kb-en 里预写整条，改为只换
+            # 尾部的中文后缀。
+            suffix = entry.get("label_suffix")
+            if isinstance(suffix, str) and suffix and node.get("label"):
+                zh_sfx = "（自动发现）"
+                if str(node["label"]).endswith(zh_sfx):
+                    node["label"] = str(node["label"])[: -len(zh_sfx)] + suffix
             if isinstance(en_label, str) and en_label.strip() and node.get("label"):
                 if "{drive}" in en_label:
                     drv = str(node.get("drive") or "").rstrip(":").upper()

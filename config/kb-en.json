@@ -8,7 +8,8 @@
   "risk_labels": {
     "高": "High",
     "中": "Medium",
-    "低": "Low"
+    "低": "Low",
+    "无": "None"
   },
   "rules": {
     "steam-library": {
@@ -1518,6 +1519,11 @@
       "rebuild": "Does not rebuild — this is an irreversible operation.",
       "impact": "Everything in this drive's Recycle Bin is permanently lost.",
       "keep_if": "Unchecked by default. Expand and review the list first to be sure nothing in it is still needed."
+    },
+    "target:auto": {
+      "label_suffix": " (auto-discovered)",
+      "short": "Auto-discovered by directory-name matching against the knowledge base.",
+      "what": "A directory recognized as rebuildable cache/temp data by its name. Auto-discovery only suggests it; review the path before cleaning."
     }
   }
 }
