@@ -1497,10 +1497,20 @@ function drawDiskTrend() {
   }
   // 当前盘的清理事件（旧 → 新）：只统计释放量 > 0 且盘符匹配的记录
   // （跨盘的回收站清理记为 "C,D" 形式，包含当前盘即算）。
+  // 兼容历史：早期记录没有 drive 字段，从 trigger 尾部的「（X:）」补盘符
+  // （手动/定时清理、删除游戏、规则运行都是这个格式；「清空所选项的
+  // 回收站」不带盘符，旧记录解析不出时不归入任何盘）。
   const now = Date.now(), CUT = 30 * 86400e3;
   const all = (DISK_TREND || [])
-    .map(e => ({ t: Date.parse((e.time || "").replace(" ", "T")),
-                 freed: +e.freed || 0, drive: e.drive || "" }))
+    .map(e => {
+      let drive = e.drive || "";
+      if (!drive) {
+        const m = (e.trigger || "").match(/（([A-Z]):）\s*$/);
+        drive = m ? m[1] : "";
+      }
+      return { t: Date.parse((e.time || "").replace(" ", "T")),
+               freed: +e.freed || 0, drive };
+    })
     .filter(e => e.freed > 0 && isFinite(e.t) && now - e.t <= CUT)
     .sort((a, b) => a.t - b.t);
   const evs = all.filter(e => e.drive && e.drive.split(",").includes(drive));
