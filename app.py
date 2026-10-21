@@ -40,6 +40,7 @@ import time
 import traceback
 import uuid
 import webbrowser
+from contextlib import contextmanager
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1771,6 +1772,65 @@ def is_system_drive(letter: str) -> bool:
 
 _cache: dict = {}
 _lock = threading.Lock()
+
+
+@contextmanager
+def _cross_process_lock(name: str, timeout: float = 3.0):
+    """跨进程互斥（同一份数据被两个实例同时改写时用）。
+
+    为什么需要：`_lock` 只在**本进程**内有效。用户双开两个实例（各自端口）
+    时，两边的 append_history 都是「读 history.json → 改 → 写回」，
+    交错执行就会丢记录 —— 而且丢的是清理凭据，事后无法追溯删了什么。
+
+    Windows 用 msvcrt 的字节区间锁，其他平台用 fcntl.flock。锁文件常驻
+    数据目录（只创建不删除，避免触发本项目的安全删除钩子）。
+
+    超时后**放行**而不是报错：宁可极小概率丢一条历史，也不能因为别人
+    持锁就把用户的清理卡死。
+    """
+    path = DATA_DIR / f".oc-{name}.lock"
+    fh = None
+    locked = False
+    try:
+        try:
+            fh = open(path, "a+b")
+        except OSError:
+            yield          # 连锁文件都建不了（只读目录）：降级为无锁
+            return
+        deadline = time.time() + timeout
+        while True:
+            try:
+                if IS_WINDOWS:
+                    import msvcrt
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError:
+                if time.time() >= deadline:
+                    break
+                time.sleep(0.02)
+        yield
+    finally:
+        if fh is not None:
+            if locked:
+                try:
+                    if IS_WINDOWS:
+                        import msvcrt
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            try:
+                fh.close()
+            except OSError:
+                pass
 # WizTree 探测结果（None = 还没探测过）
 _WIZ_CACHE: dict | None = None
 # 最近一次 WizTree 导出的目录体积表：盘符 → {"dirs": {path:size}, "at": 时间戳}
@@ -2184,6 +2244,13 @@ def _atomic_write(path: Path, data) -> None:
         f"{path.name}.{os.getpid()}.{threading.get_ident()}."
         f"{uuid.uuid4().hex[:8]}.tmp")
     try:
+        # 父目录不存在就先建：用户用 --data-dir 指向一个全新空目录
+        # （数据迁移场景）时，第一次保存配置不该因为「config/ 还没建」
+        # 而抛 FileNotFoundError。以前这里直接 open 会失败。
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=2)
         last: Exception | None = None
@@ -2213,7 +2280,9 @@ def load_history() -> list:
 
 
 def append_history(entry: dict) -> None:
-    with _lock:
+    # 两层锁：_lock 防本进程多线程交错，_cross_process_lock 防双开实例
+    # 各自「读-改-写」互相覆盖（丢的是清理凭据，事后无法追溯删了什么）。
+    with _lock, _cross_process_lock("history"):
         hist = load_history()
         hist.insert(0, entry)
         _atomic_write(HISTORY_PATH, hist[:200])
@@ -6159,7 +6228,7 @@ class Handler(BaseHTTPRequestHandler):
             # 持锁：与 append_history 的读-改-写串行化。以前这里裸写，
             # 清空瞬间若有清理任务完成，那条记录会被「清空」覆盖掉（或反过来
             # 用户以为清空了却多出一条）。
-            with _lock:
+            with _lock, _cross_process_lock("history"):
                 _atomic_write(HISTORY_PATH, [])
             return self._json({"ok": True})
         if route == "/__oc__/custom-rules":
