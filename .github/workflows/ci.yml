@@ -79,16 +79,32 @@ jobs:
       - name: 删除护栏矩阵（必须拒绝 / 必须放行 / 规则单元自检）
         run: python -X utf8 tools/guard_matrix.py
 
-      - name: 界面 JS 语法检查
+      # 必须检查**全部** script 块：旧版用 [regex]::Match 只取第一个匹配，
+      # 而 index.html 的第一个 script 块只有 400 多字节（一小段初始化），
+      # 真正 200 KB+ 的应用主体是第二个块 —— 主脚本写坏语法，这道闸门照样绿。
+      - name: 界面 JS 语法检查（全部 script 块）
         shell: pwsh
         run: |
           $html = Get-Content web/index.html -Raw -Encoding UTF8
-          $m = [regex]::Match($html, '(?s)<script>(.*?)</script>')
-          if (-not $m.Success) { Write-Host "找不到 <script> 块"; exit 1 }
-          Set-Content -Path "$env:TEMP\oc_ci.js" -Value $m.Groups[1].Value -Encoding UTF8
-          node --check "$env:TEMP\oc_ci.js"
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          Write-Host "界面 JS 语法通过"
+          $ms = [regex]::Matches($html, '(?s)<script[^>]*>(.*?)</script>')
+          if ($ms.Count -eq 0) { Write-Host "找不到 <script> 块"; exit 1 }
+          $bad = 0
+          $i = 0
+          foreach ($m in $ms) {
+            $i++
+            $body = $m.Groups[1].Value
+            $p = Join-Path $env:TEMP "oc_ci_$i.js"
+            [IO.File]::WriteAllText($p, $body, [Text.UTF8Encoding]::new($false))
+            node --check $p
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "第 $i 个 script 块语法错误（$($body.Length) 字符）"
+              $bad = 1
+            } else {
+              Write-Host "第 $i 个 script 块语法通过（$($body.Length) 字符）"
+            }
+          }
+          if ($bad -eq 1) { exit 1 }
+          Write-Host "全部 $($ms.Count) 个 script 块语法通过"
 
   # ---------- 第二道闸门：功能自测（慢，定时 / 手动 / 带 [ci] 才跑） ----------
   test:
