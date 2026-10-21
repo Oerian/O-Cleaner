@@ -686,9 +686,8 @@
     <div id="diskInfo"></div>
   </div>
 
-  <!-- 可清理项：常规清理卡片并入扫描概览页（2026-10-13 起不再有独立的
-       「常规清理」视图）。勾选这里与下方占用树的点击展开互不影响 ——
-       两块 DOM 各自渲染，勾选状态（selected 集合）不随下钻重绘。 -->
+  <!-- Steam 库独立视图：从工具栏「Steam」入口进入，展示各库、各游戏与本体体积。
+       默认隐藏（display:none），由 view 切换控制显隐。 -->
   <section id="steamView" class="fspanel" style="display:none">
     <div class="panel">
       <h3><span data-i18n="pane.steamOverview">Steam 库总览</span> <span class="hint" id="stHint"></span></h3>
@@ -989,6 +988,10 @@ let STATE = null, SCAN = {}, selected = new Set(), subSel = {},
     convOnly = (() => { try { const v = localStorage.getItem("oc-conv-only"); return v === null ? null : v; } catch (e) { return null; }})(),
     /* 明细图表 details 的展开状态跨重渲染保留：用户收起后就不再自动展开 */
     CUM_SUB_OPEN = false,
+    /* 本次确认弹窗里是否包含「建议保留 / 未识别」项：决定请求是否带
+       allow_non_cleanable（后端据此放行用户显式勾选的个人数据目录）。
+       以前挂在 window 上绕开顶层作用域，容易和全局同名属性撞车。 */
+    hasNonCleanSel = false,
     scope = "all", toastTimer = null;
 // 占用排行行内勾选的「按路径清理」集合：行没有对应清理目标（target_id）
 // 时走这里，清理请求带 paths 由服务端逐条重新识别校验。
@@ -2395,7 +2398,7 @@ function confirmDialog() {
   const trashable = rows.some(r => r.risk === "高" && !r.id.startsWith("recycle-bin"));
   const admin = rows.filter(r => r.admin);
   const nonClean = rows.filter(r => r.nonClean);
-  window._hasNonCleanSel = nonClean.length > 0;
+  hasNonCleanSel = nonClean.length > 0;
   const riskyNote = r => r.id.startsWith("recycle-bin")
     ? t("cc.trashNote","清空后无法恢复") : t("cc.diagNote","删除后历史诊断线索丢失");
 
@@ -2548,7 +2551,7 @@ async function doClean() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids: [...selected], paths: [...selPaths],
                              only_paths: only,
-                             allow_non_cleanable: !!window._hasNonCleanSel,
+                             allow_non_cleanable: !!hasNonCleanSel,
                              drive, custom_path: customPath,
                              trash: !!(trashBox && trashBox.checked) })
     });
@@ -3931,7 +3934,10 @@ function showDetail(it) {
     const ovT = STATE?.targets?.find(t => t.id === it.target_id)
       || (it.target_id && it.path
         ? { id: it.target_id, base_id: "auto",
-            ovkey: it.path.replace(/[\\/]+$/, "").toLowerCase(),
+            // 必须走 normKey：这里原来只做了「去尾分隔符 + 小写」，
+            // 没有把 / 统一成 \，于是 "C:/Users/x" 存进去的键与后端
+            // _override_key 的口径不一致，保存后详情里读不到自己的释义。
+            ovkey: normKey(it.path),
             label: it.display_name || it.name,
             what: it.title || "" }
         : null);
