@@ -788,7 +788,8 @@
           <button class="tiny" data-aipreset="http://127.0.0.1:11434/v1">Ollama（本机）</button>
         </div>
         <div class="field"><label style="width:64px" data-i18n="ai.key">密钥</label>
-          <input type="password" id="aiKey" placeholder="sk-..." autocomplete="new-password"></div>
+          <input type="password" id="aiKey" placeholder="sk-..." autocomplete="new-password" style="flex:1">
+          <button id="btnAiClearKey" class="tiny" style="flex:none" data-i18n="ai.clearKey">清除密钥</button></div>
         <div class="field"><label style="width:64px" data-i18n="ai.model">模型</label>
           <input type="text" id="aiModel" list="aiModelList" placeholder="例如 deepseek-chat" style="flex:1">
           <datalist id="aiModelList"></datalist>
@@ -1328,6 +1329,29 @@ async function aiFetchModels() {
   }
 }
 $("btnAiModels").addEventListener("click", aiFetchModels);
+$("btnAiClearKey")?.addEventListener("click", aiClearKey);
+
+// 清空已保存的密钥：空字符串在保存语义里等于「不改」，所以必须走独立开关
+async function aiClearKey() {
+  const btn = $("btnAiClearKey"), old = btn.textContent;
+  btn.disabled = true;
+  const out = $("aiOut");
+  try {
+    const r = await apiJSON(`${API}/__oc__/ai/config`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clear_api_key: true }),
+    });
+    if (r.ai) { STATE.ai = r.ai; renderAI(); }
+    const k = $("aiKey"); if (k) k.value = "";
+    if (out) out.innerHTML = r.ok
+      ? `<span class="res-ok">${t("ai.keyCleared","密钥已清除")}</span>`
+      : `<span class="res-err">${t("ai.saveFail","保存失败")}</span>`;
+  } catch (e) {
+    if (out) out.innerHTML = `<span class="res-err">${esc(String(e))}</span>`;
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+}
 
 async function aiSave() {
   const msg = $("packMsg");
@@ -4971,6 +4995,7 @@ const I18N_EN = {
   "ai.noKey": "No key yet. Only the endpoint you enter yourself will ever receive it.",
   "ai.saved": "Saved", "ai.saveFail": "Save failed", "ai.requesting2": "Requesting…",
   "ai.fetchModels": "Fetch list", "ai.fetching": "Fetching…",
+  "ai.clearKey": "Clear key", "ai.keyCleared": "Key cleared",
   "ai.modelsGot": "Found {n} models — click the model input to pick one from the suggestions",
   "ai.guideTitle": "How to connect? — setup guide",
   "ai.guide1": "Get an OpenAI-compatible endpoint: for DeepSeek, register at platform.deepseek.com and create an API key; local Ollama needs no key.",

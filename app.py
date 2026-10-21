@@ -6932,8 +6932,13 @@ class Handler(BaseHTTPRequestHandler):
         # ---- 接入自有 AI（密钥只在服务端使用，不回传）----
         if route == "/__oc__/ai/config":
             patch = {k: v for k, v in (body or {}).items() if k in _AI_DEFAULTS}
-            # 前端回传空密钥表示「不改」，避免每次保存都把已存的密钥抹掉
-            if not str(patch.get("api_key") or "").strip():
+            # 前端回传空密钥表示「不改」，避免每次保存都把已存的密钥抹掉。
+            # 但这样一来界面上就永远清不掉 Key（用户想换供应商、或想彻底
+            # 删除留存的密钥时做不到）。所以另开一个显式开关：只有明确传了
+            # clear_api_key=True 才清空，空字符串仍然等于「不改」。
+            if body.get("clear_api_key"):
+                patch["api_key"] = ""
+            elif not str(patch.get("api_key") or "").strip():
                 patch.pop("api_key", None)
             save_ai_config(patch)
             return self._json({"ok": True, "ai": ai_public_config()})
