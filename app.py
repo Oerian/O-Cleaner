@@ -136,6 +136,31 @@ PROTECTED_AT_DRIVE_ROOT = {"windows", "program files", "program files (x86)",
 ALLOWED_CONTAINER_NAMES = {"temp", "tmp", "cache", "caches", ".cache",
                            "logs", "log", "crashdumps", "minidump", "prefetch"}
 
+
+def _long_path(p: str) -> str:
+    """把 8.3 短名（PROGRA~1）展开成长名，失败时原样返回。
+
+    Windows 每个目录都有一个 8.3 短名别名，短名和长名指向同一个目录。
+    护栏是按路径**分段名**比对的，短名 `PROGRA~1` 不会命中 `program files`
+    这条规则 —— 也就是说 `C:\\PROGRA~1\\xxx` 可以绕过整张名单。
+    这里用 GetLongPathNameW 把短名展开后再走同一套检查。
+    """
+    if not IS_WINDOWS or "~" not in p:
+        return p
+    try:
+        import ctypes
+        from ctypes import wintypes
+        get_long = ctypes.windll.kernel32.GetLongPathNameW
+        get_long.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        get_long.restype = wintypes.DWORD
+        buf = ctypes.create_unicode_buffer(32768)
+        n = get_long(p, buf, 32768)
+        if n and buf.value:
+            return buf.value
+    except Exception:
+        pass
+    return p
+
 CREATE_NO_WINDOW = 0x08000000
 IS_WINDOWS = os.name == "nt"
 
@@ -3410,6 +3435,9 @@ def check_deletable(path: str, kind: str = "tree",
     # 这类输入在归一化前必须卡死，否则它会伪装成一个合法目录通过后续全部检查。
     if not os.path.isabs(raw):
         return False, "拒绝：路径必须是绝对路径"
+    # 8.3 短名展开要在归一化之前做：C:\PROGRA~1\... 的段名是 PROGRA~1，
+    # 不展开就绕过了整张名单（Windows 每个目录都有这种短名别名）。
+    raw = _long_path(raw)
     norm = os.path.normpath(os.path.abspath(raw))
     low = norm.lower()
     if len(low) < 3 or low[1] != ":" or low[2] != "\\":
