@@ -129,8 +129,8 @@
 ### 4.3 误伤检查与门禁
 
 - 47 个清理目标逐个过护栏：首版域规则误拦 **14 项**（其中 8 项是产品核心缓存项），补 `ZONE_CACHE_EXEMPT` 后降到 **6 项**，且全是既有原因 —— **零新增误伤**。
-- `guard_matrix.py` 37 → **48 项** + 规则单元自检；缺陷注入三连（域失效/设备名清空/名单项丢失 → 均 rc=1，复原 → rc=0）。
-- 门禁终态：py_compile PASS / pyflakes 0 / lint_rules 0 错 0 警 / lint_selftest 44-0 / guard_matrix 48+单元 / 编码 RC=0 / CDP 85-0-5。
+- `guard_matrix.py` 37 → **49 项** + 规则单元自检；缺陷注入三连（域失效/设备名清空/名单项丢失 → 均 rc=1，复原 → rc=0）。
+- 门禁终态：py_compile PASS / pyflakes 0 / lint_rules 0 错 0 警 / lint_selftest 44-0 / guard_matrix 49+单元 / 编码 RC=0 / CDP 85-0-5。
 
 ### 4.4 遗留（明确不在这版修）
 
