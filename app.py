@@ -118,15 +118,12 @@ PROTECTED_DIR_NAMES = {
     "programdata", "recovery", "system volume information", "$recycle.bin",
     "users", "default", "public", "appdata", "boot", "perflogs", "msocache",
     "onedrive", "documents and settings",
-    # 用户自己的数据目录（2026-10-21 对抗测试发现漏保护）。
-    # 这些目录里是照片、账本、论文、工作文档 —— 删掉不会自动重建，
-    # 更不该被清理工具"顺手"建议删除。原先它们既不在保护名单里，也不像
-    # 「已安装程序」，于是整条护栏放行：实测 C:\Users\<name>\Documents 里的
-    # 3 个文件被 clean_target 真实删除（freed=14336, deleted=3）。
-    # 中文系统显示为「文档 / 桌面 / 下载」，但磁盘上的真实目录名仍是英文
-    # （本地化只是 desktop.ini 重定向），所以按英文名保护。
-    # 只收真正的用户数据目录；templates / cookies / recent 这类通用名
-    # 会误伤程序自己的子目录（如 node_modules\templates），故意不收。
+}
+# 用户自己的数据目录（2026-10-21）：这些目录默认不清理、不进推荐、不进预设，
+# 但**用户可以自己选**（显式勾选 → allow_user_data=True）——「不做删，做成可选」。
+# 与上面的系统目录区别在于：系统目录即便用户勾选也绝不删（删了系统就坏了），
+# 而这几个是用户自己的东西，要不要清由用户自己决定，工具只负责不替他做决定。
+USER_DATA_DIR_NAMES = {
     "documents", "desktop", "downloads", "pictures", "videos", "music",
     "favorites", "links", "contacts", "searches", "saved games",
     "my documents", "my pictures", "my music", "my videos", "3d objects",
@@ -3386,11 +3383,21 @@ def game_install_dirs() -> tuple[dict, set]:
 #  安全校验与删除
 # ======================================================================
 
-def check_deletable(path: str, kind: str = "tree") -> tuple[bool, str]:
+def check_deletable(path: str, kind: str = "tree",
+                    allow_user_data: bool = False) -> tuple[bool, str]:
     """判断某个清理目标是否允许操作。返回 (是否允许, 拒绝原因)。
 
     注意：kind="files" 时 path 是**要扫描的目录**（不是要删的文件），
     真正的删除对象是它内部匹配 glob 的文件，所以同样按目录校验。
+
+    allow_user_data：**仅在用户显式勾选了该目标时为 True**。
+    它只放宽「用户自己的数据目录」（文档 / 桌面 / 下载 / 图片…）这一类，
+    系统目录（Windows / Program Files / System32…）、工具自身、盘根、
+    junction 穿透这些硬保护一律不受它影响 —— 那些删了系统就坏了，
+    不该由用户的一次误点决定。
+
+    默认 False。预设、自动发现、定时清理、规则清理**永远**用默认值，
+    所以「不做删」这一侧由代码结构保证，而不是靠调用方自觉。
     """
     # 空路径必须显式拒绝：os.path.abspath("") 会返回**当前工作目录**，
     # 于是空串会伪装成一个合法目录并通过后续检查（对抗性审查发现的漏点）。
@@ -3444,17 +3451,28 @@ def check_deletable(path: str, kind: str = "tree") -> tuple[bool, str]:
     if leaf in PROTECTED_DIR_NAMES and leaf not in ALLOWED_CONTAINER_NAMES:
         return False, f"拒绝：{parts[-1]} 属于受保护的目录"
 
-    # 位置保护（2026-10-21）：C:\Users\<用户名>\ 的直接子目录一律不许整体删除。
+    # 用户数据目录（2026-10-21）：默认拒绝，用户显式勾选时放行。
+    # 「不做删，做成可选」—— 工具不主动推荐、不进预设、不进定时清理，
+    # 但只要用户在界面上明确选了它，就按用户的意愿执行。
+    if leaf in USER_DATA_DIR_NAMES and leaf not in ALLOWED_CONTAINER_NAMES:
+        if allow_user_data:
+            return True, "用户已明确选择：个人数据目录"
+        return False, (f"拒绝：{parts[-1]} 属于个人数据目录，默认不清理"
+                       "（可在界面上显式勾选后清理）")
+
+    # 位置保护（2026-10-21）：C:\Users\<用户名>\ 的直接子目录默认不许整体删除。
     # 光靠上面的名字名单挡不干净 —— 中文系统的「文档 / 桌面 / 下载」在磁盘上
     # 可能被 OneDrive 重定向成中文目录名，用户也可能自建「工作资料」之类的
-    # 一级目录，名单永远列不全。按**位置**保护才是兜底：一个用户 Home 下的
-    # 一级目录 = 这个人的全部个人数据，不属于任何清理工具该碰的范围。
+    # 一级目录，名单永远列不全。按**位置**兜底：一个用户 Home 下的一级目录
+    # 基本都是这个人的个人数据。同样遵循「默认拦、显式可选」。
     # 只放行明确的缓存/临时容器，它们删掉会自动重建。
     if len(parts) == 3 and parts[0].lower() == "users" \
             and leaf not in ALLOWED_CONTAINER_NAMES \
             and leaf not in {"appdata", "local settings"}:
+        if allow_user_data:
+            return True, "用户已明确选择：个人数据目录"
         return False, (f"拒绝：{parts[1]}\\{parts[2]} 是用户 Home 下的一级目录，"
-                       f"属于个人数据，不允许整体删除")
+                       f"属于个人数据，默认不清理（可在界面上显式勾选后清理）")
 
     # P0-3（外部审计 2026-10-13）：末级目录名是 cache/temp/logs 这类通用容器
     # **不代表**它是系统缓存 —— 许多程序把 cache/temp 放在安装目录里
@@ -3502,7 +3520,10 @@ def check_deletable(path: str, kind: str = "tree") -> tuple[bool, str]:
     except OSError:
         real = norm
     if os.path.normpath(real).lower() != low:
-        return check_deletable(real, kind)
+        # allow_user_data 要透传，否则「用户显式选了一个普通目录、但它是
+        # 指向自己 Documents 的符号链接」会被重新判死；
+        # 反过来 junction 指向 C:\Windows 时，递归后仍然命中系统目录规则。
+        return check_deletable(real, kind, allow_user_data)
 
     # 不可读时不在这里判定拒绝，交由上层报「需要管理员权限」，
     # 这样 C:\\Windows\\Temp 能给出可读提示而不是硬性拒绝
@@ -4014,8 +4035,13 @@ def _purge_recycle_bin(letter: str) -> dict:
 
 
 def clean_target(t: dict, only_paths: list | None = None,
-                 drive: str | None = None, trash: bool = False) -> dict:
+                 drive: str | None = None, trash: bool = False,
+                 allow_user_data: bool = False) -> dict:
     """删除一个目标的文件。only_paths 非空时只删这些子项。
+
+    allow_user_data：用户显式勾选了「个人数据目录」类目标时为 True，
+    透传给 check_deletable。默认 False —— 定时清理、规则清理、预设清理
+    都不会传它，所以这些路径只可能由用户在界面上亲手选中。
 
     trash=True 时把**风险为「高」**的项改删进回收站（可恢复）。三个要点：
       * 回收站删除不释放空间（同卷只是改名），所以这类项 freed 如实报 0，
@@ -4050,10 +4076,14 @@ def clean_target(t: dict, only_paths: list | None = None,
                    else False if rb_txt.startswith("不重建") else None),
     }
 
-    ok, why = check_deletable(path, kind)
+    ok, why = check_deletable(path, kind, allow_user_data)
     if not ok:
         result["error"] = why
         return result
+    if allow_user_data and why:
+        # 用户自选的个人数据目录：结果里如实带上标记，历史记录也能看出来
+        result["user_data_optin"] = True
+        result["note"] = why
 
     if kind == "recyclebin":
         # 统计在普通权限下可能被拒（读其他 SID 的回收站内容需要管理员），
@@ -6109,6 +6139,11 @@ class Handler(BaseHTTPRequestHandler):
             # 用户明确勾选了「建议保留 / 未识别」行时由前端置位（见下方 paths 段）；
             # 两个通道共用这一个开关。
             allow_nc = bool(body.get("allow_non_cleanable"))
+            # 「个人数据目录」默认不清理，但用户显式勾选后可选（2026-10-21）。
+            # 前端在确认弹窗里勾了「包含建议保留/未识别项」，就等价于用户
+            # 亲手选了这些目录；另留一个独立开关，便于前端以后把这类目标
+            # 单独做二次确认而不必连带放宽其它非可清理项。
+            allow_user_data = allow_nc or bool(body.get("allow_user_data"))
             # 有效 cleanable=False 的目标（用户改成「建议保留」）默认拒绝清理，
             # 与旧版卡片勾选框禁用的行为对齐 —— 这条护栏原来只在前端。
             # 2026-10-13 起：allow_non_cleanable=True 时放行（用户在确认弹窗里
@@ -6141,6 +6176,13 @@ class Handler(BaseHTTPRequestHandler):
                     skipped_paths.append(
                         {"path": p2, "reason": "服务端识别为不可清理，拒绝"})
                     continue
+                # 个人数据目录要在结果里如实标注，历史记录与回执都能看出
+                # 「这是用户亲手选的」，而不是工具推荐的。
+                _probe_ok, _probe_why = check_deletable(
+                    p2, "tree", allow_user_data)
+                if not _probe_ok:
+                    skipped_paths.append({"path": p2, "reason": _probe_why})
+                    continue
                 selected.append({
                     "id": f"tree:{p2.lower()}",
                     "label": os.path.basename(p2.rstrip("\\")) or p2,
@@ -6171,7 +6213,8 @@ class Handler(BaseHTTPRequestHandler):
                          "targets": len(selected)}
                 for t in selected:
                     try:
-                        r = clean_target(t, only.get(t["id"]), drive, trash=trash)
+                        r = clean_target(t, only.get(t["id"]), drive, trash=trash,
+                                         allow_user_data=allow_user_data)
                     except Exception as exc:  # noqa: BLE001
                         traceback.print_exc()
                         r = _error_result(t, drive, exc)
