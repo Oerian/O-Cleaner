@@ -167,6 +167,12 @@ def build_cases():
 
         # ---------- E. 8.3 短名不得绕过 ----------
         ("E 8.3 短名", j("C:", "PROGRA~1"), False, False, "PROGRA~1（应展开为 Program Files）"),
+
+        # ---------- F. 盘根仍不删 ----------
+        # 盘根只允许「按 *.ext 清零散文件」这一条窄口，且窄口写在 clean_target
+        # 里、不在 check_deletable 里 —— 后者不知道 glob，让它开口就等于
+        # 允许任何调用方用 `*` 清盘根。kind="files" 的情形见规则单元自检。
+        ("F 盘根不删", "C:" + B, False, False, "盘根"),
     ]
     # 缓存容器不继承域保护（条件用例：本机能建出 %LOCALAPPDATA%\Temp 子目录才测）
     if tmp_in_temp:
@@ -224,6 +230,23 @@ def unit_failures() -> list:
                  "system32", "program files", "users", "$recycle.bin"):
         if name not in app.PROTECTED_DIR_NAMES:
             bad.append(f"PROTECTED_DIR_NAMES 缺失 {name!r}")
+
+    # 盘根窄口（v2.9）：「按 *.ext 清零散文件」只允许一类扩展名，
+    # 且 check_deletable 这个硬闸本身永远不认盘根 —— 无论 kind 是什么。
+    for g in ("*.part", "*.crdownload", "*.download"):
+        if not app.drive_root_glob_ok(g):
+            bad.append(f"drive_root_glob_ok({g!r}) 应为 True")
+    for g in ("*", "*.*", "**", "*.part*", ".part", "*.*.part", ""):
+        if app.drive_root_glob_ok(g):
+            bad.append(f"drive_root_glob_ok({g!r}) 应为 False")
+    if not app._is_drive_root_path("C:" + B):
+        bad.append("_is_drive_root_path('C:\\\\') 应为 True")
+    if app._is_drive_root_path("C:"):
+        bad.append("_is_drive_root_path('C:') 应为 False（盘符相对不是盘根）")
+    for kind in ("tree", "files"):
+        ok, why = app.check_deletable("C:" + B, kind)
+        if ok:
+            bad.append(f"check_deletable('C:\\\\', {kind!r}) 竟放行（盘根硬闸被绕过）")
     return bad
 
 

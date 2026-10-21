@@ -406,7 +406,7 @@
     {
       "id": "drive-part-files",
       "label": "%DRIVE_LETTER% 盘未完成下载分片",
-      "path": "%DRIVE%",
+      "path": "%DRIVE%\\",
       "category": "临时文件",
       "risk": "低",
       "needs_admin": false,

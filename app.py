@@ -2530,18 +2530,22 @@ def _looks_like_browser_profile(path: str) -> bool:
     """
     if not os.path.isdir(path):
         return False
-    # 强特征：只有浏览器资料目录才有的结构
-    strong = {"user data", "local storage", "indexeddb", "session storage",
-              "service worker", "extensions", "web data", "bookmarks",
-              "preferences", "login data", "history"}
-    # 弱特征：通用缓存目录名，必须与强特征同时出现才算数
+    # 核心特征：只有浏览器资料目录才会有的结构
+    core = {"user data", "local storage", "indexeddb", "session storage",
+            "web data", "login data"}
+    # 辅助特征：浏览器确实有，但**别的软件也常用**，所以单个不算数。
+    # 实测反例：`E:\Chrome` 其实是个 AI 工具合集，里面 `sd-webui\extensions`
+    # 命中了 extensions 就被判成浏览器资料目录；开发项目里有 history /
+    # preferences 也很常见。因此辅助特征必须凑够两个才作数。
+    aux = {"service worker", "extensions", "bookmarks", "preferences", "history"}
+    # 弱特征：通用缓存目录名，必须与上面的证据同时出现才算数
     weak = {"cache", "code cache", "gpucache", "shadercache", "blob_storage",
             "default", "profile", "profiles"}
     try:
         names = {e.name.lower() for e in os.scandir(path)}
     except OSError:
         return False
-    if names & strong:
+    if _browser_evidence(names, core, aux):
         return True
     # 「Default」目录本身也是一层强特征（Chrome/Edge 的多用户结构），
     # 但要求它旁边还有 Profile/User Data 之类，避免同样是通用名的误判
@@ -2555,11 +2559,22 @@ def _looks_like_browser_profile(path: str) -> bool:
             if not os.path.isdir(sp):
                 continue
             sub_names = {e.name.lower() for e in os.scandir(sp)}
-            if sub_names & strong:
+            if _browser_evidence(sub_names, core, aux):
                 return True
         except OSError:
             continue
     return False
+
+
+def _browser_evidence(names: set, core: set, aux: set) -> bool:
+    """一组目录名是否构成「这是浏览器资料目录」的证据。
+
+    单个核心特征就够（Local Storage / IndexedDB 基本只在浏览器里出现）；
+    辅助特征要凑够两个 —— 单独一个 extensions 或 history 到处都是。
+    """
+    if names & core:
+        return True
+    return len(names & aux) >= 2
 
 
 def _identify_builtin(name: str, path: str, kind: str) -> dict:
@@ -2776,6 +2791,31 @@ ZONE_CACHE_EXEMPT = ALLOWED_CONTAINER_NAMES | BROWSER_CACHE_DIRS | {
     "inetcache", "dxcache", "glcache", "d3dscache", "explorer",
     "deliveryoptimization", "wer", "tempstate", "webcache",
 }
+
+# 盘根按 glob 清零散文件（v2.9）：这是「盘根一律不许删」的唯一例外。
+# 「%DRIVE% 盘未完成下载分片」这类目标只删盘根**顶层**匹配 *.part 的文件，
+# 不递归、不删目录、不动子项 —— 但它此前被「必须是绝对路径」直接拦死
+# （`%DRIVE%` 展开成 `C:` 是盘符相对路径），功能一直是坏的。
+# 开口的条件必须窄到「只能清一类扩展名」，所以：
+#   * 只接受 `*.ext` 形式（单个点 + 扩展名），拒绝 `*`、`*.*`、`**`、`*.part*`；
+#   * 只对 `kind="files"` 生效（删除循环天然只处理顶层匹配文件，不递归）
+#   * 只对「路径就是盘根」生效，任何子目录仍走 check_deletable 的常规保护链。
+_DRIVE_ROOT_GLOB_RE = re.compile(r"^\*\.[A-Za-z0-9][A-Za-z0-9_.\-]{0,15}$")
+
+
+def drive_root_glob_ok(glob: str) -> bool:
+    """盘根清文件时，glob 是否窄到只剩一类扩展名（`*.part` 这种）。"""
+    return bool(_DRIVE_ROOT_GLOB_RE.match(str(glob or "").strip()))
+
+
+def _is_drive_root_path(path: str) -> bool:
+    """path 是否正好是某个盘的根（`C:\\`），不是盘符相对路径 `C:`。
+
+    刻意不走 abspath：`abspath("C:")` 返回的是「C 盘上的当前工作目录」，
+    与盘根无关，拿它判断会把不是盘根的路径误认成盘根。
+    """
+    return bool(re.fullmatch(r"[A-Za-z]:[\\/]", str(path or "").strip()))
+
 
 def _looks_like_game_install(path: str) -> bool:
     """判断目录是否是一个游戏本体（而非缓存）。
@@ -4424,8 +4464,18 @@ def clean_target(t: dict, only_paths: list | None = None,
 
     ok, why = check_deletable(path, kind, allow_user_data)
     if not ok:
-        result["error"] = why
-        return result
+        # 盘根清零散文件（v2.9）：唯一一个绕过「盘根一律不删」的入口，条件写死
+        # 在这里而不是散到 check_deletable —— 后者不知道 glob，一旦让它开口，
+        # 任何调用方（含第三方资源包）都能用 `*` 清盘根。
+        # 这里的三重收窄：只对 kind="files"（删除循环只处理顶层匹配文件、不递归
+        # 不删目录）、路径必须正好是盘根、glob 必须窄到 `*.ext`。
+        if (kind == "files" and _is_drive_root_path(path)
+                and drive_root_glob_ok(t.get("glob"))):
+            ok, why = True, f"盘根顶层按 {t.get('glob')} 清零散文件"
+            result["drive_root_files"] = True
+        else:
+            result["error"] = why
+            return result
     if allow_user_data and why:
         # 用户自选的个人数据目录：结果里如实带上标记，历史记录也能看出来
         result["user_data_optin"] = True

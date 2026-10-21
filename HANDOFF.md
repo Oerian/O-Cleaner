@@ -1361,12 +1361,14 @@ ode_modules` 这类正常清理项误拦 → 改为「路径中任一段是缓�
   - **快速模式（2 层浅扫）**：WizTree 加速后全盘已到 14–90 秒，浅扫主要惠及「无 WizTree + 慢机器」场景，成本较低，可做成 scope 选项。**（2026-10-13 已实现，见 §25：档位下拉 + depth=2，语义边界是「少下探」而非秒级速览。）**
 - 仍然有效的约束：不引入安装型依赖（playwright / pip / npm 包）。CDP 测试使用系统自带 Edge + Node 原生 WebSocket 是刻意设计，不要替换为 Puppeteer/Playwright。
 
-### 10. 「盘未完成下载分片」目标当前不可用（v2.8 已知，未修）
+### 10. ~~「盘未完成下载分片」目标当前不可用~~（v2.9 已修）
 
-- 现状：`config/targets.json` 里的 `drive-part-files`（path = `%DRIVE%`，kind=`files`，glob=`*.part`）在服务端会被 `check_deletable` 拒绝 —— `expand("%DRIVE%")` 得到的是 `"C:"`（盘符相对路径），归一化前就被 `not os.path.isabs()` 拦下。结果：勾选它会得到一条错误，什么都不会删（安全，但功能不可用）。
-- 为什么不顺手修：要让它在盘根顶层按 glob 删文件，就得为「盘根 + kind=files」开一个豁免口。而 `check_deletable` 看不到 glob（`"*.part"` 还是 `"*"`），一旦开口，第三方资源包就能定义 `path=%DRIVE%, glob=*` 把盘根文件扫一遍 —— 这与本版「护栏升级」的方向相反。
-- 正确的修法（留给下一轮）：把 glob 一并传进 `check_deletable`（或给 `clean_target` 加一层「盘根只允许白名单扩展名 glob」的校验），再开门；同时补 `A 组` 断言（盘根 + kind=tree 必拒 / 盘根 + glob=* 必拒 / 盘根 + `*.part` 放行）。
-- 影响面：仅此一个内置目标，不影响其余 46 项与全部缓存类清理。
+- 原状：`config/targets.json` 里的 `drive-part-files`（path = `%DRIVE%`，kind=`files`，glob=`*.part`）被 `check_deletable` 拒绝 —— `expand("%DRIVE%")` 得到 `"C:"`（盘符相对路径），归一化前就被 `not os.path.isabs()` 拦下。
+- 修法（两道一起改）：
+  1. 目标 path 改成 `%DRIVE%\`，展开后是 `C:\`（真正的盘根，`scandir` 语义也明确，不再依赖 per-drive CWD）；
+  2. **窄口开在 `clean_target` 里，不开在 `check_deletable` 里** —— 后者看不到 glob，一旦让它认盘根，任何调用方（含第三方资源包）都能用 `*` 清盘根。`clean_target` 的放行条件是三重收窄：`kind="files"`（删除循环只处理顶层匹配文件，不递归、不删目录）+ 路径正好是盘根 + `drive_root_glob_ok(glob)`（只接受 `*.ext`，拒绝 `*` / `*.*` / `**` / `*.part*`）。
+- 门禁：`guard_matrix` 新增 F 组（盘根仍拒）+ 规则单元自检（`drive_root_glob_ok` 正反例、`_is_drive_root_path`、`check_deletable("C:\\", "tree"/"files")` 都必须拒绝）。缺陷注入：把 `drive_root_glob_ok` 改成恒真 → rc=1（已验证）。
+- 端到端：E 盘根放一个 `.part` + 一个 `.txt`，清理后 `.part` 被删、`.txt` 保留；glob 换成 `*` 时仍拒绝。
 
 ---
 
