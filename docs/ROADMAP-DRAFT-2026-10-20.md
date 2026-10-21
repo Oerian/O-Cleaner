@@ -108,6 +108,34 @@
 2. **本地 AI 密钥被清空**。`POST /ai/config {"clear_api_key": true}` 打的是真实 `config/ai.json`（被 gitignore，无备份），密钥不可恢复。
    → 纪律：**写配置类接口的测试必须在隔离数据目录的子进程里跑。**
 
+## 一·四、第四轮（2026-10-21）：护栏升级，随 v2.8 发布
+
+用户指令「升级护栏，然后进行一次版本推送」。做法是先用探查脚本问 `check_deletable` 要答案，按**真实漏判**决定改什么。
+
+### 4.1 核心结论：上一轮的「默认不删」只保住了树根
+
+名字规则保护 `Documents` 自己，位置规则只管 `Users\<u>\` 一级 —— 而用户在占用排行里下钻之后勾选的是 `Documents\Adobe` 这一层。第三轮的事故路径（`Documents\Adobe` 被改名暂存）**升级前仍然默认可删**。同理敞开的还有：`AppData\Roaming` / `AppData\Local` / `AppData\LocalLow` / `AppData\Local\Packages` / `ProgramData\Microsoft` / `ProgramData\Package Cache` / `Program Files\Common Files` / `Program Files\WindowsApps`。
+
+### 4.2 改法
+
+| 改动 | 内容 |
+|---|---|
+| 受保护域 + 子树继承 | `_guarded_zone()`：四棵子树（`Users\<u>\*`、`AppData\<L>\*`、`ProgramData\*`、`Program Files[ (x86)]\*`）的整目录删除默认拒绝，需显式勾选 |
+| 缓存豁免 | `ZONE_CACHE_EXEMPT`：Temp/Cache/Logs/Code Cache/GPUCache/INetCache/DXCache/D3DSCache/Explorer/WER… 不锁 |
+| 显式选择强制回收站 | `allow_user_data=True` 的目标 `trash` 强改为真，不可关闭 |
+| 名单补强 | `Common Files`、`WindowsApps` 进「绝不删」 |
+| 保留设备名 | `CON`/`PRN`/`AUX`/`NUL`/`COM1-9`/`LPT1-9` 拒绝 |
+
+### 4.3 误伤检查与门禁
+
+- 47 个清理目标逐个过护栏：首版域规则误拦 **14 项**（其中 8 项是产品核心缓存项），补 `ZONE_CACHE_EXEMPT` 后降到 **6 项**，且全是既有原因 —— **零新增误伤**。
+- `guard_matrix.py` 37 → **48 项** + 规则单元自检；缺陷注入三连（域失效/设备名清空/名单项丢失 → 均 rc=1，复原 → rc=0）。
+- 门禁终态：py_compile PASS / pyflakes 0 / lint_rules 0 错 0 警 / lint_selftest 44-0 / guard_matrix 48+单元 / 编码 RC=0 / CDP 85-0-5。
+
+### 4.4 遗留（明确不在这版修）
+
+`drive-part-files` 目标因 `path=%DRIVE%` 展开成 `C:` 被「必须是绝对路径」拦下，功能不可用（安全但无效）。修它要给「盘根 + kind=files」开口，而 `check_deletable` 看不到 glob，开口后第三方资源包可用 `glob=*` 扫盘根 —— 与本轮方向相反，留到下一轮，修法见 HANDOFF §八-10。
+
 ## 二、优化方向（三项以内，不扩功能）
 
 1. **架构**：`app.py`（318KB）下一步只抽两块低耦合段——「资源包加载与合并」「Steam/Epic/GOG 解析」，`identify` / `check_deletable` / `run_ps` 不动（踩坑史函数，动前必读 HANDOFF §五）。
@@ -116,12 +144,12 @@
 
 ## 三、路线图
 
-- **短期（下次版本动作，既定）**：
-  1. 推送本地提交（`git log origin/main..HEAD` 实测 **42 个**：既定待推 + 第一轮 4 + 第二轮 10 + **第三轮 11** + 报告 1）至 `main`，手动触发全量 CI，**比对 CI 绿 + 通过数无缩水**；
-  2. 重建发布包并核验包内文件与源码 sha256 一致，GitHub Releases 发版；
-  3. HANDOFF §四路由表修 4 处（bigfiles 方法、custom-rules 读取方式、补录 ai/models 与 app/update_check）；本文三份报告随版入库；
-  4. **发版说明必须写明两件事**：① 旧版存在「个人数据目录可能被建议清理」的严重问题，必须升级；② 新版对个人数据目录的口径是「**默认不清理、需用户显式勾选**」，不是「已经支持清理个人目录」——避免用户误解为放开了保护。
-- **中期（下下版，≤3 项）**：`tools/guard_matrix.py` 已并入本机门禁（`20317fa`），下一步是**把它也接进 CI**（本机 `selfcheck.ps1` 已跑，CI 侧尚未调用）；再评估「无 WizTree 回退路径 60 秒目录缓存」；`/subdirs` 语义已修完，仅剩缓存优化。
+- **短期（v2.8，已完成 2026-10-21）**：
+  1. ~~推送本地提交至 `main`~~ 已完成 —— 一次性推送 45 个提交（既定待推 + 三轮修复 + 第四轮护栏升级 + 报告），打 tag `v2.8`；
+  2. ~~重建发布包并核验包内文件与源码 sha256 一致，GitHub Releases 发版~~ 已完成（`tools/make_package.py` 自身做条目级 sha256 自校验）；
+  3. ~~HANDOFF 更新~~ 已完成：新增 §38（v2.8 变更）、§三-1.5（受保护域）、§八-10（`drive-part-files` 遗留）；路由表 4 处修正仍未做，随下版；
+  4. **发版说明已写明两件事**：① 旧版存在「个人数据目录可能被建议清理」的严重问题，必须升级；② 新版对个人数据目录的口径是「**默认不清理、需用户显式勾选**」，不是「已经支持清理个人目录」。
+- **中期（v2.9，≤3 项）**：① 把 `tools/guard_matrix.py` 接进 CI（本机 `selfcheck.ps1` 已跑，CI 侧尚未调用）；② 修 `drive-part-files`（需要给 `check_deletable` 传 glob，见 HANDOFF §八-10）；③ 评估「无 WizTree 回退路径 60 秒目录缓存」。
 - **长期（与「收敛维护」对齐）**：知识库/资源包内容随软件变动小步更新（游戏中文名、Windows 目录变化）；`tools/doctor.py` 作为新机部署第一站；不做大版本。
 
 ## 四、明确「不建议做」清单

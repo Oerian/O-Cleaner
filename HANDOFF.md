@@ -1,6 +1,6 @@
 # O-Cleaner 完整交接文档与需求规格书
 
-> **文档版本**：v2.8（本文最后更新 2026-10-20；对应应用版本 v2.7，HEAD = `7f73219`）
+> **文档版本**：v2.9（本文最后更新 2026-10-21；对应应用版本 v2.8）
 > **项目定位**：Windows 原生、本地零第三方依赖的磁盘清理与空间占用查看工具。
 > **代码仓库**：`github.com/Oerian/O-Cleaner`（公开），`main` 分支，CI 已接入（快慢两级）。
 > **分发包**：由 `tools/make_package.py` 生成（内存打包，无暂存目录；版本号 import 自 `app.APP_VERSION`），输出到 `dist\O-Cleaner-<版本>.zip`；免安装版由 `tools/make_exe.py` 生成。
@@ -16,11 +16,11 @@
   node tools/cdp_check.js http://127.0.0.1:<PORT>   # 需先启动 app.py，必须显式传 URL
   python -m pyflakes app.py tools/*.py      # Python 改动的前置检查（py_compile 抓不到死导入/未定义名）
   ```
-- **当前状态快照**（2026-10-20，HEAD = `7f73219`，应用版本 v2.7）：
-  - 远端 `main`（= `050888b`）的每晚定时全量 CI 最近一次（run 39330308150，2026-10-19）**全绿**；本地领先远端 **14 个提交**（2026-10-17 起的清理活动图、自定义聚合组、NTFS 元文件归纳、i18n 补全、全库审计等），按「版本更新时才推送 + 跑 CI」的约定暂未推送——下次升版时一次性推送并手动触发全量 CI。
-  - 本机门禁终态（2026-10-20）：`lint_rules.py --strict` 0 错 0 警 / `_lint_selftest.py` 44/0 / `cdp_check.js` 85 通过 0 失败 5 跳过 / 编码契约全符；pyflakes 全库 0 告警（Python 改动的前置检查）。
-  - 分发产物：`dist/O-Cleaner-v2.7.zip`（便携版 33 文件）；v2.6 起发布走 **GitHub Releases**（tag + zip + 说明），发布前必须重建并核验包内文件与源码 sha256 一致。
-  - 剩余规划内任务：**无既定未完项**。i18n 英文界面已于 v2.4–v2.5 全量落地；下次升版时执行推送 + 门禁 + 重建发布包即可。
+- **当前状态快照**（2026-10-21，应用版本 v2.8，tag `v2.8`）：
+  - `main` 已推送并打 tag `v2.8`，含 2026-10-17 起的两轮审计与三轮修复（清理活动图、自定义聚合组、NTFS 元文件、两轮对抗审计、个人数据目录可选化、护栏升级）。
+  - 本机门禁终态（2026-10-21）：`py_compile` PASS / pyflakes 0 / `lint_rules.py --strict` 0 错 0 警 / `_lint_selftest.py` 44/0 / **`guard_matrix.py` 48 项 + 规则单元自检** / 编码契约全符 / `cdp_check.js` 85 通过 0 失败 5 跳过。
+  - 分发产物：`dist/O-Cleaner-v2.8.zip`（便携版）；v2.6 起发布走 **GitHub Releases**（tag + zip + 说明），发布前必须重建并核验包内文件与源码 sha256 一致。
+  - 剩余规划内任务：**无既定未完项**。已知遗留见第八节（含「盘未完成下载分片」目标的既有缺陷）。
 - **三条最容易踩的纪律**：
   1. 提交说明首行只写「这次改动做了什么」，不写评价性文字、不写 `[ci]`（详见第六节第 13 条）；
   2. 断言总数依环境浮动且持续增长，文档/CI/提交说明**一律不写死数字**，判定标准是「失败 0」；
@@ -146,6 +146,39 @@
 - 空路径与纯空白路径：`os.path.abspath("")` 会返回当前工作目录，因此必须在归一化前拒绝
 - 非绝对路径（`C:`、`..\Windows`、`/etc`、`temp` 等）：`abspath("E:")` 返回的是
   E 盘上的当前工作目录而非盘符根，同样必须在归一化前拒绝
+- Windows 保留设备名：`CON` / `PRN` / `AUX` / `NUL` / `COM1-9` / `LPT1-9`
+  （v2.8）：这类段名在 Win32 层是设备不是文件，删除操作会打到设备句柄
+- 共享组件与商店应用本体：`Common Files`、`WindowsApps`（v2.8）——
+  前者是多程序共用的运行时，后者是 UWP 应用安装目录，删掉即集体失效
+
+### 1.5 受保护域：保护按子树继承（v2.8 护栏升级）
+
+**为什么要有这一层**：上面第 1 条是「名字 + 位置」两条规则，保护的是**树根**。
+但用户在占用排行里下钻之后勾选的是 `Documents\Adobe` 这种**子目录**，
+名字规则不管（末级名是 Adobe），位置规则也不管（位置规则只覆盖
+`Users\<u>\` 的一级）。2026-10-21 的真实事故（`Documents\Adobe` 被改名暂存）
+走的就是这条缝。
+
+`_guarded_zone(parts)` 判定路径是否落在下面几棵子树，**域内整目录删除一律
+默认拒绝，必须 `allow_user_data=True`（用户显式勾选）才放行**：
+
+| 域 | 范围 |
+|---|---|
+| `user` | `Users\<u>\<一级目录>`（Documents/Desktop/Downloads… 以及用户自建目录） |
+| `appdata` | `Users\<u>\AppData\<Local\|LocalLow\|Roaming>` 及其后代 |
+| `programdata` | `ProgramData\<X>` 及其后代 |
+| `programfiles` | `Program Files[ (x86)]\<X>` 及其后代 |
+
+豁免 `ZONE_CACHE_EXEMPT`：末级（或直接父级）是已知缓存目录名的，不锁 ——
+`Temp` / `Cache` / `Logs` / `Code Cache` / `GPUCache` / `ShaderCache` /
+`INetCache` / `DXCache` / `D3DSCache` / `Explorer`（缩略图）/ `WER` 等，
+都是「删了自动重建」的派生数据。名单外的名字不要往里加，加之前先确认可重建。
+
+**配套：显式选择强制可恢复**（`clean_target`）。只要目标走了
+`allow_user_data=True` 这条路，`trash` 一律强改为真 —— 用户即便关掉了
+「高风险项进回收站」也绕不过去。理由是「可选」这一档的全部意义就是可后悔：
+一次误点的代价是整个目录不可恢复，而回收站的代价只是暂时不释放空间。
+结果里记 `user_data_optin: true`，历史与回执可追溯「这是用户自己勾的」。
 
 ### 2. 软件安装目录识别护栏（`_looks_like_installed_program`）
 
@@ -1211,6 +1244,22 @@ SECURITY 该处表述未动。
 - **功能级审计**（`a5ecab2`）：`fsGroupOp` 对 200-JSON-错误体补 throw（本项目 400 也回 200 + error 体，前端 helper 必须自查 `r.error`）；无 id 条目的回退 id 改稳定 md5；空路径组不再落到盘根。
 - **全库审计**（`dec6894` + `7f73219`）：pyflakes 全库扫描揪出**文档化功能自 v2.0 起就是坏的**——`discover_junk_folders` 引用的三个常量从未定义过，一执行即 NameError。已按保守口径重建（仅可重建内容，用户数据目录不入选）并 E2E 实测。其余：删 `import platform`、重复 `_wiz_ok`、selftest 未定义 `skip2`、死导入死变量、`scan()`/`loadState()` 过期响应守卫补对称（catch 分支此前照旧渲染旧盘数据）。**教训：文档化过的功能要有至少一条断言覆盖**；pyflakes 列为 Python 改动的前置检查（py_compile 抓不到死导入/未定义名）。
 
+### 38. v2.8：两轮对抗审计 + 个人数据目录可选化 + 护栏升级（2026-10-20 ~ 10-21）
+
+这一版的主线不是新功能，而是**把「删除护栏」当成一个需要被测量、被对抗测试的对象**。
+
+- **第一轮审计（10-20）**：4 个提交。回收站 `only_paths` 通道补本盘归属校验；`check_deletable` 解析 junction 真实路径并复检（`shutil.rmtree` 会穿过 junction 删真实目标）+ 仓库自身硬保护；`bigfiles`/`schedule` 非数字参数改 400。
+- **第二轮审计（10-21，换模型复核）**：10 个提交。挖到 **1 个 P0** —— `check_deletable` 放行 `Documents`/`Desktop`/`Downloads` 等，且 `clean_target` 真的把它们删了（隔离目录实证 `freed=14336, deleted=3`）。另有 2 个 P1：定时清理 `next_run` 不推进导致 2 分钟内连续 6 次真删；`_atomic_write` 固定临时名导致并发写配置 `WinError 5`。
+- **第三轮（10-21）：口径变更 + 已知问题清零**：11 个提交。用户口径「不做删，做成可选」——个人数据目录从硬拦截改为**默认不删、显式可选**（不进推荐/预设/全选，需用户主动勾选）。同轮新发现两个洞：**8.3 短名绕过**（`C:\PROGRA~1` 段名不命中任何名单，名字层+位置层双双失效）、**删除中断不还原**（改名到 `.oc-deleting-*` 后进程被杀则原目录名永久消失，已由 `pending-deletes.json` + 启动恢复修掉）。另修资源包 URL 导入的 SSRF。
+- **第四轮（10-21）：护栏升级**，也就是本版发布内容：
+  - **受保护域 + 子树继承**（`_guarded_zone`）：保护从「树根」扩到「整棵子树」。原护栏只管 `Documents` 本身，`Documents\Adobe` 默认放行 —— 那正是事故路径。现在 `Users\<u>\*`、`AppData\<Local|Roaming|LocalLow>\*`、`ProgramData\*`、`Program Files[ (x86)]\*` 四棵子树的整目录删除一律默认拒绝，缓存目录（`ZONE_CACHE_EXEMPT`）例外。
+  - **显式选择强制回收站**：`allow_user_data=True` 的目标，`trash` 强改为真，用户关掉「高风险项进回收站」也绕不过去。
+  - **名单补强**：`Common Files`、`WindowsApps` 进「绝不删」；`AppData\Local\Packages`、`ProgramData\Package Cache` 等原先默认可删的实为程序数据。
+  - **保留设备名**：`CON`/`PRN`/`AUX`/`NUL`/`COM1-9`/`LPT1-9` 一律拒绝。
+  - **门禁扩到 48 项 + 规则单元自检**：新增 C2（域继承）、D 组扩充、单元自检（名单内容 + `_guarded_zone` 判定）。并做了**缺陷注入三连**（域规则失效 / 设备名名单清空 / 新增名单项丢失 → 都必须 rc=1；复原 → rc=0），证明门禁不假绿。
+- **两次真实事故（教训写进文档）**：① `Documents\Adobe` 被改名暂存（端到端测试打了真实路径，被宿主钩子打断，已人工还原，51 文件无损）→ 由此暴露「中断不还原」并当轮修掉；② 本地 AI 密钥被 `clear_api_key` 测试清空（`config/ai.json` 被 gitignore 无备份，不可恢复）。纪律：**端到端删除测试必须「数据目录 + 目标路径」双隔离；写配置类接口的测试必须在隔离子进程里跑。**
+- **质量体系的结构性变化**：`tools/guard_matrix.py` 进本机门禁，`tools/selfcheck.ps1` 编排 7 道。此前 85 项 CDP 测的是「界面能跑通」、44 项 lint selftest 测的是「规则自身没写错」，护栏语义**零自动化覆盖** —— 这是 P0 能活到第二轮才被发现的原因。
+
 ---
 
 ## 七、文件资产与代码清单
@@ -1254,7 +1303,7 @@ SECURITY 该处表述未动。
 | `HANDOFF.md` | ~125 KB | 本文档：需求追溯、架构规格、踩坑记录与接手注意事项 |
 | 运行时数据（均 gitignore） | — | `history.json` / `schedule.json` / `disk-trend.json` / `receipts/`（仓库根，随 `--data-dir` 重定向）；`config/ai.json`（AI Key）、`config/packs-state.json`、`config/packs-user/`（远程更新的资源包）、`config/custom-overrides.json`（自定义释义）、`config/fs-groups.json`（自定义聚合组，写入前自动留 `.bak`）；`tools/local-cases.json`（本机测试用例）；`dist/`、`build/`、`portable/`、`_legacy/` |
 | `_legacy/` | ~180 KB | 前身版本归档（已 gitignore，不属于本仓库） |
-| `dist/` | ~11 MB | 当前版本的分发产物：`O-Cleaner-v2.7.zip`（便携版 33 文件，需系统已装 Python，由 `tools/make_package.py` 生成；免安装版由 `tools/make_exe.py` 生成，随发布节奏按需重建）。**v2.6 起发布走 GitHub Releases**（tag + zip + 说明）；`dist/` 与 `build/`（运行时下载缓存）均已 gitignore；发布前必须重建并核验包内文件与源码 sha256 一致（「发布包悄悄变旧」已两次实际踩中） |
+| `dist/` | ~11 MB | 当前版本的分发产物：`O-Cleaner-v2.8.zip`（便携版，需系统已装 Python，由 `tools/make_package.py` 生成；免安装版由 `tools/make_exe.py` 生成，随发布节奏按需重建）。**v2.6 起发布走 GitHub Releases**（tag + zip + 说明）；`dist/` 与 `build/`（运行时下载缓存）均已 gitignore；发布前必须重建并核验包内文件与源码 sha256 一致（「发布包悄悄变旧」已两次实际踩中） |
 
 ---
 
@@ -1309,6 +1358,13 @@ SECURITY 该处表述未动。
   - **英文规则 / i18n**：~~界面与知识库文案均为中文硬编码~~（**2026-10-14 ~ 15 已实现**，见 §33/§34：三层英文数据流 L1 界面词典 → L2 `config/kb-en.json` → L3 资源包英文长文本；新增断言时文案相关判定走 `t(key)` 或双语集合，不要写死单一语言字符串。）
   - **快速模式（2 层浅扫）**：WizTree 加速后全盘已到 14–90 秒，浅扫主要惠及「无 WizTree + 慢机器」场景，成本较低，可做成 scope 选项。**（2026-10-13 已实现，见 §25：档位下拉 + depth=2，语义边界是「少下探」而非秒级速览。）**
 - 仍然有效的约束：不引入安装型依赖（playwright / pip / npm 包）。CDP 测试使用系统自带 Edge + Node 原生 WebSocket 是刻意设计，不要替换为 Puppeteer/Playwright。
+
+### 10. 「盘未完成下载分片」目标当前不可用（v2.8 已知，未修）
+
+- 现状：`config/targets.json` 里的 `drive-part-files`（path = `%DRIVE%`，kind=`files`，glob=`*.part`）在服务端会被 `check_deletable` 拒绝 —— `expand("%DRIVE%")` 得到的是 `"C:"`（盘符相对路径），归一化前就被 `not os.path.isabs()` 拦下。结果：勾选它会得到一条错误，什么都不会删（安全，但功能不可用）。
+- 为什么不顺手修：要让它在盘根顶层按 glob 删文件，就得为「盘根 + kind=files」开一个豁免口。而 `check_deletable` 看不到 glob（`"*.part"` 还是 `"*"`），一旦开口，第三方资源包就能定义 `path=%DRIVE%, glob=*` 把盘根文件扫一遍 —— 这与本版「护栏升级」的方向相反。
+- 正确的修法（留给下一轮）：把 glob 一并传进 `check_deletable`（或给 `clean_target` 加一层「盘根只允许白名单扩展名 glob」的校验），再开门；同时补 `A 组` 断言（盘根 + kind=tree 必拒 / 盘根 + glob=* 必拒 / 盘根 + `*.part` 放行）。
+- 影响面：仅此一个内置目标，不影响其余 46 项与全部缓存类清理。
 
 ---
 
