@@ -6528,17 +6528,45 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/units":
             cfg = load_convert()
             units = list(cfg.get("units", []))
-            uid = (body.get("id") or "").strip()
-            if not uid:
-                return self._json({"error": "单位 id 不能为空"}, 400)
+            # 逐字段校验：以前 id 传数字会 AttributeError 崩成 500，
+            # bytes_per_unit 传字符串会原样写进配置，换算时再炸一次。
+            uid = body.get("id")
+            if not isinstance(uid, str) or not uid.strip():
+                return self._json({"error": "单位 id 必须是非空字符串"}, 400)
+            uid = uid.strip()
+            if len(uid) > 32 or re.search(r'[\\/:*?"<>|]', uid):
+                return self._json(
+                    {"error": "单位 id 最长 32 字符，且不能包含 \\ / : * ? \" < > |"},
+                    400)
+            bpu = body.get("bytes_per_unit", 0)
+            if bpu in (None, ""):
+                bpu = 0
+            if isinstance(bpu, bool) or not isinstance(bpu, (int, float)):
+                return self._json(
+                    {"error": "bytes_per_unit 必须是数字"}, 400)
+            if bpu != bpu or bpu in (float("inf"), float("-inf")):
+                return self._json(
+                    {"error": "bytes_per_unit 必须是有限数字"}, 400)
+            if bpu < 0:
+                return self._json(
+                    {"error": "bytes_per_unit 不能为负数"}, 400)
+
+            def _txt(key: str, default: str, limit: int = 80) -> str:
+                v = body.get(key)
+                if not isinstance(v, str):
+                    return default
+                v = v.strip()
+                return v[:limit] if v else default
+
             if not any(u.get("id") == uid for u in units):
+                label = _txt("label", uid)
                 units.append({
                     "id": uid,
-                    "label": body.get("label") or uid,
-                    "plural": body.get("plural") or body.get("label") or uid,
-                    "bytes_per_unit": body.get("bytes_per_unit") or 0,
-                    "note": body.get("note") or "",
-                    "category": body.get("category") or "自定义",
+                    "label": label,
+                    "plural": _txt("plural", label),
+                    "bytes_per_unit": bpu,
+                    "note": _txt("note", "", 500),
+                    "category": _txt("category", "自定义", 24),
                 })
             cfg["units"] = units
             _atomic_write(CONVERT_PATH, cfg)
@@ -6548,6 +6576,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/units/delete":
             cfg = load_convert()
             uid = body.get("id")
+            if not isinstance(uid, str) or not uid.strip():
+                return self._json({"error": "单位 id 必须是非空字符串"}, 400)
+            uid = uid.strip()
             cfg["units"] = [u for u in cfg.get("units", []) if u.get("id") != uid]
             _atomic_write(CONVERT_PATH, cfg)
             _cache.pop(str(CONVERT_PATH), None)
