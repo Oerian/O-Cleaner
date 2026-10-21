@@ -5565,8 +5565,45 @@ def import_pack(data) -> tuple[bool, str]:
     return True, f"{data.get('name')}（{why}）"
 
 
+def _is_unsafe_remote(u: str) -> str:
+    """检查要抓取的远端地址是否属于不该访问的目标，返回拒绝原因（空=放行）。
+
+    威胁模型：这是本机单用户工具，且写操作有同源校验，能被利用的前提是
+    用户自己点了「从 URL 导入」并粘贴了一个恶意地址。所以这里不做
+    「禁掉所有内网」那么激进（用户完全可能从局域网文件服务器导资源包），
+    只挡三类：协议滥用、带凭据的 URL、以及云元数据/本机回环这类
+    「读到就是凭据泄露」的目标。
+    """
+    try:
+        from urllib.parse import urlsplit
+        sp = urlsplit(u)
+    except Exception:
+        return "地址无法解析"
+    if sp.scheme.lower() not in ("http", "https"):
+        return "只支持 http/https 地址"
+    if sp.username or sp.password:
+        return "地址里不能带账号密码"
+    host = (sp.hostname or "").strip().lower()
+    if not host:
+        return "地址缺少主机名"
+    blocked_hosts = {"metadata.google.internal", "metadata", "instance-data"}
+    if host in blocked_hosts:
+        return "拒绝访问云元数据地址"
+    # 回环与「未指定」地址：本机工具没有理由通过 HTTP 抓自己
+    if host in ("localhost", "localhost.localdomain", "::1", "0.0.0.0", "[::1]"):
+        return "拒绝访问本机回环地址"
+    try:
+        import ipaddress
+        ip = ipaddress.ip_address(host)
+        if ip.is_loopback or ip.is_unspecified or ip.is_link_local:
+            return "拒绝访问回环/链路本地地址"
+    except ValueError:
+        pass          # 不是 IP 字面量，是域名，放行
+    return ""
+
+
 def fetch_json(url: str, timeout: int = 20):
-    """取一个 JSON。只允许 http/https，其余协议直接拒绝。"""
+    """取一个 JSON。协议与目标限制见 _is_unsafe_remote。"""
     u = str(url or "").strip()
     if not re.match(r"^https?://", u, re.I):
         return None, "只支持 http/https 地址"
@@ -7037,7 +7074,11 @@ class Handler(BaseHTTPRequestHandler):
             if data is None and body.get("path"):
                 data = str(body["path"])
             if data is None and body.get("url"):
-                data, err = fetch_json(str(body["url"]))
+                _u = str(body["url"])
+                _bad = _is_unsafe_remote(_u)
+                if _bad:
+                    return self._json({"ok": False, "error": _bad}, 400)
+                data, err = fetch_json(_u)
                 if err:
                     return self._json({"ok": False, "error": err}, 400)
             if data is None:
