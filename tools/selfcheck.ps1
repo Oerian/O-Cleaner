@@ -34,6 +34,12 @@ Run-Step "lint_rules --strict" {
 Run-Step "_lint_selftest 缺陷注入" {
     & $py "$root\tools\_lint_selftest.py" | Out-Null
 }
+# 护栏矩阵：删除保护语义是唯一「不靠看代码就发现不了」的部分
+# （2026-10-21 第二轮审计：Documents 被整目录删除，85 项 UI 测试与
+#  44 项 linter 自测全绿也照样漏掉）。必须进本机门禁。
+Run-Step "guard_matrix 删除护栏对抗矩阵" {
+    & $py -X utf8 "$root\tools\guard_matrix.py" | Out-Null
+}
 Run-Step "编码与换行契约检查" {
     Set-Location $root
     powershell -NoProfile -ExecutionPolicy Bypass -File tools\fix-encoding.ps1 -Check | Out-Null
