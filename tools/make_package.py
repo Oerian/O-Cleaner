@@ -64,6 +64,7 @@ INCLUDE = [
     "tools/selftest.py",
     "tools/lint_rules.py",
     "tools/_lint_selftest.py",
+    "tools/guard_matrix.py",
     "tools/doctor.py",
     "tools/cdp_check.js",
     "tools/fix-encoding.ps1",

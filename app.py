@@ -79,7 +79,7 @@ WEB_DIR = BASE_DIR / "web"
 # config/drives.json 的 app.version），2026-10-12 升 v2.3 时漏改了后两处，
 # 结果界面显示的仍是 2.2。收敛成一个常量后，drives.json 与打包脚本由自测断言
 # 强制保持一致（见 tools/selftest.py 的「版本号三处一致」）。
-APP_VERSION = "2.7"
+APP_VERSION = "2.8"
 APP_UA = f"O-Cleaner/{APP_VERSION}"
 
 TARGETS_PATH = CONFIG_DIR / "targets.json"
@@ -119,6 +119,10 @@ PROTECTED_DIR_NAMES = {
     "programdata", "recovery", "system volume information", "$recycle.bin",
     "users", "default", "public", "appdata", "boot", "perflogs", "msocache",
     "onedrive", "documents and settings",
+    # 护栏升级（2026-10-21）：共享组件与商店应用本体。
+    #   common files —— 多个程序共用的 DLL / 运行时，删掉会一片程序都起不来；
+    #   windowsapps —— 商店应用安装目录，删掉等于把所有 UWP 应用连数据一起废掉。
+    "common files", "windowsapps",
 }
 # 用户自己的数据目录（2026-10-21）：这些目录默认不清理、不进推荐、不进预设，
 # 但**用户可以自己选**（显式勾选 → allow_user_data=True）——「不做删，做成可选」。
@@ -136,6 +140,62 @@ PROTECTED_AT_DRIVE_ROOT = {"windows", "program files", "program files (x86)",
 # 允许作为“清理容器”的目录名（即使名字本身在通用保护名单里）
 ALLOWED_CONTAINER_NAMES = {"temp", "tmp", "cache", "caches", ".cache",
                            "logs", "log", "crashdumps", "minidump", "prefetch"}
+
+# ---- 护栏升级（2026-10-21）----
+# 保留设备名：路径中任何一段命中，Windows 会把它解释成设备而不是文件，
+# 删除这类路径实际打到的是设备句柄，行为不可预期（甚至无提示失败）。
+RESERVED_DEVICE_NAMES = {"con", "prn", "aux", "nul", "conin$", "conout$"} \
+    | {f"com{i}" for i in range(1, 10)} | {f"lpt{i}" for i in range(1, 10)}
+
+# 「受保护域」：系统盘上这几棵子树里的**整目录删除**一律默认拒绝，
+# 需用户显式勾选（allow_user_data=True）才放行。理由见 _guarded_zone()。
+_ZONE_LABEL = {
+    "user": "个人数据目录",
+    "appdata": "程序数据目录",
+    "programdata": "全机共享的程序数据目录",
+    "programfiles": "已安装程序目录",
+}
+
+
+def _guarded_zone(parts: list[str]) -> str:
+    """判断路径是否落在「受保护域」内，返回域标签（空串表示不受域保护）。
+
+    受保护域 = 系统盘上这几棵子树：
+      * ``Users\\<用户>\\<一级目录>``      —— 这个人的个人数据
+      * ``Users\\<用户>\\AppData\\<L>``     —— 这个人的程序配置（L = Local/Roaming/LocalLow）
+      * ``ProgramData\\<X>``               —— 全机共享的程序数据
+      * ``Program Files[ (x86)]\\<X>``      —— 已安装程序本体
+
+    **为什么需要「域」而不是逐条名单**：名字规则只比对末级段名，保护住
+    ``Documents`` 本身，却放行了它下面的 ``Documents\\Adobe`` —— 而用户在
+    占用排行里下钻之后勾选的，恰恰是后者。上次真实事故（改名暂存了
+    ``Documents\\Adobe``）走的就是这条缝。位置规则同理，只管 ``Users\\<u>\\``
+    一级。所以保护必须**按子树继承**，而不是只保护树根。
+
+    域内的缓存/临时/日志容器不继承保护（见 check_deletable 里的豁免），
+    那正是清理工具该干的活。
+    """
+    if not parts:
+        return ""
+    low = [p.lower() for p in parts]
+    head = low[0]
+    if head == "users" and len(parts) >= 3:
+        second = low[2]
+        if second in ALLOWED_CONTAINER_NAMES:
+            return ""
+        if second in {"appdata", "local settings"}:
+            # AppData 本身由名字名单拦死；这里管它下面那一层
+            if len(parts) < 4:
+                return ""
+            if low[3] in ALLOWED_CONTAINER_NAMES:
+                return ""
+            return "appdata"
+        return "user"
+    if head == "programdata" and len(parts) >= 2:
+        return "" if low[1] in ALLOWED_CONTAINER_NAMES else "programdata"
+    if head in ("program files", "program files (x86)") and len(parts) >= 2:
+        return "" if low[1] in ALLOWED_CONTAINER_NAMES else "programfiles"
+    return ""
 
 
 def _long_path(p: str) -> str:
@@ -2706,6 +2766,17 @@ BROWSER_CACHE_DIRS = {
 # 统一走 _looks_like_browser_profile()，必须在目录内部真看到
 # Cache / Code Cache 这类缓存子目录才认。
 
+# 「受保护域」里的缓存豁免名单（2026-10-21 护栏升级）。
+# 域规则保护的是**整目录删除**；域内有些目录装的是纯派生数据，删了自动重建，
+# 那正是清理工具该干的活 —— 把它们一并锁死等于让新产品什么都不敢删。
+# 这一组比 ALLOWED_CONTAINER_NAMES 更具体：浏览器代码缓存、显卡着色器缓存、
+# 系统网络缓存、缩略图缓存等。名单里的名字都必须是「删了会自动重建」的派生数据，
+# 往里加名字前先确认这一点。
+ZONE_CACHE_EXEMPT = ALLOWED_CONTAINER_NAMES | BROWSER_CACHE_DIRS | {
+    "inetcache", "dxcache", "glcache", "d3dscache", "explorer",
+    "deliveryoptimization", "wer", "tempstate", "webcache",
+}
+
 def _looks_like_game_install(path: str) -> bool:
     """判断目录是否是一个游戏本体（而非缓存）。
 
@@ -3551,10 +3622,11 @@ def check_deletable(path: str, kind: str = "tree",
     真正的删除对象是它内部匹配 glob 的文件，所以同样按目录校验。
 
     allow_user_data：**仅在用户显式勾选了该目标时为 True**。
-    它只放宽「用户自己的数据目录」（文档 / 桌面 / 下载 / 图片…）这一类，
-    系统目录（Windows / Program Files / System32…）、工具自身、盘根、
-    junction 穿透这些硬保护一律不受它影响 —— 那些删了系统就坏了，
-    不该由用户的一次误点决定。
+    它只放宽「受保护域」里的整目录删除 —— 个人数据（文档/桌面/下载/图片…）、
+    程序数据（AppData 各分支、ProgramData、Program Files 下的子目录）。
+    系统目录（Windows / System32 / Program Files 本体…）、工具自身、盘根、
+    保留设备名、junction 穿透这些硬保护一律不受它影响 —— 那些删了系统就
+    坏了，不该由用户的一次误点决定。
 
     默认 False。预设、自动发现、定时清理、规则清理**永远**用默认值，
     所以「不做删」这一侧由代码结构保证，而不是靠调用方自觉。
@@ -3594,6 +3666,13 @@ def check_deletable(path: str, kind: str = "tree",
     if not parts:
         return False, "拒绝：不允许清理盘符根目录"
 
+    # 保留设备名（2026-10-21 护栏升级）：CON / NUL / COM1 这类名字在 Win32
+    # 层是设备而不是文件。路径里出现它们时，os.remove / rmtree 打到的是设备
+    # 句柄 —— 表现为无提示失败，极端情况下会写坏设备流。直接拒绝。
+    for p in parts:
+        if p.split(".")[0].strip().lower() in RESERVED_DEVICE_NAMES:
+            return False, f"拒绝：{p} 是 Windows 保留设备名"
+
     # 回收站目标（kind="recyclebin"）只允许精确指向「盘根的 $Recycle.Bin」——
     # 这是应用自己的「清空回收站」清理项，勾选后走 Clear-RecycleBin。
     # 它本来会被下面的 $Recycle.Bin 保护规则拦死，导致这条链路不可达
@@ -3613,6 +3692,26 @@ def check_deletable(path: str, kind: str = "tree",
     leaf = parts[-1].lower()
     if leaf in PROTECTED_DIR_NAMES and leaf not in ALLOWED_CONTAINER_NAMES:
         return False, f"拒绝：{parts[-1]} 属于受保护的目录"
+
+    # 受保护域（2026-10-21 护栏升级）：整目录删除默认拒绝，需显式勾选。
+    # 上面两条规则只比对**末级段名 / Users 一级位置**，保护住的是树根；
+    # 用户在实际界面上勾的是下钻之后的子目录（Documents\Adobe 这种），
+    # 那正是上次真实事故走的缝。这里按**子树继承**兜住。
+    # 豁免：本身是缓存/临时/日志容器，或是某个容器目录的直接子项 ——
+    # 这类东西删了会自动重建，正是清理工具该干的活。
+    zone = _guarded_zone(parts)
+    if zone:
+        # 缓存豁免（ZONE_CACHE_EXEMPT）：末级是已知缓存目录名，或它是缓存
+        # 目录的直接子项 —— 这类派生数据删了自动重建，不锁。
+        _ex = ZONE_CACHE_EXEMPT
+        _is_cache = (leaf in _ex
+                     or (len(parts) >= 2 and parts[-2].lower() in _ex))
+        if not _is_cache:
+            if allow_user_data:
+                return True, f"用户已明确选择：{_ZONE_LABEL[zone]}"
+            return False, (f"拒绝：{parts[-1]} 位于{_ZONE_LABEL[zone]}内，"
+                           "整目录删除默认不做"
+                           "（可在界面上显式勾选后清理，将移入回收站）")
 
     # 用户数据目录（2026-10-21）：默认拒绝，用户显式勾选时放行。
     # 「不做删，做成可选」—— 工具不主动推荐、不进预设、不进定时清理，
@@ -4329,6 +4428,13 @@ def clean_target(t: dict, only_paths: list | None = None,
         # 用户自选的个人数据目录：结果里如实带上标记，历史记录也能看出来
         result["user_data_optin"] = True
         result["note"] = why
+        # 护栏升级（2026-10-21）：显式选择「个人数据 / 程序数据」这类整目录
+        # 删除时，**一律强制移入回收站**。「可选」这一档的全部意义就是可后悔 ——
+        # 用户即便关掉了「高风险项进回收站」，这里也不放行直删：
+        # 一次误点的代价是整个目录不可恢复，而回收站的代价只是暂时不释放空间。
+        if kind != "recyclebin" and not use_trash:
+            use_trash = True
+            result["note"] = why + "；已强制移入回收站（可从回收站还原）"
 
     if kind == "recyclebin":
         # 统计在普通权限下可能被拒（读其他 SID 的回收站内容需要管理员），

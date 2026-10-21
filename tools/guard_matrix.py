@@ -16,8 +16,13 @@
     C. 仅显式可选：用户自己的数据目录（文档/桌面/下载…）
        默认必须拒绝（预设、自动发现、定时清理走这条），
        显式勾选（allow_user_data=True）后才允许。
+    C2. 域继承：受保护目录**下面**的子目录必须继承同一档保护 ——
+       用户在占用排行里下钻后勾的正是这些，只保护树根等于没保护。
     D. 显式可选也不能放行的：系统目录。删了系统就坏了，
        不该由用户的一次误点决定。
+    E. 8.3 短名（PROGRA~1）不得绕过位置保护。
+    + 规则单元自检：名单内容与域判定（路径型用例测不到的部分，
+      例如本机造不出名为 CON 的目录，只能直接断言规则函数）。
 
 用法：
     python -X utf8 tools/guard_matrix.py            # 全绿 rc=0，有失败 rc=1
@@ -74,6 +79,14 @@ def build_cases():
     tmp_desk = os.path.join(nm_root, "Desktop")
     for d in (tmp_docs, tmp_desk):
         os.makedirs(d, exist_ok=True)
+    # 用户 Temp 下再放一层：验证「缓存容器不继承域保护」——
+    # 少了这条，受保护域会把 %LOCALAPPDATA%\Temp 的子目录一起锁死（功能失效）。
+    tmp_in_temp = None
+    try:
+        tmp_in_temp = tempfile.mkdtemp(
+            prefix="oc-guard-ok-", dir=os.path.join(HOME, "AppData", "Local", "Temp"))
+    except OSError:
+        pass
     cases = [
         # ---------- A. 必须拒绝 ----------
         ("A 盘根与无效输入", "C:" + B, False, None, "盘符根"),
@@ -122,16 +135,85 @@ def build_cases():
         ("C 仅显式可选", tmp_docs, False, True, "别处的 Documents 目录（按名字保护）"),
         ("C 仅显式可选", tmp_desk, False, True, "别处的 Desktop 目录（按名字保护）"),
 
+        # ---------- C2. 受保护域：保护按子树继承 ----------
+        # 2026-10-21 护栏升级。原来的规则只保护「树根」（Documents 本身），
+        # 而用户在占用排行里下钻之后勾的是子目录 —— 上次真实事故
+        # （Documents\Adobe 被改名暂存）就是从这条缝进来的。
+        ("C2 域继承", os.path.join(HOME, "Documents", "Adobe"), False, True,
+         "文档下的子目录（必须继承保护）"),
+        ("C2 域继承", os.path.join(HOME, "AppData", "Local"), False, True,
+         "AppData\\Local 整体"),
+        ("C2 域继承", os.path.join(HOME, "AppData", "Roaming"), False, True,
+         "AppData\\Roaming 整体"),
+        ("C2 域继承", os.path.join(HOME, "AppData", "LocalLow"), False, True,
+         "AppData\\LocalLow 整体"),
+        ("C2 域继承", os.path.join(HOME, "AppData", "Local", "Microsoft"),
+         False, True, "AppData 下的程序数据"),
+        ("C2 域继承", j("C:", "ProgramData", "Microsoft"), False, True,
+         "ProgramData 下的程序数据"),
+        ("C2 域继承", j("C:", "ProgramData", "Package Cache"), False, True,
+         "安装包缓存（删了无法修复/卸载）"),
+
         # ---------- D. 显式可选也必须拒绝 ----------
         ("D 显式也拒绝", j("C:", "Windows"), False, False, "Windows"),
         ("D 显式也拒绝", j("C:", "Program Files"), False, False, "Program Files"),
         ("D 显式也拒绝", str(HERE), False, False, "仓库根"),
         ("D 显式也拒绝", j("C:", "Windows", "System32"), False, False, "System32"),
+        ("D 显式也拒绝", j("C:", "Program Files", "Common Files"), False, False,
+         "共享组件（多个程序共用，删了集体起不来）"),
+        ("D 显式也拒绝", j("C:", "Program Files", "WindowsApps"), False, False,
+         "商店应用本体"),
+        ("D 显式也拒绝", j("C:", "Users", "Public"), False, False, "公共目录"),
 
         # ---------- E. 8.3 短名不得绕过 ----------
         ("E 8.3 短名", j("C:", "PROGRA~1"), False, False, "PROGRA~1（应展开为 Program Files）"),
     ]
+    # 缓存容器不继承域保护（条件用例：本机能建出 %LOCALAPPDATA%\Temp 子目录才测）
+    if tmp_in_temp:
+        cases.append(("B 应放行", tmp_in_temp, True, True,
+                      "用户 Temp 的子目录（缓存容器不继承域保护）"))
     return cases
+
+
+def unit_failures() -> list:
+    """规则单元自检：路径型用例测不到的东西（名单内容、域判定）。
+
+    为什么单独一段：像「保留设备名」「受保护域」这类规则，在本机上根本
+    造不出对应的真实路径（Windows 不允许建名为 CON 的目录，ProgramData
+    下建目录要管理员），路径型断言会因为「目标不存在」而「通过」——
+    那是假绿。所以直接对判定函数与名单本身做断言。
+    """
+    bad = []
+    need_dev = {"con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9"}
+    if not need_dev <= set(app.RESERVED_DEVICE_NAMES):
+        bad.append(f"保留设备名名单缺失：{sorted(need_dev - set(app.RESERVED_DEVICE_NAMES))}")
+    zone_cases = [
+        (["Users", "u", "Documents", "Adobe"], "user"),
+        (["Users", "u", "Documents"], "user"),
+        (["Users", "u", ".ssh"], "user"),
+        (["Users", "u", "AppData", "Local"], "appdata"),
+        (["Users", "u", "AppData", "Local", "Microsoft"], "appdata"),
+        (["Users", "u", "AppData"], ""),          # AppData 本身由名字名单管
+        (["Users", "u", "AppData", "Local", "Temp"], "appdata"),  # 域内，但叶子是容器 → 由豁免放行
+        (["Users", "u", "Temp"], ""),
+        (["ProgramData", "Microsoft"], "programdata"),
+        (["ProgramData", "Temp"], ""),
+        (["Program Files", "Foo"], "programfiles"),
+        (["Program Files (x86)", "Foo"], "programfiles"),
+        (["Program Files", "Foo", "cache"], "programfiles"),
+        (["Windows", "Temp"], ""),
+        (["Games", "Foo"], ""),
+    ]
+    for parts, want in zone_cases:
+        got = app._guarded_zone(list(parts))
+        if got != want:
+            bad.append(f"_guarded_zone({parts}) 期望 {want!r} 实际 {got!r}")
+    # 绝不删名单里必须常驻的几项
+    for name in ("common files", "windowsapps", "appdata", "windows",
+                 "system32", "program files", "users", "$recycle.bin"):
+        if name not in app.PROTECTED_DIR_NAMES:
+            bad.append(f"PROTECTED_DIR_NAMES 缺失 {name!r}")
+    return bad
 
 
 def main(argv=None) -> int:
@@ -181,12 +263,22 @@ def main(argv=None) -> int:
         if not bad:
             passed += 1
 
+    # 规则单元自检（名单内容与域判定），路径型用例测不到的部分
+    unit_bad = unit_failures()
+    for b in unit_bad:
+        failed.append("[单元] " + b)
+    if verbose:
+        print(f"   {'-- 规则单元自检 --':52s} {'通过' if not unit_bad else '失败'}")
+        for b in unit_bad:
+            print("     " + b)
+
     if not verbose:
         # 非 verbose 只在失败时说话，保持门禁输出干净
         for f in failed:
             print("  失败：" + f)
 
-    print(f"护栏矩阵：通过 {passed} 项，失败 {len(failed)} 项，跳过 {skipped} 项")
+    print(f"护栏矩阵：通过 {passed} 项，失败 {len(failed)} 项，跳过 {skipped} 项"
+          f"（另含规则单元自检 {1 if not unit_bad else 0}/{1}）")
     return 1 if failed else 0
 
 
