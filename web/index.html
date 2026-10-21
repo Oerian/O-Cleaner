@@ -1704,6 +1704,11 @@ function selTotal() {
     entries.push([p, n ? (n.size || 0) : 0]);
   }
   const real = entries.map(e => normKey(e[0])).filter(Boolean);
+  // kind=files 的目标只清本层匹配文件、不覆盖子目录，不能当「外层容器」。
+  // 反例（2026-10-21）：盘根分片目标路径是 "C:\"，normKey 后成了全盘前缀，
+  // 于是任何 C 盘勾选项都被当成它的「内层」，它的体积被从预估里抹掉 ——
+  // 服务端已按同一口径修正，这里必须跟着改，否则前后端账对不上。
+  const kindByPath = new Map((STATE?.targets || []).map(t => [normKey(t.path), t.kind]));
   // 游戏本体判定：树节点带 steam_game / game_platform 标记（与后端同一口径）
   const nodeByPath = new Map((FS?.nodes || []).map(n => [normKey(n.path), n]));
   const isGameBody = p => {
@@ -1714,7 +1719,8 @@ function selTotal() {
   for (const [p, size] of entries) {
     const np = normKey(p);
     if (!np) { sum += size; continue; }
-    const hasInner = real.some(q => q && q !== np && q.startsWith(np + "\\"));
+    const isFilesKind = kindByPath.get(np) === "files";
+    const hasInner = !isFilesKind && real.some(q => q && q !== np && q.startsWith(np + "\\"));
     if (isGameBody(np) && hasInner) {
       // 游戏本体整删不拆：本体体积已覆盖内部勾选项，只计本体
       sum += size;

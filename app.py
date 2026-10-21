@@ -4335,6 +4335,14 @@ def dedup_nested_targets(selected: list[dict]) -> tuple[list[dict], list[dict]]:
         p = paths[i]
         if not p or i in dropped:
             continue
+        # kind=files 的目标只删自己这一层的匹配文件，**不覆盖任何子目录**，
+        # 因此它不能当「外层容器」。反例（2026-10-21 实测）：盘根分片目标的
+        # path 是 "C:\"，归一化后 "c:" 成了所有 C 盘路径的前缀，于是它被当成
+        # 包含全部 C 盘勾选项的外层，按「只清理最小项」被静默跳过 —— 用户勾了
+        # 盘根分片 + 任意其他 C 盘项，分片永远不会被清，历史里还写着「已包含
+        # 更小的勾选项」。它是内层没关系（外层 tree/回收站确实覆盖它）。
+        if t.get("kind") == "files":
+            continue
         desc = [j for j, q in enumerate(paths)
                 if j != i and q and q != p and q.startswith(p + "\\")
                 and j not in dropped]
@@ -6235,7 +6243,12 @@ def build_state(drive: str | None = None, custom_path: str | None = None,
             "scope": "drive" if is_drive_specific(t) else "user",
             "temp_target": bool(t.get("temp_target")),
             "discovered": bool(t.get("discovered")),
-            "cleanable": bool(t.get("cleanable")),
+            # 预设目标本身就是「本工具判定可清理」的那批（界面上带勾选框的
+            # 就是它们），所以缺省为真。此前这里直接读 t.get("cleanable")，
+            # 而 26 项内置目标都没写这个字段 → 接口对全部目标回传
+            # cleanable:false，与产品行为自相矛盾。用户覆盖里显式写 false
+            # 的仍然生效（key 存在就不取默认值）。
+            "cleanable": bool(t.get("cleanable", True)),
             "custom": bool(t.get("custom")),
             "short": t.get("short", ""), "what": t.get("what", ""),
             "rebuild": t.get("rebuild", ""), "impact": t.get("impact", ""),

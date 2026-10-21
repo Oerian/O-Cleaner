@@ -527,6 +527,19 @@ def phase1() -> None:
               and len(merged5) == 1)
         kept6, _ = app.dedup_nested_targets([_game, _other])   # 无包含关系互不影响
         check("游戏本体与无关项互不影响", len(kept6) == 2)
+
+        # kind=files 的目标只清本层匹配文件、不覆盖子目录，因此不能当「外层容器」。
+        # 反例：盘根分片目标的 path 是 "C:\"，归一化后 "c:" 是全盘路径的前缀，
+        # 曾把所有同盘勾选项都算成它的「内层」，结果它自己被当外层丢掉 ——
+        # 用户勾了分片 + 任意同盘项，分片永远清不掉，历史里还写着「已包含更小项」。
+        _part = {"id": "drive-part-files@C", "label": "盘根分片",
+                 "path": "C:\\", "kind": "files", "glob": "*.part"}
+        _ctemp = {"id": "drive-temp@C", "label": "盘根 Temp",
+                  "path": "C:\\Temp", "kind": "tree"}
+        kept7, merged7 = app.dedup_nested_targets([_part, _ctemp])
+        check("盘根分片（kind=files）不会被当成外层容器丢掉",
+              [k.get("id") for k in kept7] == [_part["id"], _ctemp["id"]]
+              and not merged7, str(merged7))
     finally:
         app.steam_common_dirs, app.game_install_dirs = _saved_sc, _saved_gd
 
@@ -983,6 +996,12 @@ def phase3_http() -> None:
               {"sandbox-tree", "sandbox-files"} <= sb_bases,
               f"共 {len(state.get('targets', []))} 项")
         check("state 含盘符列表", len(state.get("drives", [])) >= 1)
+        # 预设目标就是「本工具判定可清理」的那批，state 里不许回传 cleanable:false。
+        # 此前内置 26 项都没写 cleanable 字段，接口对全部目标回传 false ——
+        # 界面不用这个字段所以没人发现，但任何读它的客户端都会被误导。
+        check("state 里目标默认标 cleanable（接口不许自相矛盾）",
+              all(t.get("cleanable") for t in state.get("targets", [])),
+              f"{sum(1 for t in state.get('targets', []) if not t.get('cleanable'))} 项为假")
         check("state.data_dir_writable 实测为 True（数据目录本机可写）",
               state.get("data_dir_writable") is True
               and app.data_dir_writable() is True)
