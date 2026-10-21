@@ -50,3 +50,10 @@ config/.filetypes.linttest.bak
 *.swp
 .DS_Store
 .oc_write_probe_*
+
+# 运行时状态（v2.8 起）：删除中断日志与跨进程锁文件
+#   pending-deletes.json —— 删除中断时的暂存目录日志，启动时据此还原
+#   .oc-history.lock     —— history 的跨进程文件锁
+# 两者都随 --data-dir 落在数据目录；默认数据目录就是仓库根，必须忽略。
+pending-deletes.json
+.oc-*.lock
