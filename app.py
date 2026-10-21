@@ -451,6 +451,7 @@ def _measure_existing(t: dict, path: str, drive: str | None) -> dict:
 DISK_TREE_MIN_DESCEND_RATIO = 0.08
 DISK_TREE_MIN_DESCEND_FLOOR = 300 * 1024 * 1024    # 绝对下限 300 MB
 DISK_TREE_MIN_CHILD_MB = 50                         # 子项 ≥50 MB 才进入该层清单
+FALLBACK_SIZING_BUDGET_S = 8                        # 无 MFT 加速时，单层量体积的时间预算
 DISK_TREE_MAX_DEPTH = 2                             # 默认展开 2 层（2026-10-14 起；
                                                     # 前端可在 1~5 层间自选，这里是默认值与上限参考）
 DISK_TREE_MAX_NODES = 420                           # 总节点上限，控制耗时与数据量
@@ -1559,6 +1560,7 @@ def list_subdirs(drive: str, path: str, limit: int = 80) -> dict:
 
     children: list[dict] = []
     total = 0
+    partial = False          # 回退路径量体积超时后置位（见下方 else 分支）
     cached = _WIZ_DIRS.get(letter)
     if cached and cached.get("table"):
         table = cached["table"]
@@ -1585,13 +1587,25 @@ def list_subdirs(drive: str, path: str, limit: int = 80) -> dict:
         engine = "wiztree"
     else:
         engine = "powershell"
+        # 无 MFT 加速时要现场递归量体积，一个 C:\Windows 就要 58 秒（实测）。
+        # 用户看到的是「点了展开，界面卡住一分钟」，比数据不准更糟。
+        # 所以给测量加时间预算：超时后剩下的子项标 size_unknown 并如实返回，
+        # 前端显示「未测」，而不是让整个请求挂在那儿。
+        _budget = time.time() + FALLBACK_SIZING_BUDGET_S
+        partial = False
         try:
             with os.scandir(p) as it:
                 for e in it:
                     try:
                         if e.is_dir(follow_symlinks=False):
+                            unknown = False
+                            if time.time() < _budget:
+                                sz = _size_of_dir(e.path)
+                            else:
+                                sz, unknown, partial = 0, True, True
                             children.append({"path": e.path, "name": e.name,
-                                             "size": _size_of_dir(e.path),
+                                             "size": sz,
+                                             "size_unknown": unknown,
                                              "modified": datetime.fromtimestamp(
                                                  e.stat().st_mtime
                                              ).strftime("%Y-%m-%d"),
@@ -1610,6 +1624,47 @@ def list_subdirs(drive: str, path: str, limit: int = 80) -> dict:
         children.sort(key=lambda x: -x["size"])
         total = len(children)
         children = children[:limit]
+
+    # 快照表里没有记录 ≠ 目录里真的没有东西（2026-10-21 修）：
+    # WizTree 导出表只收 ≥DISK_TREE_MIN_CHILD_MB 的子项，一个「全是小文件」
+    # 的目录在表里就是空的。以前这里直接把 total=0 返回给前端，界面显示
+    # 「该层 0 个子项」，用户以为目录是空的 —— 实际里面可能躺着几百个文件。
+    # 现在改为实地探查一次，如实说明「都低于快照门槛」，并把子项列出来
+    # （体积现场测；条目太多时只测文件名，避免下钻卡住）。
+    below_threshold = False
+    if cached and cached.get("table") and not children and total == 0:
+        try:
+            with os.scandir(p) as it:
+                found = []
+                for e in it:
+                    try:
+                        found.append(e)
+                    except OSError:
+                        continue
+            if found:
+                below_threshold = True
+                total = len(found)
+                # 条目不多时值得逐个量体积；多了就只给名字与文件大小，
+                # 否则一次下钻要走上万次 stat，体感比空白更糟。
+                do_size = len(found) <= 60
+                for e in found[:limit]:
+                    try:
+                        is_dir = e.is_dir(follow_symlinks=False)
+                        st = e.stat()
+                        sz = (_size_of_dir(e.path) if (is_dir and do_size)
+                              else 0) if is_dir else st.st_size
+                        children.append({
+                            "path": e.path, "name": e.name, "size": sz,
+                            "modified": datetime.fromtimestamp(
+                                st.st_mtime).strftime("%Y-%m-%d"),
+                            "type": "dir" if is_dir else "file",
+                            "size_unknown": bool(is_dir and not do_size),
+                        })
+                    except OSError:
+                        continue
+                children.sort(key=lambda x: -x["size"])
+        except OSError:
+            pass
 
     for c in children:
         c["size_h"] = human(c["size"])
@@ -1659,6 +1714,15 @@ def list_subdirs(drive: str, path: str, limit: int = 80) -> dict:
         "drive": letter, "path": p, "children": children,
         "engine": engine,
         "total": total,
+        # 该层子项全部低于快照门槛（WizTree 表里没记录），是现场探查补出来的。
+        # 前端据此提示「本层子项都很小，未计入快照」，而不是显示「0 个子项」。
+        "below_threshold": below_threshold,
+        "min_child_mb": DISK_TREE_MIN_CHILD_MB,
+        # 回退路径（无 MFT 加速）量体积超时：剩下的子项体积未知，
+        # 前端要如实标注「未测」，不能当成 0 处理。
+        "partial": partial,
+        "note": ("无 MFT 加速：本层体积为现场测量，超时部分标为未测"
+                 if engine != "wiztree" else ""),
         "parent_size": (cached["table"]["dirs"].get(os.path.normpath(p).lower(), 0)
                         if cached and cached.get("table") else 0),
         "listed_total": sum(c["size"] for c in children),
@@ -6020,9 +6084,15 @@ class Handler(BaseHTTPRequestHandler):
                 analyze_dir_partition(p), q.get("lang")))
         if route == "/__oc__/subdirs":
             # 大清理项逐层拆子项：查 WizTree 常驻表，任意深度都是 O(1)
-            p = q.get("path") or ""
+            p = (q.get("path") or "").strip()
             if not p:
                 return self._json({"error": "缺少 path 参数"}, 400)
+            # 与 /clean 同一口径：必须是绝对路径。以前接受 "E:" 这类盘符相对
+            # 路径（normpath 后变成 "E:"，isdir 为假 → 返回空列表却不报错），
+            # 也接受 "C:\..\..\Windows" 这类带 .. 的迂回写法；只读接口虽无
+            # 删除面，但语义含糊会让前端误以为「该目录没有子项」。
+            if not os.path.isabs(p):
+                return self._json({"error": "path 必须是绝对路径"}, 400)
             try:
                 limit = min(400, max(1, int(q.get("limit") or 80)))
             except ValueError:
