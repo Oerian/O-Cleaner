@@ -172,6 +172,17 @@ def build_cases():
     if tmp_in_temp:
         cases.append(("B 应放行", tmp_in_temp, True, True,
                       "用户 Temp 的子目录（缓存容器不继承域保护）"))
+    # 缓存目录的**深层**子项也必须放行：`%TEMP%\<某个包>\node_modules` 的末级
+    # 和父级都不是缓存名，但它明明就在 Temp 里。只按一层豁免会误拦这类正常
+    # 清理项（CI 首次跑全量自测时就是被这条挡红的）。
+    deep_cache = os.path.join(tmp_in_temp or tempfile.mkdtemp(prefix="oc-guard-deep-"),
+                              "some-pkg", "node_modules")
+    try:
+        os.makedirs(deep_cache, exist_ok=True)
+        cases.append(("B 应放行", deep_cache, True, True,
+                      "缓存目录的深层子项（整链豁免）"))
+    except OSError:
+        pass
     return cases
 
 

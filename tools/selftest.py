@@ -268,12 +268,19 @@ def phase1() -> None:
         ok, why = app.check_deletable(bad)
         check(f"拒绝 {bad}", not ok, why)
     for good in [r"C:\Windows\Temp", r"C:\Windows\Logs", r"C:\Windows\Prefetch",
-                 r"D:\Temp", r"E:\temp", r"C:\Users\Public\Documents"]:
+                 r"D:\Temp", r"E:\temp"]:
         if not os.path.exists(good):
             skip(f"允许 {good}", "本机不存在该路径")
             continue
         ok, why = app.check_deletable(good)
         check(f"允许 {good}", ok, why)
+    # 公共文档（C:\Users\Public\Documents）自 v2.8 起归入「默认不删、显式可选」：
+    # 它虽然不在某个用户 Home 下，但同属个人数据，整目录删除不该是默认行为。
+    if os.path.exists(r"C:\Users\Public\Documents"):
+        check("默认拒绝公共文档目录 C:\\Users\\Public\\Documents",
+              not app.check_deletable(r"C:\Users\Public\Documents")[0])
+        check("显式勾选后允许公共文档目录",
+              app.check_deletable(r"C:\Users\Public\Documents", "tree", True)[0])
     # 回收站目标（kind="recyclebin"）精确放行盘根 $Recycle.Bin：这是应用自己的
     # 「清空回收站」链路（端到端实测发现被保护规则误拦，clean 永远失败）。
     # 其余 kind 与 $Recycle.Bin 的子路径照常拒绝。
@@ -530,7 +537,9 @@ def phase1() -> None:
 def phase2() -> None:
     print("\n=== 阶段二：真实删除逻辑（Temp 沙箱）===")
     real_check = app.check_deletable
-    app.check_deletable = lambda p, k="tree": (True, "")   # 沙箱在 C 盘 Temp 之外时放行
+    # 桩必须接受 clean_target 传的全部位置参数（含 v2.8 的 allow_user_data），
+    # 否则 TypeError 会把整个阶段二带崩 —— CI 首次跑全量时就是这么红的。
+    app.check_deletable = lambda p, k="tree", a=False: (True, "")   # 沙箱在 C 盘 Temp 之外时放行
     try:
         make_sandbox()
         t = {"id": "t1", "label": "沙箱目录", "path": str(SANDBOX / "tree"), "kind": "tree"}

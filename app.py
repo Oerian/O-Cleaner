@@ -3701,11 +3701,13 @@ def check_deletable(path: str, kind: str = "tree",
     # 这类东西删了会自动重建，正是清理工具该干的活。
     zone = _guarded_zone(parts)
     if zone:
-        # 缓存豁免（ZONE_CACHE_EXEMPT）：末级是已知缓存目录名，或它是缓存
-        # 目录的直接子项 —— 这类派生数据删了自动重建，不锁。
+        # 缓存豁免（ZONE_CACHE_EXEMPT）：路径中任何一段是已知缓存目录名，就按
+        # 「派生数据区」处理，不锁。为什么看整条链而不只看末级/父级：
+        # `%LOCALAPPDATA%\Temp\<某个包>\node_modules` 这种目标，末级和父级都
+        # 不是缓存名，但它明明就在 Temp 里 —— 只看一层会把这类正常清理项误拦
+        # （CI 首次跑全量时就是这么红的）。
         _ex = ZONE_CACHE_EXEMPT
-        _is_cache = (leaf in _ex
-                     or (len(parts) >= 2 and parts[-2].lower() in _ex))
+        _is_cache = any(p.lower() in _ex for p in parts)
         if not _is_cache:
             if allow_user_data:
                 return True, f"用户已明确选择：{_ZONE_LABEL[zone]}"
