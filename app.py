@@ -2295,6 +2295,8 @@ def append_history(entry: dict) -> None:
 
 
 RECEIPT_DIR = DATA_DIR / "receipts"
+# 改名暂存的中断恢复日志：rm_tree_strict 改名前后登记，启动时据此还原
+PENDING_DELETES_PATH = DATA_DIR / "pending-deletes.json"
 
 
 def _write_receipt(entry: dict) -> None:
@@ -3763,11 +3765,19 @@ def rm_tree_strict(path: str) -> tuple[bool, bool, str]:
 
     全删 = 目录已不存在；部分删除 = 已从原位置移除、内部有删不掉的文件
     残留在 .oc-deleting-* 暂存目录；两者都失败 = 原目录原封不动。
+
+    改名暂存前先落一条「待恢复」日志：改名和递归删除之间不是原子的，
+    这中间进程被杀（宿主安全钩子抛 SystemExit、用户关掉窗口、断电），
+    用户看到的就是「我的 Adobe 文件夹不见了，多了一个
+    Adobe.oc-deleting-05462600」。下次启动时按日志改回原名
+    （见 recover_pending_deletes）。
     """
     staging = path.rstrip("\\/") + f".oc-deleting-{time.time_ns() % 10**8:08d}"
+    _journal_stage(path, staging)
     try:
         os.rename(path, staging)
     except OSError as exc:
+        _journal_done(staging)
         return False, False, (f"目录被占用或无法移动，未删除任何内容"
                               f"（{exc.strerror or exc}）")
     errs: list[str] = []
@@ -3784,10 +3794,84 @@ def rm_tree_strict(path: str) -> tuple[bool, bool, str]:
     except Exception:
         pass
     if not errs and not os.path.exists(staging):
+        _journal_done(staging)
         return True, False, ""
+    # 部分残留：日志保留，下次启动会把剩下的内容改回原名交还给用户
+    # （残缺但位置正确，比「名字怪异的孤儿目录」好处理）。
     tail = staging if len(staging) <= 80 else "…" + staging[-77:]
     return False, True, (f"已从原位置移除，但内部有删不掉的文件，"
                          f"残留在 {tail}（确认相关程序已退出后可手动删除）")
+
+
+# ---- 改名暂存的中断恢复 ----
+def _journal_stage(original: str, staging: str) -> None:
+    """登记一条「即将改名删除」，供下次启动恢复。失败不影响删除本身。"""
+    try:
+        with _lock:
+            data = _load_json(PENDING_DELETES_PATH, [], use_cache=False)
+            if not isinstance(data, list):
+                data = []
+            data.append({"original": original, "staging": staging,
+                         "ts": time.time()})
+            _atomic_write(PENDING_DELETES_PATH, data[-200:])
+    except Exception:
+        pass
+
+
+def _journal_done(staging: str) -> None:
+    """删除已了结（成功或彻底失败），把这条登记去掉。"""
+    try:
+        with _lock:
+            data = _load_json(PENDING_DELETES_PATH, [], use_cache=False)
+            if not isinstance(data, list):
+                return
+            left = [d for d in data
+                    if not (isinstance(d, dict) and d.get("staging") == staging)]
+            if len(left) != len(data):
+                _atomic_write(PENDING_DELETES_PATH, left)
+    except Exception:
+        pass
+
+
+def recover_pending_deletes() -> list[dict]:
+    """启动时把上次中断留下的暂存目录改回原名。
+
+    只在「暂存存在、原名不存在」时动手 —— 两个都在说明用户自己新建了同名
+    目录，这时候贸然覆盖就是第二次伤害。
+    """
+    out: list[dict] = []
+    try:
+        data = _load_json(PENDING_DELETES_PATH, [], use_cache=False)
+    except Exception:
+        return out
+    if not isinstance(data, list) or not data:
+        return out
+    keep: list = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        orig, stage = str(item.get("original") or ""), str(item.get("staging") or "")
+        if not orig or not stage:
+            continue
+        try:
+            if os.path.exists(stage) and not os.path.exists(orig):
+                os.rename(stage, orig)
+                out.append({"restored": orig, "from": stage})
+                continue
+            if os.path.exists(stage) and os.path.exists(orig):
+                # 两个都在：保留暂存，但不再自动处理，交给用户
+                keep.append(item)
+                out.append({"skipped": orig, "reason": "原路径已被占用"})
+                continue
+            # 暂存不存在 = 上次已删干净，登记作废
+        except OSError as exc:
+            keep.append(item)
+            out.append({"failed": orig, "error": str(exc)})
+    try:
+        _atomic_write(PENDING_DELETES_PATH, keep)
+    except Exception:
+        pass
+    return out
 
 
 # ---- 删进回收站（可恢复）----
@@ -7058,6 +7142,18 @@ def main() -> None:
     stale = cleanup_stale_wiztree_exports()
     if stale:
         print(f"已清理 {stale} 个上次遗留的 WizTree 导出文件")
+
+    # 上次删除被中断（强杀 / 安全钩子 / 断电）时，目标目录停在改名暂存态：
+    # 用户看到的是「我的文件夹不见了，多了个 xxx.oc-deleting-12345678」。
+    # 启动时按日志把还没删完的改回原名，把内容交还给用户。
+    try:
+        for item in recover_pending_deletes():
+            if item.get("restored"):
+                print(f"已恢复上次中断的删除：{item['restored']}")
+            elif item.get("failed"):
+                print(f"未能恢复 {item['failed']}：{item.get('error')}")
+    except Exception:
+        traceback.print_exc()
 
     ap = argparse.ArgumentParser(description="O-Cleaner 磁盘清理助手")
     ap.add_argument("--port", type=int, default=None)
