@@ -6014,20 +6014,34 @@ class Handler(BaseHTTPRequestHandler):
                    "application/json; charset=utf-8")
 
     def _body(self) -> dict:
-        """读请求体。畸形输入一律当成空对象，交给各路由自行返回 400，
-        避免抛异常变成 500。"""
+        """读请求体。畸形输入一律当成空对象返回，但会记下原因。
+
+        `_json.loads` 失败 / 不是对象 / 超长，以前全部静默变成 {}，于是
+        调用方只能回「没有选择任何清理项」这类牛头不对马嘴的错误 ——
+        用户以为是「没勾上」，实际是请求体坏了。现在把原因记在
+        `self._body_error` 里，由 do_POST 统一回 400「请求体非法」。
+        """
+        self._body_error = ""
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
+            self._body_error = "Content-Length 非法"
             return {}
         # 限制请求体大小：本工具的请求都很小，超大的必然是异常或恶意
-        if n <= 0 or n > 4 * 1024 * 1024:
+        if n <= 0:
+            return {}
+        if n > 4 * 1024 * 1024:
+            self._body_error = "请求体过大（上限 4 MB）"
             return {}
         try:
             data = json.loads(self.rfile.read(n).decode("utf-8"))
         except Exception:
+            self._body_error = "请求体不是合法 JSON"
             return {}
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            self._body_error = "请求体必须是 JSON 对象"
+            return {}
+        return data
 
     def _query(self) -> dict:
         from urllib.parse import urlparse, parse_qs
@@ -6158,6 +6172,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         route = self.path.split("?")[0]
         body = self._body()
+        # 请求体坏掉就直说，别让各路由把「空对象」误判成「用户没选任何项」。
+        # 所有 POST 都必须带合法 JSON 对象（少数无参路由前端本来就发 {}）。
+        body_err = getattr(self, "_body_error", "")
+        if body_err:
+            return self._json({"error": f"请求体非法：{body_err}"}, 400)
 
         # ---- 自动获取 WizTree 便携版（可选加速，不装到系统里）----
         if route == "/__oc__/wiztree/install":
