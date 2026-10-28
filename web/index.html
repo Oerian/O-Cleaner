@@ -2971,16 +2971,21 @@ async function startFullScan() {
   }
 }
 
-/** 当前所在目录的子项 */
+/** 当前所在目录的子项。
+    隐藏项（Explorer 默认不显示的那些）不进本层列表 —— 它们统一出现在
+    「隐藏项」页签里，切换一次就能看，不必下钻再返回（用户 2026-10-28 反馈：
+    原来把隐藏项聚成一个可下钻的合成行，进去之后要「返回上一级」才能回来，
+    来回切换很别扭）。自定义聚合组仍走 hiddenKids 的合成下钻。 */
 function fsChildren() {
   if (!FS) return [];
   const key = fsStack.length
     ? normKey(fsStack[fsStack.length - 1].path)
     : fsRootKey();
-  // 下钻进了「隐藏系统项」聚合组：直接返回组成员
+  // 下钻进了自定义聚合组：直接返回组成员（隐藏项在组里照常显示，
+  // 用户显式归组优先于「默认隐藏」）
   if (FS.hiddenKids && FS.hiddenKids[key]) return FS.hiddenKids[key];
   const raw = (FS.kids && FS.kids[key]) || FS.nodes.filter(n => n.parent === key);
-  return groupHiddenSys(groupCustom(raw, key), key);
+  return groupCustom(raw, key).filter(n => !n.hidden_sys);
 }
 
 /** 用户自定义聚合组：STATE.fs_groups 里命中当前层的路径 → 合成组节点。
@@ -3012,30 +3017,6 @@ function groupCustom(raw, key) {
   return rest;
 }
 
-/** 把本层「默认隐藏的系统项」（$RECYCLE.BIN / System Volume Information 等，
-    资源管理器默认不显示）聚成一个可展开的独立项。
-    资源管理器默认勾着「隐藏受保护的操作系统文件」，这些项出现在扫描结果里
-    会让人以为「多扫出了东西」；聚成一组并注明缘由，既不丢信息也不吓人。
-    组员仍可通过下钻逐个查看；单个隐藏项不包一层（没有信息增益）。 */
-function groupHiddenSys(raw, key) {
-  const hid = raw.filter(n => n.hidden_sys);
-  if (hid.length < 2) return raw;
-  const gpath = key + "\\__hiddensys__";
-  const group = {
-    name: t("fs.hiddenSys", "默认隐藏的系统项"),
-    path: gpath,
-    size: hid.reduce((a, n) => a + (n.size || 0), 0),
-    type: "dir", depth: hid[0].depth || 1,
-    hidden_group: true, recognized: false, cleanable: false,
-    can_drill: true, modified: "", size_h: "", category: "",
-  };
-  FS.hiddenKids = FS.hiddenKids || {};
-  FS.hiddenKids[normKey(gpath)] = hid;
-  const rest = raw.filter(n => !n.hidden_sys);
-  rest.push(group);
-  rest.sort((a, b) => (b.size || 0) - (a.size || 0));
-  return rest;
-}
 /* 路径归一化唯一实现：统一斜杠方向 → 去掉结尾分隔符 → 小写。
    此前有三份逐字符等价的实现（normKey / normOvKey / selTotal 内联），
    合并成一个，避免口径漂移。normOvKey 的结果会作为键写入后端
@@ -3246,6 +3227,11 @@ function renderChart() {
   let rows;
   if (fsMode === "clean") rows = FS.nodes.filter(n => n.cleanable && !n.in_game_body);
   else if (fsMode === "files") rows = here.filter(n => n.type === "file");
+  else if (fsMode === "hidden") {
+    // 隐藏项：Explorer 默认看不见的那些（带 Hidden 属性，或 NTFS 元文件）。
+    // 跨全部层级取，带上所在位置，方便直接判断「这是哪个盘/目录的」。
+    rows = FS.nodes.filter(n => n.hidden_sys);
+  }
   else if (fsMode === "biggest") {
     // 全盘最大项目：纯按体积降序，把中间容器（steamapps/common 等）剔掉，
     // 因为容器名对用户没有意义，它的子项才是实体。
@@ -3264,7 +3250,10 @@ function renderChart() {
   // 用户要求下钻后支持其他排序方式）。全部视图取前 30。
   // 聚合组（hidden_group）不受 size>0 门槛约束：组员的体积可能全是 0
   // （快速扫描量不出隐藏系统文件），但组本身必须可见，否则归组形同虚设。
-  rows = rows.filter(n => n.size > 0 || n.hidden_group)
+  // 「隐藏项」页签同理：NTFS 元文件与未量出体积的隐藏目录也要列出来，
+  // 否则用户会觉得「明明有隐藏项却没显示」。
+  const keepZero = n => n.hidden_group || (fsMode === "hidden");
+  rows = rows.filter(n => n.size > 0 || keepZero(n))
     .sort(FS_SORT === "name"
       ? (a, b) => String(a.name).localeCompare(String(b.name), "zh-Hans-CN")
       : (a, b) => b.size - a.size)
@@ -3275,6 +3264,9 @@ function renderChart() {
     ["biggest", t("fs.biggest","全盘最大项目")],
     ["files", t("fs.filesOnly","只看文件")],
     ["clean", t("fs.allClean","全部可清理（{n}）").replace("{n}", FS.nodes.filter(n => n.cleanable).length)],
+    // 隐藏项页签：与「全部可清理」同一形态（跨层级），但内容是本盘所有
+    // Explorer 默认不显示的项。0 项时仍显示页签（带 0），避免用户以为功能没了。
+    ["hidden", t("fs.hiddenTab","隐藏项（{n}）").replace("{n}", FS.nodes.filter(n => n.hidden_sys).length)],
   ];
   $("fsModes").innerHTML = modes.map(([k, label]) =>
     `<span class="seg${fsMode === k ? " on" : ""}" data-m="${k}">${esc(label)}</span>`).join("");
@@ -3295,14 +3287,23 @@ function renderChart() {
   $("fsChartHint").textContent =
     fsMode === "biggest" ? t("fs.hintBiggest","跨全部层级按体积排序的大项（已剔除中间容器目录）")
     : fsMode === "clean" ? t("fs.hintClean","整棵树里所有被判定为可清理的项目")
+    : fsMode === "hidden" ? t("fs.hintHidden","资源管理器默认不显示的项（$RECYCLE.BIN、System Volume Information、NTFS 元文件、带隐藏属性的目录与文件）。点页签随时切回，不必层层返回")
     : t("fs.hintDrill","点击目录下钻看子项，点击文件看详情")
       + (FS.subdir_ready ? t("fs.hintWizOn","（已开启 WizTree 加速，可任意层下钻）")
                          : t("fs.hintWizOff","（未装 WizTree，深层下钻会现场扫描，稍慢但可用）"));
 
   if (!rows.length) {
+    // 本层「没有可显示的项」有两种情况：真的空，或者剩下的全是默认隐藏项。
+    // 后者必须说清楚，否则用户会以为目录是空的（隐藏项被收进页签了）。
+    const _lvl = fsStack.length ? normKey(fsStack[fsStack.length - 1].path) : fsRootKey();
+    const _hidHere = FS.nodes.filter(n => n.parent === _lvl && n.hidden_sys).length;
     $("fsChart").innerHTML = '<div class="empty" style="margin:0">' +
-      t("fs.emptyLayer","本层没有超过 {h} 的子项。").replace("{h}", esc(FS.min_child_h)) +
-      (fsStack.length ? "" : t("fs.emptyLayerTail","可切换上面的视图，或点返回上一级。")) + '</div>';
+      (fsMode === "hidden"
+        ? t("fs.emptyHidden","本盘没有扫到默认隐藏的项。若确认存在（例如 $RECYCLE.BIN），可能是当前扫描档位较浅：换个更大的扫描深度或全盘扫描再看。")
+        : (fsMode === "dirs" && _hidHere > 0
+          ? t("fs.onlyHidden","本层剩下的 {n} 项都是默认隐藏项，已收进「隐藏项」页签。").replace("{n}", _hidHere)
+          : t("fs.emptyLayer","本层没有超过 {h} 的子项。").replace("{h}", esc(FS.min_child_h)) +
+            (fsStack.length ? "" : t("fs.emptyLayerTail","可切换上面的视图，或点返回上一级。")))) + '</div>';
     return;
   }
 
@@ -3332,7 +3333,7 @@ function renderChart() {
     const rowChecked = canCheck &&
       (it.target_id ? selected.has(it.target_id) : selPaths.has(it.path));
     // 全盘视图里必须显示它在哪里，否则只看到一个名字不知道归属
-    const loc = fsMode === "biggest"
+    const loc = (fsMode === "biggest" || fsMode === "hidden")
       ? it.path.replace(/\\[^\\]+$/, "") + "\\" : "";
     // data-can-drill：点它会下钻而不是弹详情。渲染断言要靠它挑出「会弹详情」
     // 的叶子目录 —— 否则随手取一行可能触发下钻，测出来的结论就是错的。
@@ -4810,7 +4811,10 @@ const I18N_EN = {
   "fs.hintBiggest": "Big items sorted by size across all levels (container dirs excluded)",
   "fs.hintClean": "Everything judged cleanable in the whole tree",
   "fs.hintDrill": "Click a folder to drill down, a file for details",
-  "fs.hiddenSys": "Hidden system items",
+  "fs.hiddenTab": "Hidden items ({n})",
+  "fs.hintHidden": "Items Explorer hides by default ($RECYCLE.BIN, System Volume Information, NTFS metadata, hidden folders and files). Switch back with one click — no need to climb back up.",
+  "fs.emptyHidden": "No default-hidden items were found on this drive. If you are sure they exist (e.g. $RECYCLE.BIN), the scan depth may be too shallow — try a deeper or full scan.",
+  "fs.onlyHidden": "The other {n} item(s) at this level are all default-hidden — they live in the \"Hidden items\" tab.",
   "fs.hintWizOn": " (WizTree enabled — drill to any level)",
   "fs.hintWizOff": " (No WizTree — deep drills scan on the fly, slower but work)",
   "fs.emptyLayer": "Nothing above {h} at this level.",

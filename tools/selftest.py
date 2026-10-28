@@ -175,6 +175,36 @@ def phase1() -> None:
           not [t["id"] for t in targets
                if isinstance(t.get("path"), str) and "C:\\" in t["path"].upper()])
 
+    # 默认隐藏项判定：以磁盘真实属性为准，名字名单只作兜底。
+    # 旧版只看 20 来个名字，实测漏掉 C:\Recovery / C:\ProgramData /
+    # C:\OneDriveTemp / D:\DumpStack.log 这些带 Hidden 的项，
+    # 界面里「默认隐藏的系统项」因此不全（用户 2026-10-28 反馈）。
+    import ctypes
+
+    _hid_dir = tempfile.mkdtemp(prefix="oc-hidden-")
+    try:
+        _plain = os.path.join(_hid_dir, "plain.txt")
+        _hidf = os.path.join(_hid_dir, "hidden.txt")
+        for _p in (_plain, _hidf):
+            with open(_p, "w", encoding="utf-8") as _f:
+                _f.write("x")
+        try:
+            ctypes.windll.kernel32.SetFileAttributesW(_hidf, 0x2)   # FILE_ATTRIBUTE_HIDDEN
+            _attr_ok = True
+        except Exception:                                           # noqa: BLE001
+            _attr_ok = False
+        if _attr_ok:
+            check("隐藏项判定按属性：带 Hidden 属性的文件算默认隐藏",
+                  app._is_hidden_sys("hidden.txt", _hidf))
+            check("隐藏项判定按属性：普通文件不算隐藏",
+                  not app._is_hidden_sys("plain.txt", _plain))
+        else:
+            skip("隐藏项属性判定", "本机无法设置文件属性（非 Windows 或权限不足）")
+        check("隐藏项判定兜底名单：NTFS 元文件与回收站仍认出",
+              app._is_hidden_sys("$MFT", "") and app._is_hidden_sys("$Recycle.Bin", ""))
+    finally:
+        shutil.rmtree(_hid_dir, ignore_errors=True)
+
     # 盘符：盘符专属项必须带 %DRIVE%，通用项必须不带
     sys_targets = app.build_targets("C")
     check("C 盘目标非空", len(sys_targets) > 10, f"{len(sys_targets)} 项")

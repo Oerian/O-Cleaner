@@ -941,7 +941,7 @@ def _wiztree_parse(csv_path: str, on_progress=None) -> dict:
 
 
 # 默认隐藏的系统项：资源管理器勾着「隐藏受保护的操作系统文件」时不显示，
-# 但 MFT/完整递归都能扫到。前端把这些聚成一个可展开的独立项，
+# 但 MFT/完整递归都能扫到。前端把这些集中到一个「隐藏项」页签里，
 # 避免「扫出来的和资源管理器看到的不一样」让用户困惑。
 # 除目录外还收 NTFS 的根级元文件（$MFT / $LogFile / $Extend 等）：
 # 它们是文件系统自身的记账数据，只存在于盘根，用户删不了也不该删。
@@ -952,6 +952,34 @@ _HIDDEN_SYS_NAMES = {
     "$mft", "$mftmirr", "$logfile", "$volume", "$attrdef", "$bitmap",
     "$boot", "$badclus", "$secure", "$upcase", "$extend",
 }
+
+_FILE_ATTR_HIDDEN = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0x2)
+
+
+def _is_hidden_sys(name: str, path: str = "", attrs: int | None = None) -> bool:
+    """是否「资源管理器默认看不见」的项。
+
+    判据以**磁盘上的真实属性**为准，不再是名字名单：Windows 资源管理器
+    默认关着「隐藏的项目」（HIDDEN 属性即隐藏），所以只要带 Hidden 就算。
+    此前只看那 20 来个名字，实测漏掉的不少 —— `C:\\Recovery`、
+    `C:\\ProgramData`、`C:\\OneDriveTemp`、`C:\\AMTAG.BIN`、`D:\\DumpStack.log`
+    都带 Hidden 却不在名单里，于是混在排行里，和资源管理器对不上
+    （用户反馈「默认隐藏的系统项还是不全」正是这个）。
+
+    名单保留作为兜底，覆盖属性读不到的两种情况：
+      * NTFS 元文件（$MFT / $LogFile…）根本 stat 不到；
+      * 某些清理工具会把条目的隐藏属性抹掉，但语义上仍是系统项。
+    """
+    if str(name or "").lower() in _HIDDEN_SYS_NAMES:
+        return True
+    if attrs is None:
+        if not path:
+            return False
+        try:
+            attrs = os.stat(path, follow_symlinks=False).st_file_attributes
+        except (OSError, AttributeError, ValueError):
+            return False
+    return bool(int(attrs) & _FILE_ATTR_HIDDEN)
 
 
 def _wiztree_raw_nodes(root: str, table: dict,
@@ -1306,8 +1334,8 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
             "size": int(n.get("size") or 0),
             "modified": str(n.get("modified") or ""),
             "has_children": bool(n.get("hasChildren")),
-            # 默认隐藏的系统项标记：前端据此把同层这些项聚成一组
-            "hidden_sys": name.lower() in _HIDDEN_SYS_NAMES,
+            # 默认隐藏的系统项标记：前端据此把它们收进「隐藏项」页签
+            "hidden_sys": _is_hidden_sys(name, path),
         }
         info = identify(name, path, item["type"])
         info.pop("match_score", None)      # 内部打分不进 payload
@@ -1720,6 +1748,8 @@ def list_subdirs(drive: str, path: str, limit: int = 80) -> dict:
                                 st.st_mtime).strftime("%Y-%m-%d"),
                             "type": "dir" if is_dir else "file",
                             "size_unknown": bool(is_dir and not do_size),
+                            # 属性顺手带出来，省一次 stat（下面标 hidden_sys 用）
+                            "attrs": getattr(st, "st_file_attributes", None),
                         })
                     except OSError:
                         continue
@@ -1729,8 +1759,9 @@ def list_subdirs(drive: str, path: str, limit: int = 80) -> dict:
 
     for c in children:
         c["size_h"] = human(c["size"])
-        # 与占用树同一套标记：下钻视图里前端才能把同层隐藏项聚成一组
-        c["hidden_sys"] = str(c.get("name") or "").lower() in _HIDDEN_SYS_NAMES
+        # 与占用树同一套标记：下钻视图里前端据此把隐藏项收进「隐藏项」页签
+        c["hidden_sys"] = _is_hidden_sys(c.get("name") or "", c.get("path") or "",
+                                         c.pop("attrs", None))
         info = identify(c["name"], c["path"], c.get("type") or "dir")
         info.pop("match_score", None)
         c.update(info)

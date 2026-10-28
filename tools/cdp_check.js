@@ -669,6 +669,29 @@ class CDP {
   const bigN = await evaluate(`document.querySelectorAll('#fsChart .vrow').length`);
   checkScan("排行视图可切换（本层/全盘最大/文件/可清理）",
         modeN >= 4 && bigN > 0, `${modeN} 个视图，当前 ${bigN} 条`);
+
+  // 「隐藏项」页签（2026-10-28）：默认隐藏的项不再是可下钻的合成行，
+  // 而是排行模块里的一个页签 —— 进去看、切回来，都不用经过面包屑。
+  // 注意：切完必须切回**原视图**，后面的「默认视图」断言依赖它。
+  const hidTab = await evaluate(`(() => {
+    const s = document.querySelector('#fsModes .seg[data-m="hidden"]');
+    if (!s) return { ok: false };
+    const before = (document.querySelector('#fsModes .seg.on') || {}).dataset?.m || '';
+    const label = s.innerText.trim();
+    s.click();
+    const on = (document.querySelector('#fsModes .seg.on') || {}).dataset?.m;
+    const rows = document.querySelectorAll('#fsChart .vrow').length;
+    const back = document.querySelector('#fsModes .seg[data-m="' + before + '"]');
+    if (back) back.click();
+    const after = (document.querySelector('#fsModes .seg.on') || {}).dataset?.m;
+    return { ok: true, label, on, rows, before, after };
+  })()`);
+  check("占用排行有「隐藏项」页签且可切换",
+        hidTab.ok && hidTab.on === "hidden", JSON.stringify(hidTab));
+  check("从隐藏项页签能一键切回原视图",
+        !!hidTab.before && hidTab.after === hidTab.before,
+        `${hidTab.before} → ${hidTab.after}`);
+
   // 「游戏等大项」这个分类已按要求移除：游戏不再单列一类，
   // 而是直接进「全盘最大项目」，并带 Steam 中文名标注。
   const hasGamesMode = await evaluate(
