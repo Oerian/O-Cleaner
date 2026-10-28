@@ -698,6 +698,15 @@ class CDP {
   check("隐藏项页签的计数与实际行数一致",
         Number.isFinite(hidN) && (hidN === hidTab.rows || hidTab.rows >= 30),
         `页签=${hidN} 行数=${hidTab.rows}「${hidTab.label}」`);
+  // 页签吸顶（2026-10-28）：视图切换与排序两行在模块内固定，列表再长也始终在手边。
+  const sticky = await evaluate(`(() => {
+    const el = document.querySelector('.fstabbar');
+    if (!el) return { ok: false };
+    const cs = getComputedStyle(el);
+    return { ok: true, pos: cs.position, top: cs.top, z: cs.zIndex };
+  })()`);
+  check("占用排行的页签行在模块内吸顶（position:sticky）",
+        sticky.ok && sticky.pos === "sticky", JSON.stringify(sticky));
 
   // 「游戏等大项」这个分类已按要求移除：游戏不再单列一类，
   // 而是直接进「全盘最大项目」，并带 Steam 中文名标注。
