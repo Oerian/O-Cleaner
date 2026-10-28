@@ -3230,7 +3230,16 @@ function renderChart() {
   else if (fsMode === "hidden") {
     // 隐藏项：Explorer 默认看不见的那些（带 Hidden 属性，或 NTFS 元文件）。
     // 跨全部层级取，带上所在位置，方便直接判断「这是哪个盘/目录的」。
-    rows = FS.nodes.filter(n => n.hidden_sys);
+    // 按路径去重：下钻时 /subdirs 会把已经出现在树里的同一目录再补一份，
+    // 不过滤就会在页签里看到重复行。
+    const seen = new Set();
+    rows = FS.nodes.filter(n => {
+      if (!n.hidden_sys) return false;
+      const k = normKey(n.path);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
   }
   else if (fsMode === "biggest") {
     // 全盘最大项目：纯按体积降序，把中间容器（steamapps/common 等）剔掉，

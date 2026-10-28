@@ -1069,10 +1069,12 @@ def _wiztree_raw_nodes(root: str, table: dict,
             walk(t["path"], 2, t["path"], t["size"])
 
     # 盘符根下的大文件（原版同样单独列在根层）；
-    # 隐藏系统文件（pagefile/hiberfil/DumpStack 等）不受门槛限制，保证聚合组完整
+    # 隐藏项不受门槛限制，否则「隐藏项」页签会缺项：pagefile/hiberfil 这类
+    # 体积大还好，AMTAG.BIN 这种几 KB 的隐藏文件会被 min_child 直接挡掉。
+    # 判据用属性（_is_hidden_sys），不再只认名字名单。
     rootfiles = []
     for name, sz, full in files.get(root_key, ()):
-        if sz >= min_child or name.lower() in _HIDDEN_SYS_NAMES:
+        if sz >= min_child or _is_hidden_sys(name, full):
             rootfiles.append({"name": name, "path": full.lower(),
                               "size": sz, "modified": ""})
     return out, rootfiles, total
