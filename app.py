@@ -881,6 +881,8 @@ def _wiztree_parse(csv_path: str, on_progress=None) -> dict:
     WizTree 的 CSV 正好把两者都给全了，顺手存下来即可完全复刻原行为。
 
     只保留达到体积门槛的条目，避免把 C 盘 77 万行全部留在内存里。
+    **盘根例外**：盘根的直接子目录与直接文件一律保留（数量只有几十个），
+    否则 `AMTAG.BIN`、`DumpStack.log.tmp` 这类几 KB 的默认隐藏项连门都进不来。
 
     on_progress(frac) 是可选回调，按读到的字节数报进度（0~1）。
     这一步在 C 盘上会读上百 MB，是整条链路里最长的纯 CPU 阶段，
@@ -928,7 +930,13 @@ def _wiztree_parse(csv_path: str, on_progress=None) -> dict:
                 # 深层子目录仍按体积门槛裁剪，内存不受影响。
                 if size >= floor or low.count("\\") <= 1:
                     dirs[low] = size
-            elif size >= floor:
+            elif size >= floor or low.count("\\") <= 1:
+                # 盘根下的文件同样无条件保留：门槛只是省内存的手段，而盘根
+                # 一共就几十个文件，留下几个 KB 的完全无所谓。不这么做的话，
+                # AMTAG.BIN / DumpStack.log.tmp 这类**很小但默认隐藏**的文件
+                # 在解析阶段就被丢掉，下游 _is_hidden_sys 的属性判定根本
+                # 拿不到它们 —— 「隐藏项」页签因此比资源管理器少几项。
+                # 深层文件仍按门槛裁剪，内存不受影响。
                 parent = os.path.dirname(low)
                 files.setdefault(parent, []).append(
                     (path.rstrip("\\").split("\\")[-1], size, path))

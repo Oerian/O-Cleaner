@@ -205,6 +205,45 @@ def phase1() -> None:
     finally:
         shutil.rmtree(_hid_dir, ignore_errors=True)
 
+    # 隐藏项能不能真正出现在界面上，取决于**解析阶段有没有把它留下**。
+    # 曾经 `_wiztree_parse` 对文件一律套 50 MB 门槛，AMTAG.BIN（1.5 KB）、
+    # DumpStack.log.tmp（8 KB）在进表前就被丢掉，后面再按属性判定也救不回来
+    # ——「隐藏项」页签因此比资源管理器少几项。盘根必须豁免门槛。
+    _wz_dir = tempfile.mkdtemp(prefix="oc-wiz-")
+    try:
+        _wz_csv = os.path.join(_wz_dir, "wiz.csv")
+        with open(_wz_csv, "w", encoding="utf-8") as _f:
+            _f.write(
+                '"WizTree","3.42"\n'
+                '"Path","Size","Allocated","Modified","Attributes","Files","Folders"\n'
+                '"C:\\\\",1000000000000,1000000000000,2024/01/01 00:00:00,,700000,90000\n'
+                '"C:\\\\AMTAG.BIN",1545,4096,2024/01/01 00:00:00,AH,0,0\n'
+                '"C:\\\\DumpStack.log.tmp",8192,8192,2024/01/01 00:00:00,AH,0,0\n'
+                '"C:\\\\pagefile.sys",17179869184,17179869184,2024/01/01 00:00:00,HS,0,0\n'
+                '"C:\\\\Windows\\\\",80000000000,80000000000,2024/01/01 00:00:00,,500000,60000\n'
+                '"C:\\\\Windows\\\\tiny.log",1024,1024,2024/01/01 00:00:00,,0,0\n'
+                '"C:\\\\Windows\\\\huge.bin",600000000,600000000,2024/01/01 00:00:00,,0,0\n')
+        _wz = app._wiztree_parse(_wz_csv)
+        _wz_root = os.path.normpath("C:\\").lower()
+        _wz_win = os.path.normpath("C:\\Windows").lower()
+        _root_names = {n for n, _s, _p in _wz["files"].get(_wz_root, ())}
+        _win_names = {n for n, _s, _p in _wz["files"].get(_wz_win, ())}
+        check("解析阶段不按体积丢掉盘根的隐藏小文件",
+              {"AMTAG.BIN", "DumpStack.log.tmp"} <= _root_names, str(sorted(_root_names)))
+        check("解析阶段仍按体积裁剪深层小文件（省内存的初衷不变）",
+              "tiny.log" not in _win_names and "huge.bin" in _win_names,
+              str(sorted(_win_names)))
+        _rf = app._wiztree_raw_nodes(
+            "C:\\", _wz, 2, 50 * 1024 * 1024, 0.1,
+            100 * 1024 * 1024, 200, 5000, 8)[1]
+        _rf_names = {f["name"] for f in _rf}
+        # 用 DumpStack.log.tmp 断言而不是 AMTAG.BIN：后者只在本机存在，
+        # CI 机器上 stat 不到、名字也不在兜底名单里，断言会假红。
+        check("根层节点里带上了盘根的隐藏小文件（隐藏项页签的数据源）",
+              "DumpStack.log.tmp" in _rf_names, str(sorted(_rf_names)))
+    finally:
+        shutil.rmtree(_wz_dir, ignore_errors=True)
+
     # 盘符：盘符专属项必须带 %DRIVE%，通用项必须不带
     sys_targets = app.build_targets("C")
     check("C 盘目标非空", len(sys_targets) > 10, f"{len(sys_targets)} 项")

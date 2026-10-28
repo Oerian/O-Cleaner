@@ -3275,7 +3275,10 @@ function renderChart() {
     ["clean", t("fs.allClean","全部可清理（{n}）").replace("{n}", FS.nodes.filter(n => n.cleanable).length)],
     // 隐藏项页签：与「全部可清理」同一形态（跨层级），但内容是本盘所有
     // Explorer 默认不显示的项。0 项时仍显示页签（带 0），避免用户以为功能没了。
-    ["hidden", t("fs.hiddenTab","隐藏项（{n}）").replace("{n}", FS.nodes.filter(n => n.hidden_sys).length)],
+    // 计数按路径去重：下钻时 /subdirs 会把树里已有的同一目录再补一份，
+    // 不去重就会出现「页签写 14 项、实际只列出 12 行」的自相矛盾。
+    ["hidden", t("fs.hiddenTab","隐藏项（{n}）").replace("{n}",
+      new Set(FS.nodes.filter(n => n.hidden_sys).map(n => normKey(n.path))).size)],
   ];
   $("fsModes").innerHTML = modes.map(([k, label]) =>
     `<span class="seg${fsMode === k ? " on" : ""}" data-m="${k}">${esc(label)}</span>`).join("");

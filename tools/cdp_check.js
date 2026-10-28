@@ -691,6 +691,13 @@ class CDP {
   check("从隐藏项页签能一键切回原视图",
         !!hidTab.before && hidTab.after === hidTab.before,
         `${hidTab.before} → ${hidTab.after}`);
+  // 页签上的计数必须和实际渲染的行数对得上（超过 30 行时只取前 30，属正常截断）。
+  // 计数改成按路径去重就是为了这一条：下钻过之后 /subdirs 会把同一目录再补一份，
+  // 不去重时会出现「页签写 14 项、只列出 12 行」的自相矛盾。
+  const hidN = Number((String(hidTab.label || "").match(/(\d+)/) || [])[1]);
+  check("隐藏项页签的计数与实际行数一致",
+        Number.isFinite(hidN) && (hidN === hidTab.rows || hidTab.rows >= 30),
+        `页签=${hidN} 行数=${hidTab.rows}「${hidTab.label}」`);
 
   // 「游戏等大项」这个分类已按要求移除：游戏不再单列一类，
   // 而是直接进「全盘最大项目」，并带 Steam 中文名标注。

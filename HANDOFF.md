@@ -1305,6 +1305,21 @@ SECURITY 该处表述未动。
 
 > 教训：判定「用户看不见的东西」要用**系统自己的判据**（属性 / 权限 / 视图设置），别用自己维护的名字清单 —— 清单一定会漏，而且漏了没人知道。
 
+#### 40.1 隐藏项「不全」的第二半：解析阶段就把小文件丢了（2026-10-28）
+
+第一版只修了「**已经进表**的文件按属性过滤」，没修「**根本没进表**」，所以页签仍然缺项。真实 C 盘核对才露出来：页签 3 项，而 `/subdirs?path=C:\` 能给出 10 项。
+
+根因在 `_wiztree_parse`：文件一律套 `size >= floor`（`DISK_TREE_MIN_CHILD_MB`，默认 50 MB），`C:\AMTAG.BIN`（1.5 KB）、`C:\DumpStack.log.tmp`（8 KB）在**解析阶段**就被丢弃，`_wiztree_raw_nodes` 末尾那条 `_is_hidden_sys` 兜底根本拿不到它们 —— 后段判定再准也没用。
+
+- **修法**：盘根的直接文件同样豁免门槛（`elif size >= floor or low.count("\\") <= 1:`），跟盘根目录同一条规则。盘根一共几十个文件，留着几个 KB 的完全无所谓；**深层文件仍按门槛裁剪**，省内存的初衷不变。
+- **顺带修的**：页签计数从 `FS.nodes.filter(...).length` 改成**按路径去重**计数。下钻时 `/subdirs` 会把树里已有的同一目录再补一份，不去重会出现「页签写 14 项、只列出 12 行」。
+- **真实数据核对**（本机 C 盘，`engine=wiztree`）：页签从 3 项变成 **12 项** —— `ProgramData`(18.5 G)、`$Recycle.Bin`(14.0 G)、`hiberfil.sys`(13.6 G)、`Windows\Installer`(2.4 G)、`OneDriveTemp`、`Recovery`、`System Volume Information`、`Documents and Settings`、`AMTAG.BIN`、`DumpStack.log.tmp`、`swapfile.sys`、`$Recycle.Bin\<SID>`。与 `/subdirs` 的 10 项一致，多出的 2 项在更深层（`Windows\Installer`、回收站 SID 子目录）。
+- **门禁**：selftest 新增 3 条（盘根小隐藏文件不被解析丢掉 / 深层小文件仍被裁 / 根层节点带上它）；CDP 新增 1 条（页签计数 = 实际行数或已截断到 30）。终态：selftest 全绿、guard_matrix 50 项、CDP 88-0-5。
+
+> 教训：**「过滤」和「采集」是两段**。修了后段的过滤条件，不代表前段没丢数据 —— 只有拿真实盘把「应该看到的项」逐条数出来核对，才知道整条链路是否真的通了。
+>
+> 另：本轮核对时 `C:\pagefile.sys` 已不存在（这台机器只剩 `hiberfil.sys` / `swapfile.sys`），页签里少了它不是回归，是环境事实。
+
 ---
 
 ## 七、文件资产与代码清单
