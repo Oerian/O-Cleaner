@@ -1497,11 +1497,14 @@ class CDP {
     check("回收建议面板无独立删除按钮（并入主清理出口）",
           gadd.delGone && gadd.recMap, `delGone=${gadd.delGone} recMap=${gadd.recMap}`);
     check("回收建议折叠头存在（无内容时面板隐藏但结构在）", gadd.orphanToggle);
-    // 折叠状态记忆：展开面板后 localStorage 必须记下 "1"
+    // 折叠状态记忆：展开面板后 localStorage 必须记下 "1"。
+    // 门控：只有面板真的渲染过数据行（toggle 的 listener 在渲染时才绑定，
+    // CI 无 Steam 无残留时结构在但没绑过，点了也不会写 localStorage）。
     const orphanMem = await evaluate(`(async () => {
       const t = document.querySelector('#stOrphanToggle');
       const b = document.querySelector('#stOrphanBody');
-      if (!t || !b) return { skip: true };
+      if (!t || !b || !document.querySelector('#stOrphanBody .ock'))
+        return { skip: true };
       const was = b.style.display !== 'none';
       if (!was) t.click();                       // 展开 → 应写入记忆
       const v1 = localStorage.getItem('oc-orphan-open');
