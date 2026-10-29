@@ -2245,6 +2245,27 @@ function daysSince(d) {
   return Math.floor((Date.now() - t) / 86400000);
 }
 
+/** 平台页签（吸顶头内）：点击滚动到对应库分区，长滚动不再靠瞎划。
+    无数据的平台置灰禁点；Steam 没装也要构建（自定义库分区永远可达）。
+    必须在 renderOtherPlatforms() 之后调用 —— Epic/GOG 的显隐由它决定。 */
+function renderSteamTabs() {
+  if (!$("stTabs")) return;
+  $("stTabs").innerHTML = [
+    ["secSteam", "Steam"], ["epicPanel", "Epic"], ["gogPanel", "GOG"],
+    ["secCustom", t("pane.customLibs","自定义游戏库")],
+  ].map(([id, label]) => {
+    const el = $(id);
+    const vis = el && el.style.display !== "none";
+    return `<span class="seg${vis ? "" : " dim"}" data-tab="${id}"
+      style="${vis ? "" : "opacity:.45;pointer-events:none"}">${esc(label)}</span>`;
+  }).join("");
+  $("stTabs").querySelectorAll("[data-tab]").forEach(x =>
+    x.addEventListener("click", () => {
+      const el = $(x.dataset.tab);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }));
+}
+
 /** 独立页面：吸顶模块头 + 残留清理（折叠勾选）+ Steam 游戏库（按盘分组）
  *  + Epic / GOG / 自定义游戏库（2026-10-29 起：一个面板承载全部） */
 function renderSteamPage() {
@@ -2277,6 +2298,7 @@ function renderSteamPage() {
     });
     $("stOverview").appendChild(cta);
     renderOtherPlatforms();   // Steam 没有不等于 Epic/GOG 也没有
+    renderSteamTabs();        // 页签在 Epic/GOG 显隐确定后构建
     return;
   }
 
@@ -2310,22 +2332,6 @@ function renderSteamPage() {
   $("stSort").querySelectorAll("[data-so]").forEach(x => x.addEventListener("click", () => {
     steamSort = x.dataset.so; renderSteamPage();
   }));
-
-  // ---- 平台页签（吸顶头内）：点击滚动到对应库分区，长滚动不再靠瞎划 ----
-  $("stTabs").innerHTML = [
-    ["secSteam", "Steam"], ["epicPanel", "Epic"], ["gogPanel", "GOG"],
-    ["secCustom", t("pane.customLibs","自定义游戏库")],
-  ].map(([id, label]) => {
-    const el = $(id);
-    const vis = el && el.style.display !== "none";
-    return `<span class="seg${vis ? "" : " dim"}" data-tab="${id}"
-      style="${vis ? "" : "opacity:.45;pointer-events:none"}">${esc(label)}</span>`;
-  }).join("");
-  $("stTabs").querySelectorAll("[data-tab]").forEach(x =>
-    x.addEventListener("click", () => {
-      const el = $(x.dataset.tab);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    }));
 
   let games = [...s.games];
   const q = steamFilter.trim().toLowerCase();
@@ -2555,6 +2561,7 @@ function renderSteamPage() {
 
   // ---- Epic / GOG 游戏库（有才显示）----
   renderOtherPlatforms();
+  renderSteamTabs();          // 页签在 Epic/GOG 显隐确定后构建
 
   // 统一挂「打开目录」事件
   $("steamView").querySelectorAll("[data-reveal]").forEach(b =>
