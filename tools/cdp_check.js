@@ -1629,6 +1629,184 @@ class CDP {
           await evaluate(`document.querySelector('#fullView').style.display !== 'none'`));
   }
 
+  // --- 完整功能交互（预设 / 清理范围 / 大文件 / 语言 / 视图导航）---
+  // 此前只有存在性断言，这里补真实点击链路：点 → 等状态迁移 → 断言 → 还原。
+  console.log("\n  --- 完整功能交互 ---");
+
+  // ① 预设切换：挑一个按钮统计带「预计可清 N 项」的预设（本机 D: 盘 +
+  //    仅本盘范围下 safe/dev 可能合法为 0 项无数字），点击后断言：
+  //    高亮迁移 + selected.size 与按钮统计一致（presetYield 与 applyPreset 同口径）。
+  try {
+    const pv = await evaluate(`(() => {
+      if (typeof STATE === 'undefined' || !STATE.targets.length) return null;
+      const btns = [...document.querySelectorAll('.preset')].filter(b => b.dataset.id !== 'none');
+      if (!btns.length) return null;
+      const withStat = btns.map(b => ({ b,
+        stat: ((b.querySelector('span:last-child') || {}).textContent) || '' }))
+        .find(x => /\\d+/.test(x.stat));
+      const use = withStat ? withStat.b : btns[0];
+      const m = withStat ? withStat.stat.match(/\\d+/) : null;
+      const expectN = m ? Number(m[0]) : null;
+      use.click();
+      const act = document.querySelector('.preset.act');
+      return { pid: use.dataset.id, expectN, n: selected.size,
+               selN: document.querySelector('#selN').textContent,
+               actId: act ? act.dataset.id : null };
+    })()`);
+    if (pv) {
+      check("点预设：高亮迁移且选中数与预计统计一致",
+            pv.actId === pv.pid && (pv.expectN === null || pv.n === pv.expectN)
+            && Number(pv.selN) >= pv.n,
+            `preset=${pv.pid} selected=${pv.n} 预计=${pv.expectN} selN=${pv.selN}`);
+      const pv2 = await evaluate(`(() => {
+        const none = [...document.querySelectorAll('.preset')].find(b => b.dataset.id === 'none');
+        if (!none) return null;
+        none.click();
+        const act = document.querySelector('.preset.act');
+        return { n: selected.size, actId: act ? act.dataset.id : null };
+      })()`);
+      check("点预设 none：清零还原", pv2 && pv2.n === 0 && pv2.actId === "none",
+            JSON.stringify(pv2));
+    } else {
+      skip2("预设切换交互（无目标数据或页面无 safe/none 按钮）");
+    }
+  } catch (e) { INFO.push(`预设交互异常: ${e.message}`); }
+
+  // ② 清理范围切换：all ↔ drive。基线取 all 态（用户级项在 drive 态被后端
+  //    排除），测完精确还原到进入时的范围值 —— 否则会污染后面「盘符归属」
+  //    的默认值断言（非系统盘默认「仅本盘」）。
+  try {
+    const sv = await evaluate(`(async () => {
+      const sel = document.querySelector('#scopeSel');
+      if (!sel) return null;
+      const userN = () => STATE.targets.filter(t => t.scope === 'user').length;
+      const setScope = async val => {
+        sel.value = val;
+        sel.dispatchEvent(new Event('change'));
+        for (let i = 0; i < 40; i++) {
+          await new Promise(r => setTimeout(r, 250));
+          if (STATE.scope === val) break;
+        }
+        await new Promise(r => setTimeout(r, 300));
+      };
+      const orig = sel.value;
+      await setScope('all');
+      const allUser = userN(), allTotal = STATE.targets.length;
+      await setScope('drive');
+      const driveUser = userN(), driveTotal = STATE.targets.length;
+      await setScope(orig);
+      return { orig, allUser, allTotal, driveUser, driveTotal,
+               endUser: userN(), endScope: STATE.scope, endVal: sel.value };
+    })()`);
+    if (sv) {
+      check("切范围=仅当前盘：用户级项被排除",
+            sv.driveUser === 0
+            && (sv.allUser === 0 || sv.driveTotal === sv.allTotal - sv.allUser),
+            `all态 ${sv.allTotal} 项目标（用户级 ${sv.allUser}）→ drive态 ${sv.driveTotal} 项（用户级 ${sv.driveUser}）`);
+      check("范围还原：回到进入时的值且用户级项数一致",
+            sv.endScope === sv.orig && sv.endVal === sv.orig
+            && sv.endUser === (sv.orig === "all" ? sv.allUser : 0),
+            `orig=${sv.orig} end=${sv.endScope} user=${sv.endUser}`);
+    } else {
+      skip2("清理范围切换交互（页面无 scopeSel）");
+    }
+  } catch (e) { INFO.push(`范围切换异常: ${e.message}`); }
+
+  // ③ 大文件排行：点开 → 遮罩亮 + 模态有内容 → 用真实关闭按钮收起
+  try {
+    const bf = await evaluate(`(() => {
+      document.querySelector('#btnBigFiles').click();
+      const mask = document.querySelector('#mask');
+      return { on: mask.classList.contains('on'),
+               hasModal: !!document.querySelector('#modal h2') };
+    })()`);
+    check("大文件排行：点开弹出模态", bf.on && bf.hasModal, JSON.stringify(bf));
+    // 等真实关闭按钮出现（全盘遍历可能较慢，超时则直接调 closeModal 收尾）
+    let closed = null;
+    for (let i = 0; i < 24 && !closed; i++) {
+      await sleep(500);
+      closed = await evaluate(`(() => {
+        const b = document.querySelector('#bfClose');
+        if (b) { b.click(); return true; }
+        return false;
+      })()`);
+    }
+    if (!closed) await evaluate(`typeof closeModal === 'function' && closeModal()`);
+    await sleep(300);
+    check("大文件排行：关闭后遮罩收起",
+          await evaluate(`!document.querySelector('#mask').classList.contains('on')`));
+  } catch (e) { INFO.push(`大文件交互异常: ${e.message}`); }
+
+  // ④ 语言切换：切 EN → 静态文案 + localStorage + 高亮同步 → 切回原语言还原
+  try {
+    const lg = await evaluate(`(async () => {
+      const seg = document.querySelector('#langSeg');
+      if (!seg) return null;
+      const cur = seg.querySelector('button.on');
+      const origL = cur ? cur.dataset.l : 'zh';
+      const origT = document.querySelector('#btnBigFiles').textContent;
+      const en = seg.querySelector('button[data-l="en"]');
+      en.click();
+      await new Promise(r => setTimeout(r, 900));
+      const tEn = document.querySelector('#btnBigFiles').textContent;
+      const lsEn = localStorage.getItem('oc-lang');
+      const onEn = seg.querySelector('button.on');
+      const back = seg.querySelector('button[data-l="' + origL + '"]');
+      back.click();
+      await new Promise(r => setTimeout(r, 900));
+      return { origL, origT, tEn, lsEn, onEn: onEn ? onEn.dataset.l : null,
+               tBack: document.querySelector('#btnBigFiles').textContent,
+               lsBack: localStorage.getItem('oc-lang') };
+    })()`);
+    if (lg) {
+      check("切英文：静态文案 + localStorage + 高亮同步",
+            lg.tEn === "Largest files" && lg.lsEn === "en" && lg.onEn === "en",
+            `text=${lg.tEn} ls=${lg.lsEn} on=${lg.onEn}`);
+      check("切回原语言：文案与设置还原",
+            lg.tBack === lg.origT && lg.lsBack === lg.origL,
+            `${lg.origL}: ${lg.tBack}`);
+    } else {
+      skip2("语言切换交互（页面无 langSeg）");
+    }
+  } catch (e) { INFO.push(`语言切换异常: ${e.message}`); }
+
+  // ⑤ 视图导航高亮：点另一视图 → .on 迁移 + 视图切换 → 点回还原
+  try {
+    const nv = await evaluate(`(async () => {
+      const btns = [...document.querySelectorAll('#viewNav button')];
+      if (btns.length < 2) return null;
+      const cur = btns.find(b => b.classList.contains('on'));
+      const other = btns.find(b => b !== cur);
+      if (!cur || !other) return null;
+      const origV = cur.dataset.v;
+      other.click();
+      await new Promise(r => setTimeout(r, 800));
+      const mid = {
+        on: other.classList.contains('on'),
+        curOff: !cur.classList.contains('on'),
+        view: (typeof view !== 'undefined') ? view : null,
+        otherV: other.dataset.v,
+        vis: document.querySelector('#steamView').style.display === 'flex'
+             || document.querySelector('#fullView').style.display === 'flex',
+      };
+      cur.click();
+      await new Promise(r => setTimeout(r, 500));
+      return { origV, mid,
+               backOn: cur.classList.contains('on'),
+               backView: (typeof view !== 'undefined') ? view : null };
+    })()`);
+    if (nv) {
+      check("视图导航：点击后高亮迁移且视图切换",
+            nv.mid.on && nv.mid.curOff && nv.mid.view === nv.mid.otherV && nv.mid.vis
+            && nv.mid.otherV !== nv.origV,
+            `${nv.origV}→${nv.mid.view}`);
+      check("视图导航：点回原视图还原",
+            nv.backOn && nv.backView === nv.origV, `→ ${nv.backView}`);
+    } else {
+      skip2("视图导航交互（viewNav 不足两个按钮）");
+    }
+  } catch (e) { INFO.push(`视图导航异常: ${e.message}`); }
+
   // JS 报错
   const real = errors.filter(e => !/favicon/i.test(e));
   check("无 JS 控制台报错/异常", real.length === 0, real.slice(0, 2).join(" | "));

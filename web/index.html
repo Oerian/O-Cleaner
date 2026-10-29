@@ -2305,7 +2305,8 @@ function setRiskCompact(v) {
 async function loadSteam(force) {
   if (STEAM && !force) return STEAM;
   try {
-    STEAM = await apiJSON(`${API}/__oc__/steam?lang=${langParam()}`);
+    // force（删除游戏后强制刷新）必须绕过后端 60s 缓存：fresh=1
+    STEAM = await apiJSON(`${API}/__oc__/steam?lang=${langParam()}${force ? "&fresh=1" : ""}`);
   } catch (e) {
     STEAM = { found: false, error: String(e) };
   }

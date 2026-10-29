@@ -3250,6 +3250,9 @@ def _ts(v) -> str:
 # Steam 根目录缓存：discover_steam() 成功时更新，/__oc__/game-cover 用它
 # 定位 librarycache。放模块级而非请求内变量 —— 封面请求不需要重跑 PS。
 _STEAM_ROOTS_CACHE: list[str] = []
+# /steam 响应级 60s 缓存（多标签共享；fresh=1 绕过）。只存一种语言的
+# 载荷：lang 变了就重算 —— 语言切换是低频操作，不值得按语言存多份。
+_STEAM_RESP_CACHE: dict = {"at": 0.0, "data": None, "lang": ""}
 
 def discover_steam() -> dict:
     """发现 Steam 库与已安装游戏。数据全部来自 Steam 自己的清单文件。"""
@@ -6796,7 +6799,17 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/bundle/export":
             return self._json(_export_bundle())
         if route == "/__oc__/steam":
-            data = apply_lang_payload(discover_steam(), q.get("lang"))
+            # 60s TTL 缓存：多标签 / 横幅轮询等场景避免每次都冷启动一遍
+            # PowerShell 枚举。删除游戏等「数据刚变」的场景由前端带
+            # fresh=1 绕过（doClean/confirmDeleteGame 的 force 刷新）。
+            fresh = q.get("fresh") == "1"
+            lang = q.get("lang") or ""
+            cached = _STEAM_RESP_CACHE.get("data")
+            if (not fresh and cached is not None
+                    and _STEAM_RESP_CACHE.get("lang") == lang
+                    and time.monotonic() - _STEAM_RESP_CACHE["at"] < 60):
+                return self._json(cached)
+            data = apply_lang_payload(discover_steam(), lang)
             # 游戏占用趋势：清单读取成功就记一条快照（每天最多一条，
             # 体积/数量没变化不写盘）；失败不影响主返回
             if data.get("found") and data.get("total_size"):
@@ -6805,6 +6818,8 @@ class Handler(BaseHTTPRequestHandler):
                                         int(data.get("game_count") or 0))
                 except Exception:                      # noqa: BLE001
                     pass
+            _STEAM_RESP_CACHE.update(
+                {"at": time.monotonic(), "data": data, "lang": lang})
             return self._json(data)
         if route == "/__oc__/game-history":
             data = _load_json(GAME_HISTORY_PATH, [], use_cache=False)

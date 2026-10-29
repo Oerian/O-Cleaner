@@ -1450,6 +1450,18 @@ SECURITY 该处表述未动。
 
 **v2.10 发版**：`APP_VERSION` + `config/drives.json` 双处 2.10（**替换串手滑多打一个逗号导致空替换，git diff 必看**）；重建双产物 + sha256 逐项核验；tag `v2.10` + GitHub Release。
 
+### 48. 大工作量轮：静态检查扩容 + /steam 缓存 + CDP 完整功能交互（2026-10-30）
+
+用户要求「大工作量任务：自检、优化、功能测试、完整测试」。四条线全部落地，门禁终态 **CDP 127-0-4 / selftest 500-0-6 / pyflakes 0 告警 / audit_dead 0 死代码**。
+
+**① 静态检查扩容（tools/audit_dead.py 八节）**：新增第 7 节 i18n 键完整性（t()/data-i18n 用到的键必须有 EN 词条，`t(变量)` 间接调用白名单 INDIRECT——被误报的 cr.onceHead 等 3 个键即此类）；第 8 节 CSS 变量双向检查（var() 用了未定义的 / 定义了没用的）。首轮全量结果：581 唯一使用键 / 683 词典，无缺失；CSS 变量双向干净。pyflakes 全仓 0 告警。
+
+**② 性能优化（app.py + 前端）**：`/steam` 加响应级缓存 `_STEAM_RESP_CACHE`（60s TTL，只存单语言载荷；`fresh=1` 查询参数绕过），多标签/横幅轮询场景省去重复的 PowerShell 注册表枚举；前端 `loadSteam(force)` 强刷时自动带 `&fresh=1`。语言切换的 `loadSteam(true)` 与横幅轮询调用点核对过：前者吃绕过、后者吃缓存，语义正确。
+
+**③ CDP 完整功能交互（cdp_check.js 新段「--- 完整功能交互 ---」，10 条断言）**：①预设切换——挑统计带数字的预设（本机 D:+仅本盘范围下 safe/dev 合法为 0 项无数字，**不能硬断言 >0**），点后断言高亮迁移 + `selected.size` 与按钮自带「预计可清 N 项」一致（presetYield 与 applyPreset 同口径，实测 deep selected=1 预计=1）+ none 清零；②清理范围切换——all↔drive 真实 change 事件，断言 drive 态用户级项被后端排除（14→3 项，用户级 11→0）+ **测完精确还原进入时的 scopeSel 值**（首版硬编码还原成 all，把后面「非系统盘默认仅本盘」断言污染成 scope=all——教训：交互测试改了全局状态必须还原现场）；③大文件排行——点开模态（遮罩亮+内容就位）→ 等真实 `#bfClose` 出现点击关闭（全盘遍历慢时兜底调 closeModal）→ 遮罩收起；④语言切换——EN 点击后静态文案（btn.bigFiles）+ localStorage oc-lang + langSeg 高亮三同步，切回原语言还原（以捕获的原文案比对，auto 跟随系统时不误判）；⑤视图导航——点击后 `.on` 迁移 + view 变量到位 + 点回还原。**排查手段备忘**：`selected=0 而 selN=8` 一度像真 bug，最小 CDP 探针（headless Edge + Runtime.evaluate）定位为 selN 计入了 recycleSel（Steam 段落回收建议默认勾选 8 项），非缺陷。
+
+**④ 回归**：selftest 500-0-6、audit_dead 复跑干净（stHead/panel 为已知误报）、fix-encoding 过后提交。/steam 缓存与 CDP 交互段均无产品行为变化，未发版（版本号仍 2.10）。
+
 ---
 
 ## 七、文件资产与代码清单
