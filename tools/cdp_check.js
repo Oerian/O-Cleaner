@@ -1399,15 +1399,26 @@ class CDP {
   check("工具栏有 Steam 入口", hasSteamBtn);
   if (hasSteamBtn) {
     await evaluate(`document.querySelector('#btnSteam').click()`);
-    await sleep(2500);
+    // /__oc__/steam 可能要几秒（PS 枚举 + 残留测体积）——本机实测曾因
+    // 只等 2.5s 把「装了 Steam」误判成 found=false，Steam 全部内容检查
+    // 从此跳过。改为轮询等 STEAM 就绪（最多 30s），就绪后按真实状态走。
+    {
+      let loaded = false;
+      for (let i = 0; i < 60; i++) {
+        loaded = await evaluate(`typeof STEAM !== 'undefined' && STEAM !== null`);
+        if (loaded) break;
+        await sleep(500);
+      }
+      if (!loaded) console.log("  [信息] /steam 30s 未返回，Steam 内容检查将按空态跳过");
+    }
     const st = await evaluate(`(() => ({
       shown: document.querySelector('#steamView').style.display === 'flex',
       overviewHidden: document.querySelector('#fullView').style.display === 'none',
       hint: (document.querySelector('#stHint')||{}).innerText || '',
-      found: !!(window.STEAM && STEAM.found),
-      libCount: (window.STEAM && STEAM.games) ? STEAM.games.length : 0,
+      found: !!(typeof STEAM !== 'undefined' && STEAM && STEAM.found),
+      libCount: (typeof STEAM !== 'undefined' && STEAM && STEAM.games) ? STEAM.games.length : 0,
       // found=false 有两种成因：本机确实没有 Steam，或后端枚举失败。后者要看得见。
-      steamErr: (window.STEAM && STEAM.error) ? String(window.STEAM.error).slice(0, 80) : '',
+      steamErr: (typeof STEAM !== 'undefined' && STEAM && STEAM.error) ? String(STEAM.error).slice(0, 80) : '',
       drives: document.querySelectorAll('#stGames .dsk').length,
       driveRows: [...document.querySelectorAll('#stGames .dsk .dskh')]
         .map(e => e.innerText.replace(/\\n/g, ' ').slice(0, 60)),
@@ -1439,6 +1450,23 @@ class CDP {
           && /Steam 游戏库|Steam Games Library/.test(gmod.titles.join("|"))
           && /Epic 游戏库|Epic Games Library/.test(gmod.titles.join("|")),
           `libsecs=${gmod.libsecs} titles=${gmod.titles.join(" / ").slice(0, 80)}`);
+    // 2026-10-29 晚间批次：平台页签 / 趋势图容器 / 残留中心与建议卡容器
+    const gadd = await evaluate(`(() => ({
+      tabs: document.querySelectorAll('#stTabs .seg').length,
+      trendBox: !!document.querySelector('#gameTrendBox'),
+      sugg: !!document.querySelector('#stSugg'),
+      orphanToggle: !!document.querySelector('#stOrphanToggle'),
+      found: !!(typeof STEAM !== 'undefined' && STEAM && STEAM.found),
+      cta: !!document.querySelector('#stOverview button.tiny'),
+    }))()`);
+    check("吸顶头有平台页签（Steam/Epic/GOG/自定义）", gadd.tabs >= 4,
+          `${gadd.tabs} 个页签`);
+    check("游戏占用趋势与建议卡容器就位", gadd.trendBox && gadd.sugg,
+          `trendBox=${gadd.trendBox} sugg=${gadd.sugg}`);
+    check("残留中心折叠头存在（无残留时面板隐藏但结构在）", gadd.orphanToggle);
+    if (!gadd.found && (await evaluate(`typeof STEAM !== 'undefined' && STEAM !== null`))) {
+      check("Steam 未装时空态给「手动添加游戏库」直达按钮", gadd.cta);
+    }
 
     // Steam 库内容检查要求本机真的装了 Steam 且有已安装游戏：CI runner 与
     // 新装机的开发机上都没有，面板会按设计显示空态（这是功能，不是缺陷）。

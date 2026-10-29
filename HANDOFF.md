@@ -1392,6 +1392,31 @@ SECURITY 该处表述未动。
 
 > **教训**：cdp_check 里三处裸 `querySelector('.fshead')` 在 steamView 也有 fshead 后全部取错元素（hasNav:false 假红）—— 引用「某类头」的选择器必须限定父容器（`#fullView .fshead`）。同类坑下次还会出现：凡是「文档里第一个 X」式选择器，新增同类结构时都要回头检查。改 i18n 词典时逐键确认还在用（本轮差点误删 st.gamesSuffix/countSuffix/driveSuffix/loading/notFound/notFoundNote 六个在用键）。
 
+### 45. 游戏占用概览功能批 ×4 + v2.9 发版（2026-10-29 傍晚）
+
+用户要求把此前提出的 8 个优化方向全部落地并发 v2.9。
+
+**后端（app.py）**：
+- 版本 2.9：`APP_VERSION` 与 `config/drives.json` 的 `app.version`（/state 的版本号来自 drives.json，两处都要动；**改 drives.json 必须纯文本替换** —— json.dumps 重排会把紧凑数组撑成多行，diff 噪声一片）。
+- 游戏占用趋势三件套（照磁盘趋势模式）：`GAME_HISTORY_PATH = data/game-history.json` + `record_game_history()`（每天一条、值变才写盘、留 180 天，挂在 `/__oc__/steam` 成功路径）+ GET `/__oc__/game-history`。
+- 封面端点 GET `/__oc__/game-cover?appid=`：从 `_STEAM_ROOTS_CACHE`（discover_steam 成功时更新）找 `appcache/librarycache/<appid>/`，按 icon.jpg → 256p.jpg → library_600x900.jpg → … 优先级回图。**appid 只收纯数字（≤12 位）**，路径全部由服务端 roots 拼接，无穿越面。
+
+**前端（web/index.html）**：
+- **残留中心**：Epic/GOG 残留不再在各自分区内渲染（`epicOrphans`/`gogOrphans` 容器删除），与 Steam 残留一起聚合进模块顶部的折叠勾选面板，每行带平台徽章；`confirmDeleteOrphans` 天然跨平台（clean-game 后端校验不区分平台）。
+- **智能回收建议卡**：已安装 + 目录在 + 可清理 + ≥10 GB + 超 180 天没玩（或从没玩），按体积取前 3，「一次确认删除这 n 款」走 confirmDeleteOrphans 批量链路。
+- **行内删除**：可删除的游戏行直接带「删除」按钮（stopPropagation 不触发详情），不用先开详情弹窗。
+- **平台页签**：吸顶头内 Steam/Epic/GOG/自定义四个页签，点击 scrollIntoView 到对应分区（`.libsec{scroll-margin-top:130px}` 给吸顶头让位）；无数据的平台置灰禁点。
+- **游戏占用趋势折线**：`#gameTrendBox`（≥2 条记录才显示）+ `drawGameTrend()`（canvas，复用 cssVar/hexToRgba），标签显示「{a} → {b}（±pct%）」。
+- **封面缩略图**：行内 22px `.gcover`，onerror 直接隐藏（没装 Steam / 无缓存时零痕迹）。
+- **空态引导**：Steam 未装时空态给「手动添加游戏库」按钮，点击滚动到自定义库分区并聚焦名称框。
+- **风险提示记忆**：`localStorage("oc-delrisk")`，勾选后 confirmDeleteGame/confirmDeleteOrphans 进入紧凑模式（只留名称/体积/路径+确认），compact 弹窗里随时「恢复完整提示」。
+
+**门禁与重大发现**：CDP **109-0-4**；selftest **483-0-6**（新增 5 条静态 + 4 条 e2e：game-history 列表、cover 400/400/404）；lint_rules / guard_matrix / pyflakes 全过。
+
+> **重大发现（修掉一个积年老误判）**：本机其实一直装着 Steam（29 款 411.7 GB）—— cdp_check 里 `window.STEAM` **永远 undefined**（STEAM 是顶层 `let`，不挂 window），Steam 全部内容检查（分盘、清单、详情弹窗…）在此前所有会话里都被误标跳过。改为词法探测 `typeof STEAM !== 'undefined' && STEAM` 后，这批改动的真实数据路径（按盘分组、真实游戏详情、建议卡）首次被本机实测跑通。凡 CDP 探测「页面全局变量」都用 `typeof X !== 'undefined'`，不要 `window.X`。
+>
+> 另：selftest 的 setLang 覆盖检查抓到 `drawGameTrend` 漏进重画列表（趋势标签是动态文案）—— 照例补上即绿；`renderOtherPlatforms` 仍在豁免集合（renderSteamPage 已覆盖）。
+
 ---
 
 ## 七、文件资产与代码清单

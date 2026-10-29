@@ -79,7 +79,7 @@ WEB_DIR = BASE_DIR / "web"
 # config/drives.json 的 app.version），2026-10-12 升 v2.3 时漏改了后两处，
 # 结果界面显示的仍是 2.2。收敛成一个常量后，drives.json 与打包脚本由自测断言
 # 强制保持一致（见 tools/selftest.py 的「版本号三处一致」）。
-APP_VERSION = "2.8"
+APP_VERSION = "2.9"
 APP_UA = f"O-Cleaner/{APP_VERSION}"
 
 TARGETS_PATH = CONFIG_DIR / "targets.json"
@@ -119,6 +119,8 @@ HISTORY_PATH = RUNTIME_DIR / "history.json"
 # 运行数据，不进版本库、不进分发包。
 DISK_TREND_PATH = RUNTIME_DIR / "disk-trend.json"
 SCHEDULE_PATH = RUNTIME_DIR / "schedule.json"
+# 游戏库总体积快照（游戏占用趋势曲线的数据源）：每天最多一条，保留 180 天。
+GAME_HISTORY_PATH = RUNTIME_DIR / "game-history.json"
 
 
 def _migrate_runtime_files() -> None:
@@ -500,6 +502,30 @@ def record_disk_snapshot(info: dict) -> None:
     hist.append({"d": today, "u": {info["letter"]: {"total": info["total"],
                                                     "free": info["free"]}}})
     _atomic_write(DISK_TREND_PATH, hist[-90:])
+
+
+def record_game_history(total: int, count: int) -> None:
+    """把游戏库总体积记进趋势快照：每天一条，保留 180 天。
+
+    挂在 /__oc__/steam 的成功路径上（found 且 total>0 才记）。
+    同一天再查时，只有体积或数量变了才更新 —— 卸载/删除游戏当天就能
+    反映到趋势里；平时 Steam 清单读取结果不变，不会反复写盘。"""
+    if not total:
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    hist = _load_json(GAME_HISTORY_PATH, [], use_cache=False)
+    if not isinstance(hist, list):
+        hist = []
+    for day in hist:
+        if isinstance(day, dict) and day.get("d") == today:
+            if day.get("total") == total and day.get("count") == count:
+                return
+            day["total"] = total
+            day["count"] = count
+            _atomic_write(GAME_HISTORY_PATH, hist)
+            return
+    hist.append({"d": today, "total": total, "count": count})
+    _atomic_write(GAME_HISTORY_PATH, hist[-180:])
 
 
 # ======================================================================
@@ -3180,8 +3206,13 @@ def _ts(v) -> str:
         return ""
 
 
+# Steam 根目录缓存：discover_steam() 成功时更新，/__oc__/game-cover 用它
+# 定位 librarycache。放模块级而非请求内变量 —— 封面请求不需要重跑 PS。
+_STEAM_ROOTS_CACHE: list[str] = []
+
 def discover_steam() -> dict:
     """发现 Steam 库与已安装游戏。数据全部来自 Steam 自己的清单文件。"""
+    global _STEAM_ROOTS_CACHE
     empty = {"found": False, "roots": [], "libraries": [], "games": [],
              "orphans": [], "game_count": 0, "total_size": 0,
              "total_size_h": "0 B", "orphan_count": 0}
@@ -3367,6 +3398,9 @@ def discover_steam() -> dict:
             pass
 
     total = sum(g["size"] for g in games)
+    # Steam 根目录留给封面接口用（/__oc__/game-cover）：只在确认清单可读
+    # （found）时才更新缓存，避免用半途失败的结果覆盖旧值
+    _STEAM_ROOTS_CACHE = list(roots)
     return {
         "found": True, "roots": roots,
         "libraries": lib_list, "games": games,
@@ -6578,6 +6612,30 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(data, ensure_ascii=False).encode("utf-8"),
                    "application/json; charset=utf-8")
 
+    def _game_cover(self, appid: str) -> None:
+        """Steam 游戏封面/图标：从本机 Steam 客户端的 librarycache 只读取图。
+
+        安全边界：appid 只接受纯数字（Steam AppID，最多 12 位），文件路径
+        全部由服务端缓存的 Steam 根目录拼接，用户输入进不了文件系统路径，
+        没有目录穿越面。找不到时 404，前端 onerror 直接隐藏图片。"""
+        if not appid.isdigit() or len(appid) > 12:
+            return self._json({"error": "appid 必须是数字"}, 400)
+        for root in _STEAM_ROOTS_CACHE:
+            base = Path(root) / "appcache" / "librarycache" / appid
+            if not base.is_dir():
+                continue
+            for name in ("icon.jpg", "256p.jpg", "library_600x900.jpg",
+                         "library_600x900_2x.jpg", "portrait.png"):
+                f = base / name
+                if f.is_file():
+                    try:
+                        body = f.read_bytes()
+                    except OSError:
+                        continue
+                    ctype = "image/png" if name.endswith(".png") else "image/jpeg"
+                    return self._send(200, body, ctype)
+        return self._json({"error": "no cover"}, 404)
+
     def _body(self) -> dict:
         """读请求体。畸形输入一律当成空对象返回，但会记下原因。
 
@@ -6651,7 +6709,21 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/bundle/export":
             return self._json(_export_bundle())
         if route == "/__oc__/steam":
-            return self._json(apply_lang_payload(discover_steam(), q.get("lang")))
+            data = apply_lang_payload(discover_steam(), q.get("lang"))
+            # 游戏占用趋势：清单读取成功就记一条快照（每天最多一条，
+            # 体积/数量没变化不写盘）；失败不影响主返回
+            if data.get("found") and data.get("total_size"):
+                try:
+                    record_game_history(int(data["total_size"]),
+                                        int(data.get("game_count") or 0))
+                except Exception:                      # noqa: BLE001
+                    pass
+            return self._json(data)
+        if route == "/__oc__/game-history":
+            data = _load_json(GAME_HISTORY_PATH, [], use_cache=False)
+            return self._json(data if isinstance(data, list) else [])
+        if route == "/__oc__/game-cover":
+            return self._game_cover(q.get("appid") or "")
         if route == "/__oc__/games":
             # 全平台游戏库（Steam + Epic + GOG），steam 负载原样透传在 .steam 里
             return self._json(apply_lang_payload(discover_games(), q.get("lang")))

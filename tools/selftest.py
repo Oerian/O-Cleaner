@@ -1026,12 +1026,29 @@ def phase3_http() -> None:
         check("删除游戏前会查询本地存档（端点 + 弹窗回填）",
               "/__oc__/game-saves" in open(app.__file__, encoding="utf-8").read()
               and 'id="saveScan"' in html and "疑似本地存档" in html)
-        # Epic/GOG 残留目录：与 Steam 孤儿同一信任级别（安装根的直接子目录，
-        # 且平台记录里没有它），前端有独立容器与同一删除流程
-        check("Epic/GOG 残留目录有检测与删除入口",
+        # Epic/GOG 残留目录 2026-10-29 起聚合进「残留中心」（stOrphanPanel），
+        # 跨平台勾选批量删；后端检测函数不变
+        check("Epic/GOG 残留目录有检测与统一删除入口",
               "def platform_install_roots" in open(app.__file__, encoding="utf-8").read()
-              and 'id="epicOrphans"' in html and 'id="gogOrphans"' in html
-              and "confirmDeleteGame({ ...o }, key, true)" in html)
+              and "GAMES.platforms" in html and "allOrphans" in html
+              and "confirmDeleteOrphans" in html)
+        # 游戏占用趋势三件套（照磁盘趋势的快照/端点/折线模式）
+        check("游戏占用趋势有三件套（快照/端点/折线）",
+              "def record_game_history" in open(app.__file__, encoding="utf-8").read()
+              and "/__oc__/game-history" in open(app.__file__, encoding="utf-8").read()
+              and 'id="gameTrendCv"' in html and "function drawGameTrend" in html)
+        # 封面缩略图：服务端从 Steam librarycache 只读取图（appid 纯数字校验）
+        check("游戏封面端点有路径安全校验且前端有缩略图",
+              '"/__oc__/game-cover"' in open(app.__file__, encoding="utf-8").read()
+              and "appid 必须是数字" in open(app.__file__, encoding="utf-8").read()
+              and 'class="gcover"' in html)
+        # 智能回收建议卡 + 平台页签 + 风险提示记忆
+        check("智能回收建议卡与平台页签就位",
+              'id="stSugg"' in html and 'id="stTabs"' in html
+              and "st.suggGo" in html and "scrollIntoView" in html)
+        check("删除确认支持风险提示记忆（不再显示长说明）",
+              "riskCompact" in html and "dgRiskRemember" in html
+              and "dgRiskRestore" in html and 'localStorage.setItem(RISK_KEY, "1")' in html)
         # 磁盘趋势：快照落盘（每天每盘一条）+ 端点 + 前端 canvas 折线
         check("磁盘空间趋势有三件套（快照/端点/折线）",
               "def record_disk_snapshot" in open(app.__file__, encoding="utf-8").read()
@@ -1489,6 +1506,33 @@ def phase3_http() -> None:
               gm.get("game_count") == len(gm.get("games", []))
               and gm["game_count"] == sum(p.get("game_count", 0)
                                           for p in gm["platforms"].values()))
+
+        # ---- 游戏占用趋势 + 封面端点（2026-10-29 新增）----
+        try:
+            with urllib.request.urlopen(base + "/__oc__/game-history",
+                                        timeout=15) as resp:
+                gh = json.loads(resp.read())
+            check("/game-history 返回列表（每条带 d/total/count）",
+                  isinstance(gh, list)
+                  and all(("d" in x and "total" in x and "count" in x)
+                          for x in gh if isinstance(x, dict)),
+                  f"{len(gh)} 条记录")
+        except Exception as e:                          # noqa: BLE001
+            check("/game-history 返回列表", False, str(e))
+        # 封面端点：非数字 appid 必须 400（路径安全校验），纯数字但本机
+        # 没有 Steam/没有该 appid 时 404 —— 两种都不能 5xx
+        for appid, want in (("abc", 400), ("..%2F..%2Fwin.ini", 400), ("12345", 404)):
+            try:
+                with urllib.request.urlopen(
+                        base + f"/__oc__/game-cover?appid={appid}",
+                        timeout=15) as resp:
+                    code = resp.status
+            except urllib.error.HTTPError as e:
+                code = e.code
+            except Exception as e:                      # noqa: BLE001
+                code = str(e)
+            check(f"/game-cover appid={appid[:12]} → {want}", code == want,
+                  f"HTTP {code}")
 
         # ---- 安全回归：CSRF ----
         # 威胁模型：用户浏览器开着本工具，又打开恶意网页；该网页可向
