@@ -744,8 +744,41 @@ class CDP {
     // sticky 本就不该触发。这是几何前提不成立，不是缺陷 —— 记跳过。
     skip2(`吸顶行为实测：页面不够长，滚到顶面板也到不了容器顶（差 ${stickTest.after - stickTest.colTop}px），前提不成立`);
   } else {
-    check("滚动列表后模块头仍钉在模块顶部（吸顶行为实测）",
-          stickTest.ok && stickTest.stuck, JSON.stringify(stickTest));
+  check("滚动列表后模块头仍钉在模块顶部（吸顶行为实测）",
+        stickTest.ok && stickTest.stuck, JSON.stringify(stickTest));
+  // 钉住后要一路保持到滚动底（面板被最小高度撑到一屏，内容短也如此），
+  // 除非向上滚回模块顶 —— 实测：滚到最底，模块头仍应在容器顶。
+  const stickBottom = await evaluate(`(async () => {
+    const col = document.querySelector('#leftcol');
+    const head = document.querySelector('.fshead');
+    if (!col || !head) return { ok: false };
+    const colTop = Math.round(col.getBoundingClientRect().top);
+    const max = col.scrollHeight - col.clientHeight;
+    if (max <= 0) return { ok: true, skipped: true };
+    col.scrollTop = max;
+    await new Promise(r => setTimeout(r, 80));
+    const after = Math.round(head.getBoundingClientRect().top);
+    col.scrollTop = 0;
+    await new Promise(r => setTimeout(r, 80));
+    return { ok: true, colTop, max: Math.round(max), after,
+             stuck: Math.abs(after - colTop) <= 2 };
+  })()`);
+  check("滚到最底模块头仍钉住（面板留白填充，不随内容缩短脱落）",
+        stickBottom.ok && (stickBottom.skipped || stickBottom.stuck),
+        JSON.stringify(stickBottom));
+  // 「Steam 游戏库」模块更名 + 右栏重复面板删去 + 自定义游戏库面板存在
+  const gameUi = await evaluate(`({
+    nav: [...document.querySelectorAll('#viewNav button')].map(b => b.textContent.trim()),
+    asideSteam: !!document.querySelector('[data-acc="steam"]'),
+    cgPanel: !!document.querySelector('#cgList'),
+    cgAdd: !!document.querySelector('#cgAdd'),
+  })`);
+  check("顶部导航已更名「游戏占用概览」",
+        (gameUi.nav || []).some(x => x.includes("游戏占用概览")),
+        JSON.stringify(gameUi.nav));
+  check("右栏重复的「Steam 游戏库」面板已删去", gameUi.asideSteam === false);
+  check("自定义游戏库面板已就位（输入+添加按钮）",
+        gameUi.cgPanel === true && gameUi.cgAdd === true);
   }
 
   // 「游戏等大项」这个分类已按要求移除：游戏不再单列一类，

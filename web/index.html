@@ -637,7 +637,7 @@
     <div class="grow"></div>
     <nav class="viewnav" id="viewNav" aria-label="功能视图导航">
       <button data-v="full" data-i18n="nav.full">扫描概览</button>
-      <button data-v="steam" data-i18n="nav.steam">Steam 游戏库</button>
+      <button data-v="steam" data-i18n="nav.steam">游戏占用概览</button>
     </nav>
     <div class="themeseg" id="themeSeg" role="group" aria-label="界面主题" data-i18n-title="theme.aria">
       <button data-t="light" data-i18n="theme.light" data-i18n-title="theme.light.title">亮</button>
@@ -672,7 +672,7 @@
       <option value="4" data-i18n="depth.4">4 层</option>
       <option value="5" data-i18n="depth.5">5 层（最慢）</option>
     </select>
-    <button id="btnSteam" data-i18n="btn.steam">Steam 游戏库</button>
+    <button id="btnSteam" data-i18n="btn.steam">游戏占用概览</button>
     <button id="btnBigFiles" data-i18n="btn.bigFiles">大文件排行</button>
     <button id="btnAll" data-i18n="btn.all">全选</button>
     <button id="btnNone" data-i18n="btn.none">全不选</button>
@@ -727,6 +727,22 @@
       <div id="gogGames"></div>
       <div id="gogOrphans" style="display:none;margin-top:10px"></div>
     </div>
+    <div class="panel">
+      <h3><span data-i18n="pane.customLibs">自定义游戏库</span>
+        <span class="hint" data-i18n="pane.customLibsHint">手动添加任意游戏库或单个游戏目录</span></h3>
+      <div id="cgList"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <input type="text" id="cgName" data-i18n-ph="cg.namePh"
+               placeholder="名称，例如：网盘游戏库" style="flex:1;min-width:150px">
+        <input type="text" id="cgPath" data-i18n-ph="cg.pathPh"
+               placeholder="目录，例如 D:\Games" style="flex:2;min-width:230px">
+        <button id="cgAdd" class="primary" data-i18n="cg.add">添加</button>
+      </div>
+      <div style="color:var(--dim2);font-size:11.5px;margin-top:8px;line-height:1.6"
+           data-i18n-html="cg.note">
+        只做只读展示（量体积、列顶层子项），不会清理这里面的任何内容；同名目录重复添加视为改名。
+      </div>
+    </div>
   </section>
 
   <section id="fullView" class="fspanel">
@@ -762,10 +778,8 @@
       <div class="ab"><div id="presets"></div></div>
     </div>
 
-    <div class="panel acc" data-acc="steam">
-      <h3><span data-i18n="pane.steamPanel">Steam 游戏库</span> <span class="hint" id="steamHint"></span></h3>
-      <div class="ab"><div id="steamPanel"></div></div>
-    </div>
+    <!-- 2026-10-29：原「Steam 游戏库」侧栏面板删去 —— 与顶部导航的
+         「游戏占用概览」整页完全重复（同一份数据渲染两处）。 -->
 
     <div class="panel acc" data-acc="packs">
       <h3><span data-i18n="pane.packs">资源包</span> <span class="hint" id="packsHint"></span></h3>
@@ -1644,7 +1658,10 @@ window.addEventListener("mousemove", ev => {
 let _rzTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(_rzTimer);
-  _rzTimer = setTimeout(() => { try { drawDiskTrend(); } catch (_) {} }, 150);
+  _rzTimer = setTimeout(() => {
+    try { drawDiskTrend(); } catch (_) {}
+    try { pinPanelSizing(); } catch (_) {}   // zoom 分档变了，面板最小高度跟着算
+  }, 150);
 });
 
 /* 卡片（常规清理列表）已移除：可清理项直接在占用排行行内勾选，
@@ -2061,8 +2078,10 @@ function daysSince(d) {
   return Math.floor((Date.now() - t) / 86400000);
 }
 
-/** 侧栏里的精简版（点条目进独立页面） */
+/** 侧栏精简版已随面板删去（2026-10-29：与游戏占用概览整页重复）。
+ *  loadSteam 的调用链还在，这里留一个守卫版兜底，避免空引用。 */
 function renderSteam() {
+  if (!$("steamPanel")) return;
   const el = $("steamPanel");
   const s = STEAM;
   if (!s || !s.found) {
@@ -2097,6 +2116,7 @@ function renderSteam() {
 
 /** 独立页面：库总览 + 完整游戏清单 + 残留清理 */
 function renderSteamPage() {
+  loadCustomLibs();          // 自定义游戏库：进页面就刷新（有 10 分钟缓存，不贵）
   const s = STEAM;
   if (!s) {
     $("stOverview").innerHTML = `<div class="empty"><span class="spin"></span>${t("st.loading","正在读取 Steam 清单…")}</div>`;
@@ -2328,6 +2348,95 @@ function renderOtherPlatforms() {
           }));
       } else orb.style.display = "none";
     }
+  }
+}
+
+/* ============ 自定义游戏库（游戏占用概览）：名称 + 目录，只读展示 ============ */
+let CGLIBS = null;
+
+async function loadCustomLibs(force) {
+  if (CGLIBS && CGLIBS.libs && !force) return CGLIBS;
+  try {
+    CGLIBS = await apiJSON(`${API}/__oc__/game-libs`);
+  } catch (e) {
+    CGLIBS = { libs: [], error: String(e) };
+  }
+  renderCustomLibs();
+  return CGLIBS;
+}
+
+function renderCustomLibs() {
+  const box = $("cgList");
+  if (!box) return;
+  const libs = (CGLIBS && CGLIBS.libs) || [];
+  if (!libs.length) {
+    box.innerHTML = `<div class="empty" style="margin:0">${
+      t("cg.empty", "还没有自定义条目。把 Steam / Epic 之外的库（网盘盘符、移动硬盘、自制合集）加进来，占用一并看。")}</div>`;
+    return;
+  }
+  box.innerHTML = libs.map((g, i) => `
+    <div class="cgrow" data-i="${i}" style="padding:8px 0;border-bottom:1px solid var(--line)">
+      <div class="vtop">
+        <span class="fname">${esc(g.name)}${g.partial
+          ? ` <span class="vbadge unk" title="${t("cg.approxTitle","目录太大没数完，这是下限")}">${t("cg.approx","约")}</span>` : ""}</span>
+        ${g.error ? `<span class="vbadge unk">${t("cg.readFail","读取失败")}</span>` : ""}
+        ${(g.children || []).length ? `<button class="tiny ghost cgkids" data-i="${i}">${t("cg.kids","子项")} ▾</button>` : ""}
+        <button class="tiny ghost cgdel" data-i="${i}">${t("cg.del","移除")}</button>
+        <span class="fsize">${esc(g.size_h || "0 B")}</span>
+      </div>
+      <div style="color:var(--dim2);font-size:11.5px;overflow-wrap:anywhere">${esc(g.path)}</div>
+      <div class="cgkids" data-box="${i}" style="display:none;margin-top:6px"></div>
+    </div>`).join("");
+  box.querySelectorAll(".cgdel").forEach(b => b.addEventListener("click", async () => {
+    const g = libs[parseInt(b.dataset.i, 10)];
+    if (!g) return;
+    if (!confirm(t("cg.delConfirm", "从概览移除「{n}」？磁盘内容不受影响。").replace("{n}", g.name))) return;
+    const r = await apiJSON(`${API}/__oc__/game-libs`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op: "remove", path: g.path }),
+    });
+    if (r.error) { toast(t("cg.fail", "操作失败：") + r.error); return; }
+    CGLIBS = r; renderCustomLibs();
+  }));
+  box.querySelectorAll("button.cgkids").forEach(b => b.addEventListener("click", () => {
+    const i = parseInt(b.dataset.i, 10);
+    const g = libs[i];
+    const b2 = box.querySelector(`.cgkids[data-box="${i}"]`);
+    if (!g || !b2) return;
+    const open = b2.style.display !== "none";
+    b2.style.display = open ? "none" : "";
+    b.textContent = t("cg.kids", "子项") + (open ? " ▾" : " ▴");
+    if (open) return;
+    b2.innerHTML = (g.children || []).map(c => `
+      <div style="display:flex;justify-content:space-between;gap:10px;
+                  padding:3px 0 3px 14px;font-size:12px">
+        <span style="overflow-wrap:anywhere">${esc(c.name)}${c.approx
+          ? ` <span style="color:var(--dim2)">${t("cg.sizeUnknown","未测")}</span>` : ""}</span>
+        <span style="white-space:nowrap;color:var(--dim2)">${c.approx ? "" : esc(human(c.size))}</span>
+      </div>`).join("") || `<div class="empty" style="margin:0">${t("cg.noKids","没有扫到子项")}</div>`;
+  }));
+}
+
+async function addCustomLib() {
+  const nameEl = $("cgName"), pathEl = $("cgPath");
+  const name = (nameEl.value || "").trim(), path = (pathEl.value || "").trim();
+  if (!name || !path) {
+    toast(t("cg.needBoth", "名称和目录都要填"));
+    return;
+  }
+  const btn = $("cgAdd");
+  btn.disabled = true;
+  try {
+    const r = await apiJSON(`${API}/__oc__/game-libs`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op: "add", name, path }),
+    });
+    if (r.error) { toast(t("cg.fail", "操作失败：") + r.error); return; }
+    CGLIBS = r; renderCustomLibs();
+    nameEl.value = ""; pathEl.value = "";
+    toast(t("cg.added", "已添加：") + name);
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -2846,7 +2955,7 @@ function switchView(name) {
   $("fullView").style.display = name === "full" ? "flex" : "none";
   $("steamView").style.display = name === "steam" ? "flex" : "none";
   setToolbars(true, name === "steam" ? "compact" : "normal");
-  $("btnSteam").textContent = name === "steam" ? t("nav.backFull","返回扫描概览") : t("nav.steam","Steam 游戏库");
+  $("btnSteam").textContent = name === "steam" ? t("nav.backFull","返回扫描概览") : t("nav.steam","游戏占用概览");
   renderViewNav();
   if (name === "steam") renderSteamPage();
 }
@@ -3454,6 +3563,21 @@ function renderChart() {
       const it = rows[+vrow.dataset.i];
       if (it) openRowOverride(it);
     }));
+  pinPanelSizing();
+}
+
+/** 吸顶头「钉住后不再随内容走」（2026-10-29 用户要求）：把占用排行面板的
+ *  最小高度撑到与左栏可视高度一致。内容不足时（本层 0 项、空目录）底部
+ *  **留白填充** —— 展开子项数量变化也不会让面板高度跌破一屏，吸顶头因此
+ *  不会中途脱落跳变，UI 保持线性；向上滚回模块顶之前它始终钉着。
+ *  用 JS 写实际像素而不是 calc(100vh)：界面按窗口宽度分档 zoom，
+ *  calc 在缩放上下文里换算不可靠（100vh 会被 zoom 再乘一次）。 */
+function pinPanelSizing() {
+  try {
+    const col = $("leftcol"), chart = $("fsChart");
+    const panel = chart && chart.closest(".panel");
+    if (panel) panel.style.minHeight = Math.max(col.clientHeight, 400) + "px";
+  } catch (_) {}
 }
 
 /* ============ 行右键：自定义徽章文字与下方说明（用户覆盖，持久化） ============
@@ -4407,6 +4531,14 @@ $("btnSteam").addEventListener("click", () => {
   if (view === "steam") { switchView("full"); return; }
   switchView("steam");
   loadSteam();
+  loadCustomLibs();
+});
+$("cgAdd").addEventListener("click", () => { addCustomLib(); });
+$("cgPath").addEventListener("keydown", e => {
+  if (e.key === "Enter") addCustomLib();
+});
+$("cgName").addEventListener("keydown", e => {
+  if (e.key === "Enter") $("cgPath").focus();
 });
 $("stFilter").addEventListener("input", () => {
   steamFilter = $("stFilter").value;
@@ -4771,7 +4903,7 @@ function initTheme() {
    切换语言后 setLang 会重画动态渲染的内容。 */
 const I18N_EN = {
   "tag": "Disk Cleanup Assistant",
-  "nav.full": "Scan Overview", "nav.steam": "Steam Library",
+  "nav.full": "Scan Overview", "nav.steam": "Game Storage",
   "theme.aria": "UI Theme",
   "theme.light": "Light", "theme.light.title": "Light mode",
   "lang.autoTitle": "Follow system language", "lang.zhTitle": "Chinese",
@@ -4780,7 +4912,7 @@ const I18N_EN = {
   "lang.aria": "Language / 语言",
   "adminwarn.a": "Running without administrator rights. Items in system directories will ask for admin permission. Restart ",
   "adminwarn.b": " as administrator to clean them.",
-  "btn.scan": "Rescan", "btn.fullScan": "Full-disk scan", "btn.steam": "Steam Library",
+  "btn.scan": "Rescan", "btn.fullScan": "Full-disk scan", "btn.steam": "Game Storage",
   "btn.bigFiles": "Largest files",
   "btn.all": "Select all", "btn.none": "Select none", "btn.save": "Save",
   "scope.label": "Cleanup scope",
@@ -4807,6 +4939,24 @@ const I18N_EN = {
   "pane.guideHint": "Read this on first use",
   "pane.presets": "One-click Presets",
   "pane.steamPanel": "Steam Library",
+  "pane.customLibs": "Custom Game Libraries",
+  "pane.customLibsHint": "Manually add any game library or a single game folder",
+  "cg.namePh": "Name, e.g. Cloud-drive library",
+  "cg.pathPh": "Folder, e.g. D:\Games",
+  "cg.add": "Add",
+  "cg.note": "Read-only: measures size and lists top-level items. Nothing here is ever cleaned. Re-adding the same folder renames it.",
+  "cg.empty": "No custom entries yet. Add libraries that Steam/Epic don't know about (cloud-drive letters, external disks, hand-made collections) to see their usage here.",
+  "cg.approx": "approx.",
+  "cg.approxTitle": "Too many files to count fully — this is a lower bound",
+  "cg.readFail": "read failed",
+  "cg.kids": "Items",
+  "cg.del": "Remove",
+  "cg.delConfirm": "Remove \"{n}\" from the overview? Nothing on disk is touched.",
+  "cg.fail": "Operation failed: ",
+  "cg.needBoth": "Both name and folder are required",
+  "cg.added": "Added: ",
+  "cg.sizeUnknown": "not measured",
+  "cg.noKids": "No items found",
   "pane.packs": "Resource Packs",
   "packs.import": "Import local pack", "packs.update": "Check updates on GitHub",
   "packs.intro": "Resource packs are pure-JSON \"recognition & explanation\" data: what a folder/file is, whether it rebuilds automatically, what deleting means, when to keep it. The more packs installed, the higher the \"recognized\" share in cards and the disk tree. Drop in your own pack, or have the AI generate one for this machine.",

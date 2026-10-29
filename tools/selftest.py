@@ -244,6 +244,37 @@ def phase1() -> None:
     finally:
         shutil.rmtree(_wz_dir, ignore_errors=True)
 
+    # 自定义游戏库快照（游戏占用概览的手动添加条目）：只读展示，
+    # 体积 = 目录内文件之和，顶层子项带名字与（文件的）精确大小。
+    # 无 WizTree 表时走 scandir，目录子项标 approx（size 0、前端显示「未测」）。
+    _cg_dir = tempfile.mkdtemp(prefix="oc-glib-")
+    try:
+        _sub = os.path.join(_cg_dir, "GameA")
+        os.mkdir(_sub)
+        _f1 = os.path.join(_cg_dir, "readme.txt")
+        with open(_f1, "w", encoding="utf-8") as _f:
+            _f.write("x" * 100)
+        with open(os.path.join(_sub, "data.bin"), "wb") as _f:
+            _f.write(b"y" * 50)
+        _snap = app.gamelib_snapshot(_cg_dir)
+        check("自定义游戏库快照：体积等于目录内文件之和",
+              _snap.get("size") == 150, str(_snap.get("size")))
+        _names = {c["name"] for c in (_snap.get("children") or [])}
+        check("自定义游戏库快照：顶层子项齐全（文件+子目录）",
+              {"readme.txt", "GameA"} <= _names, str(sorted(_names)))
+        _file_child = next((c for c in _snap["children"]
+                            if c["name"] == "readme.txt"), {})
+        check("自定义游戏库快照：文件子项有精确大小，目录子项标 approx",
+              _file_child.get("size") == 100 and not _file_child.get("approx")
+              and any(c.get("approx") for c in _snap["children"]),
+              str(_file_child))
+        # load_game_libs 的规范化口径：斜杠方向与结尾符不影响 key（与前端 normKey 同思路）
+        check("自定义游戏库条目规范化：斜杠方向与结尾符不影响 key",
+              os.path.normpath("D:/Games\\".replace("/", "\\")).lower()
+              == os.path.normpath("D:\\Games").lower())
+    finally:
+        shutil.rmtree(_cg_dir, ignore_errors=True)
+
     # 盘符：盘符专属项必须带 %DRIVE%，通用项必须不带
     sys_targets = app.build_targets("C")
     check("C 盘目标非空", len(sys_targets) > 10, f"{len(sys_targets)} 项")

@@ -90,6 +90,9 @@ CUSTOM_PATH = CONFIG_DIR / "custom-rules.json"
 # 用户自定义聚合组：把占用树里任意路径归拢进自己命名的组（如「游戏」「工作」）。
 # 纯显示层组织，不影响识别与清理判定；只存本机、不进版本库、不进分发包。
 FS_GROUPS_PATH = CONFIG_DIR / "fs-groups.json"
+# 用户自定义游戏库：游戏占用概览里手动添加的库/游戏目录（名称 + 路径）。
+# 只读展示（量体积、列子项），不参与任何清理判定；只存本机、不进版本库。
+GAMELIBS_PATH = CONFIG_DIR / "game-libs.json"
 # 用户自定义释义 / 结论覆盖：按清理项改写说明文案或翻转「可清理」结论。
 # 用户显式操作的最后一手，优先级高于资源包与内置知识库；
 # 只存本机、不进版本库、不进分发包，见 .gitignore。
@@ -3635,6 +3638,101 @@ _GAME_DIRS_CACHE: dict = {"ts": 0.0, "dirs": {}, "libs": set()}
 _STEAM_COMMON_CACHE: dict = {"ts": 0.0, "common": set(), "libs": set()}
 
 
+# ======================================================================
+#  自定义游戏库（游戏占用概览 → 「自定义游戏库」面板）
+# ======================================================================
+# 用户手动添加的「游戏库或单个游戏目录」：只做只读展示（量体积、列顶层
+# 子项），绝不参与清理判定 —— 这里的路径是用户自己给的，安全护栏（盘根、
+# 受保护域等）都不对它做假设，所以它只许看、不许删。
+
+_GAMELIBS_LOCK = threading.Lock()
+_GAMELIB_CACHE: dict = {}          # 归一化路径 -> 快照（体积 + 顶层子项）
+_GAMELIB_CACHE_TTL = 600.0         # 10 分钟：游戏库体积不会秒级变化
+
+
+def load_game_libs() -> list[dict]:
+    """读取用户自定义游戏库。结构 {"name","path"}；path 存原始大小写
+    （显示用），比较用归一化 key。畸形条目直接丢弃。"""
+    data = _load_json(GAMELIBS_PATH, {"libs": []}, use_cache=False)
+    libs = data.get("libs", []) if isinstance(data, dict) else []
+    out = []
+    for g in libs:
+        if not isinstance(g, dict):
+            continue
+        name = str(g.get("name") or "").strip()
+        p = str(g.get("path") or "").replace("/", "\\").strip().rstrip("\\")
+        if not name or not p:
+            continue
+        out.append({"name": name, "path": p, "key": os.path.normpath(p).lower()})
+    return out
+
+
+def save_game_libs(libs: list[dict]) -> None:
+    _atomic_write(GAMELIBS_PATH, {"libs": libs})
+
+
+def _gamelib_children(path: str) -> list[dict]:
+    """自定义库的顶层子项。有 WizTree 表查表（O(1)、带真实体积）；
+    没有就 scandir：目录给不出体积（标 approx，size 0），文件有精确大小。"""
+    letter = os.path.splitdrive(path)[0].rstrip(":").upper()
+    tbl = _wiz_table(letter)
+    out: list[dict] = []
+    if tbl:
+        for k in _wiztree_children(tbl, path, limit=60):
+            out.append({"name": k["name"], "path": k["path"],
+                        "size": int(k.get("size") or 0), "type": "dir",
+                        "approx": False})
+    else:
+        try:
+            with os.scandir(path) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            out.append({"name": e.name, "path": e.path,
+                                        "size": 0, "type": "dir", "approx": True})
+                        elif e.is_file(follow_symlinks=False):
+                            out.append({"name": e.name, "path": e.path,
+                                        "size": e.stat().st_size,
+                                        "type": "file", "approx": False})
+                    except OSError:
+                        continue
+        except OSError:
+            pass
+        out.sort(key=lambda x: -x["size"])
+    return out[:60]
+
+
+def gamelib_snapshot(path: str) -> dict:
+    """单个自定义库的展示快照：总体积 + 顶层子项，带缓存。
+
+    体积优先查 WizTree 内存表（该盘扫过一次就有了，毫秒级）；
+    没有表才现场走盘，带条目预算 —— 超预算给**下限**并标 partial，
+    前端按「约」处理。快照缓存 10 分钟，重复进页面不再重复走盘。"""
+    key = os.path.normpath(path).lower()
+    now = time.time()
+    with _GAMELIBS_LOCK:
+        c = _GAMELIB_CACHE.get(key)
+        if c and now - c["at"] < _GAMELIB_CACHE_TTL:
+            return c
+    letter = os.path.splitdrive(path)[0].rstrip(":").upper()
+    tbl = _wiz_table(letter)
+    size: int | None = None
+    partial = False
+    if tbl:
+        size = tbl.get(key)
+        if size is None:
+            size = tbl.get(key + "\\")
+        if size is not None:
+            size = int(size)
+    if size is None:
+        size, partial = _size_of_dir_budgeted(path, max_entries=120000)
+    snap = {"size": size, "size_h": human(size), "partial": bool(partial),
+            "children": _gamelib_children(path)}
+    with _GAMELIBS_LOCK:
+        _GAMELIB_CACHE[key] = {**snap, "at": now}
+    return snap
+
+
 def steam_common_dirs() -> tuple[set[str], set[str]]:
     """Steam 各库的 steamapps\\common 目录与库根目录（小写归一化）。
 
@@ -6492,6 +6590,17 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/games":
             # 全平台游戏库（Steam + Epic + GOG），steam 负载原样透传在 .steam 里
             return self._json(apply_lang_payload(discover_games(), q.get("lang")))
+        if route == "/__oc__/game-libs":
+            # 用户自定义游戏库：只读展示（体积 + 顶层子项），带 10 分钟缓存
+            libs = []
+            for g in load_game_libs():
+                try:
+                    snap = gamelib_snapshot(g["path"])
+                except Exception as e:                     # noqa: BLE001
+                    snap = {"size": 0, "size_h": "0 B", "partial": False,
+                            "children": [], "error": str(e)}
+                libs.append({"name": g["name"], "path": g["path"], **snap})
+            return self._json({"libs": libs})
         if route == "/__oc__/partition":
             p = q.get("path") or ""
             if not p:
@@ -6591,6 +6700,56 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.wiz_busy = False
             return self._json({**r, "status": wiztree_status()},
                               200 if r.get("ok") else 500)
+
+        # ---- 用户自定义游戏库（游戏占用概览）：add / remove ----
+        if route == "/__oc__/game-libs":
+            op = str(body.get("op") or "")
+            libs = load_game_libs()
+            if op == "add":
+                name = str(body.get("name") or "").strip()
+                raw = str(body.get("path") or "").strip().strip('"')
+                if not name:
+                    return self._json({"error": "名称不能为空"}, 400)
+                if not raw:
+                    return self._json({"error": "目录不能为空"}, 400)
+                p = os.path.normpath(os.path.expandvars(
+                    os.path.expanduser(raw.replace("/", "\\"))))
+                if not os.path.isabs(p):
+                    return self._json({"error": "目录必须是绝对路径"
+                                               f"（收到：{raw}）"}, 400)
+                if not os.path.isdir(p):
+                    return self._json({"error": f"目录不存在：{p}"}, 400)
+                if len(p) <= 3:
+                    # "D:\" / "D:"：把整个盘根当游戏库既量不动也没意义
+                    return self._json({"error": "不能把整个盘根当游戏库"
+                                               "（太大了，也没意义）"}, 400)
+                key = p.lower()
+                libs = [g for g in libs if g["key"] != key]   # 同目录=改名
+                libs.append({"name": name, "path": p, "key": key})
+                if len(libs) > 30:
+                    return self._json({"error": "自定义游戏库最多 30 条"}, 400)
+                save_game_libs(libs)
+                _GAMELIB_CACHE.pop(key, None)   # 改名/重加后强制重测
+            elif op == "remove":
+                raw = str(body.get("path") or "").strip()
+                key = os.path.normpath(raw.replace("/", "\\")).lower()
+                rest = [g for g in libs if g["key"] != key]
+                if len(rest) == len(libs):
+                    return self._json({"error": "找不到该条目"}, 404)
+                libs = rest
+                save_game_libs(libs)
+                _GAMELIB_CACHE.pop(key, None)
+            else:
+                return self._json({"error": "op 必须是 add 或 remove"}, 400)
+            out = []
+            for g in libs:
+                try:
+                    snap = gamelib_snapshot(g["path"])
+                except Exception as e:                     # noqa: BLE001
+                    snap = {"size": 0, "size_h": "0 B", "partial": False,
+                            "children": [], "error": str(e)}
+                out.append({"name": g["name"], "path": g["path"], **snap})
+            return self._json({"ok": True, "libs": out})
 
         # ---- 用户自定义聚合组（占用树的自由归组，纯显示层）----
         if route == "/__oc__/fsgroups":
