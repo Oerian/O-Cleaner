@@ -84,6 +84,14 @@
      白天模式下一键预设等按钮悬停/按下会突然变黑，与整体色调冲突 */
   .viewnav button:hover{background:var(--panel-hover);color:var(--fg)}
   .viewnav button.on{background:var(--accent);color:#fff;font-weight:600}
+  /* 视图切换过渡：滑入方向跟随切换方向（扫描概览→游戏占用概览从右滑入，
+     反向从左滑入），180ms 短促不拖沓；系统要求减少动效时直接禁用。
+     只做进入动画不做退出动画：退出只会拉长感知等待，是「变白感」的来源之一。 */
+  @keyframes vin-l{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:none}}
+  @keyframes vin-r{from{opacity:0;transform:translateX(-18px)}to{opacity:1;transform:none}}
+  .fspanel.slide-l{animation:vin-l .18s ease-out}
+  .fspanel.slide-r{animation:vin-r .18s ease-out}
+  @media (prefers-reduced-motion:reduce){.fspanel.slide-l,.fspanel.slide-r{animation:none}}
   .themeseg{display:flex;gap:2px;margin-left:6px}
   .themeseg button{padding:4px 10px;font-size:12px}
   .themeseg button.on{background:var(--accent);color:#fff;font-weight:600}
@@ -695,23 +703,23 @@
     <button id="btnCustomClear" class="tiny ghost" data-i18n="custom.clear">取消</button>
   </div>
 
-  <!-- 磁盘概览：原先在右侧栏，现合并到左列，三个视图下都常驻可见。
-       #driveHint / #diskInfo 两个 id 保持不变，renderDisk() 无需改动。 -->
+  <!-- 磁盘概览：常驻统计与趋势（#diskInfo），并吸收了原「扫描概览」小板块 ——
+       全盘扫描的进度与扫描摘要（#fsOverview）也渲染在这个面板里，
+       不再出现两个各说一遍「总容量/已使用/可用」的面板。 -->
   <div class="panel">
-    <h3><span data-i18n="pane.disk">磁盘概览</span> <span class="hint" id="driveHint"></span></h3>
+    <h3><span data-i18n="pane.disk">磁盘概览</span> <span class="hint" id="fsHint"></span></h3>
     <div id="diskInfo"></div>
+    <div id="fsOverview"></div>
   </div>
 
-  <!-- Steam 库独立视图：从工具栏「Steam」入口进入，展示各库、各游戏与本体体积。
-       默认隐藏（display:none），由 view 切换控制显隐。 -->
+  <!-- Steam 库独立视图：从工具栏「Steam」入口进入。
+       库总览与游戏清单合并在一个面板里，按硬盘分组展示（每盘：占用概览
+       + 库列表 + 装在这个盘上的游戏）；残留 / Epic / GOG / 自定义库不变。 -->
   <section id="steamView" class="fspanel" style="display:none">
     <div class="panel">
-      <h3><span data-i18n="pane.steamOverview">Steam 库总览</span> <span class="hint" id="stHint"></span></h3>
+      <h3><span data-i18n="pane.steamOverview">Steam 库总览</span> <span class="hint" id="stHint"></span><span class="hint" id="stListHint"></span></h3>
       <div id="stOverview"></div>
-    </div>
-    <div class="panel">
-      <h3><span data-i18n="pane.gameList">游戏清单</span> <span class="hint" id="stListHint"></span></h3>
-      <div class="segbtns" id="stSort"></div>
+      <div class="segbtns" id="stSort" style="margin-top:12px"></div>
       <div style="margin-top:10px"><input type="text" id="stFilter"
         placeholder="按名称筛选，例如 witcher" style="width:100%" data-i18n-ph="steam.filter"></div>
       <div id="stGames" style="margin-top:12px"></div>
@@ -749,10 +757,6 @@
   </section>
 
   <section id="fullView" class="fspanel">
-    <div class="panel">
-      <h3><span data-i18n="pane.fs">扫描概览</span> <span class="hint" id="fsHint"></span></h3>
-      <div id="fsOverview"></div>
-    </div>
     <div class="panel">
       <div class="fshead">
         <h3><span data-i18n="pane.fsChart">占用排行</span> <span class="hint" id="fsChartHint" data-i18n="pane.fsChartHint">点击任意一条下钻查看子项</span></h3>
@@ -1502,7 +1506,6 @@ function renderDisk(d) {
     $("diskInfo").innerHTML = `<div class="errline">${esc(d?.error || t("disk.unknownErr","未知错误"))}</div>`;
     return;
   }
-  $("driveHint").textContent = `${d.letter}:`;
   const usedRatio = 100 - (d.free / d.total * 100);
   const color = usedRatio > 85 ? "linear-gradient(90deg,var(--warn),var(--danger))"
                                : "linear-gradient(90deg,var(--accent),var(--accent2))";
@@ -2168,10 +2171,12 @@ function renderSteamPage() {
   loadCustomLibs();          // 自定义游戏库：进页面就刷新（有 10 分钟缓存，不贵）
   const s = STEAM;
   if (!s) {
+    _steamPageKey = "";
     $("stOverview").innerHTML = `<div class="empty"><span class="spin"></span>${t("st.loading","正在读取 Steam 清单…")}</div>`;
     return;
   }
   if (!s.found) {
+    _steamPageKey = "";
     $("stHint").textContent = "";
     $("stOverview").innerHTML = '<div class="errline">' +
       esc(s.error || t("st.notFound","未检测到 Steam 安装或库中没有已安装游戏。")) + '</div>' +
@@ -2186,7 +2191,16 @@ function renderSteamPage() {
 
   $("stHint").textContent = `${s.game_count} ${t("st.gamesSuffix","个游戏")} · ${s.total_size_h}`;
 
-  // ---- 库总览：按盘分组，显示该盘容量与 Steam 占比 ----
+  // 渲染缓存：数据、排序、筛选、语言、Epic/GOG 数量都没变就整体跳过重建。
+  // 视图来回切换是最频繁的路径，反复 innerHTML 重挂既慢又让页面闪白。
+  const key = [s.game_count, s.total_size_h, s.orphan_count,
+               (s.by_drive || []).map(d => `${d.drive}:${d.apps}`).join(","),
+               steamSort, steamFilter, langParam(),
+               (GAMES && GAMES.games ? GAMES.games.length : 0)].join("|");
+  if (key === _steamPageKey) return;
+  _steamPageKey = key;
+
+  // ---- 顶部统计 ----
   $("stOverview").innerHTML = `
     <div class="ovrow">
       <div class="ovstats" style="flex:1">
@@ -2194,27 +2208,9 @@ function renderSteamPage() {
         <div class="stat"><span>${t("st.totalSize","Steam 记录总体积")}</span><b class="freed">${esc(s.total_size_h)}</b></div>
         <div class="stat"><span>${t("st.libCount","Steam 库数量")}</span><b>${(s.libraries || []).length} ${t("st.countSuffix","个")}</b></div>
       </div>
-    </div>
-    <div style="margin-top:14px;padding-top:13px;border-top:1px solid var(--line)">
-      <div style="color:var(--dim2);font-size:11.5px;margin-bottom:9px">
-        ${t("st.byDrive","Steam 在各盘的占用（这是你要求看到的「D/E 盘存储」）")}</div>
-      ${(s.by_drive || []).map(d => `
-        <div class="dsk">
-          <div class="dskh">
-            <b>${esc(d.drive)}: ${t("st.driveSuffix","盘")}</b>
-            <span>${t("st.driveLine","Steam {v} · {n} 个游戏 · 占该盘 {p}%").replace("{v}", esc(d.size_h)).replace("{n}", d.apps).replace("{p}", d.share)}</span>
-            <span class="dskcap">${t("st.diskCap","盘总 {t} · 可用 {f}").replace("{t}", esc(d.disk_total_h)).replace("{f}", esc(d.disk_free_h))}</span>
-          </div>
-          <div class="dskbar"><i style="width:${Math.min(100, d.share)}%"></i></div>
-          ${d.libraries.map(l => `<div class="dsklib">
-            <span class="mono">${esc(l.path)}</span>
-            <span>${l.apps} ${t("st.countSuffix","个")} · ${esc(l.size_h)}</span>
-            <button class="tiny ghost" data-reveal="${esc(l.path)}">${t("part.open","打开")}</button>
-          </div>`).join("")}
-        </div>`).join("")}
     </div>`;
 
-  // ---- 游戏清单 ----
+  // ---- 排序 ----
   $("stSort").innerHTML = [
     ["size", t("stSort.size","按体积")], ["stale", t("stSort.stale","最久没玩")], ["name", t("sort.name","按名称")],
   ].map(([k, label]) =>
@@ -2246,22 +2242,28 @@ function renderSteamPage() {
   $("stListHint").textContent = q ? t("st.filtered","筛选出 {n} 个").replace("{n}", games.length)
                                   : t("st.totalN","共 {n} 个").replace("{n}", games.length);
 
-  if (!games.length) {
-    $("stGames").innerHTML = `<div class="empty" style="margin:0">${t("st.noMatch","没有匹配的游戏。")}</div>`;
-  } else {
-    // stale 计算抽成具名函数，避免在模板字符串回调里引用局部变量
-    const staleOf = g => {
-      const d = daysSince(g.last_played);
-      return d === null ? t("st.neverPlayed","从没玩过") : (d > 180 ? t("st.staleDays","{n} 天没玩").replace("{n}", d) : "");
-    };
-    $("stGames").innerHTML = games.map(g => {
-      const stale = staleOf(g);
-      // 游戏本体是可清理项：没在玩的大作就是最值得回收的空间。
-      // 徽标跟着后端的 cleanable 走，不在前端写死。
-      const badge = !g.installed ? `<span class="vbadge unk">${esc(g.state)}</span>`
-        : (g.cleanable ? `<span class="vbadge clean">${t("st.gameBodyClean","游戏本体 · 可清理")}</span>`
-                       : `<span class="vbadge keep">${t("st.gameBodyKeep","游戏本体 · 建议保留")}</span>`);
-      return `<div class="vrow ${g.installed ? "" : "c-keep"}" data-appid="${esc(g.appid)}">
+  // ---- 按盘分组（库总览与游戏清单合并后的形态）----
+  // 每个盘一组：占用概览（Steam 体积/占比/库列表）+ 装在这个盘上的游戏，
+  // 用户对着一个盘就能看全「占了多少、都是什么」。
+  const driveOf = g => ((g.library || "").trim().toUpperCase()[0] || "?");
+  const groups = (s.by_drive || []).map(d =>
+    ({ d, gs: games.filter(g => driveOf(g) === String(d.drive).trim().toUpperCase()[0]) }));
+  const known = new Set(groups.map(gr => String(gr.d.drive).trim().toUpperCase()[0]));
+  const rest = games.filter(g => !known.has(driveOf(g)));
+  if (rest.length) groups.push({ d: null, gs: rest });   // 库不在已知盘上的兜底组
+
+  const staleOf = g => {
+    const d = daysSince(g.last_played);
+    return d === null ? t("st.neverPlayed","从没玩过") : (d > 180 ? t("st.staleDays","{n} 天没玩").replace("{n}", d) : "");
+  };
+  const gameRow = g => {
+    const stale = staleOf(g);
+    // 游戏本体是可清理项：没在玩的大作就是最值得回收的空间。
+    // 徽标跟着后端的 cleanable 走，不在前端写死。
+    const badge = !g.installed ? `<span class="vbadge unk">${esc(g.state)}</span>`
+      : (g.cleanable ? `<span class="vbadge clean">${t("st.gameBodyClean","游戏本体 · 可清理")}</span>`
+                     : `<span class="vbadge keep">${t("st.gameBodyKeep","游戏本体 · 建议保留")}</span>`);
+    return `<div class="vrow ${g.installed ? "" : "c-keep"}" data-appid="${esc(g.appid)}">
         <div class="vtop">
           <span class="fname">${esc(g.display_name || g.name)}${badge}${
             stale ? `<span class="vbadge keep">${esc(stale)}</span>` : ""}</span>
@@ -2272,7 +2274,32 @@ function renderSteamPage() {
             g.exists ? "" : ` · <span class="stale">${t("st.missing","目录不存在")}</span>`}</span>
         </div>
       </div>`;
-    }).join("");
+  };
+
+  if (!games.length) {
+    $("stGames").innerHTML = `<div class="empty" style="margin:0">${t("st.noMatch","没有匹配的游戏。")}</div>`;
+  } else {
+    $("stGames").innerHTML = groups.map(({ d, gs }) => `
+      ${d ? `<div class="dsk">
+          <div class="dskh">
+            <b>${esc(d.drive)}: ${t("st.driveSuffix","盘")}</b>
+            <span>${t("st.driveLine","Steam {v} · {n} 个游戏 · 占该盘 {p}%").replace("{v}", esc(d.size_h)).replace("{n}", d.apps).replace("{p}", d.share)}</span>
+            <span class="dskcap">${t("st.diskCap","盘总 {t} · 可用 {f}").replace("{t}", esc(d.disk_total_h)).replace("{f}", esc(d.disk_free_h))}</span>
+          </div>
+          <div class="dskbar"><i style="width:${Math.min(100, d.share)}%"></i></div>
+          ${d.libraries.map(l => `<div class="dsklib">
+            <span class="mono">${esc(l.path)}</span>
+            <span>${l.apps} ${t("st.countSuffix","个")} · ${esc(l.size_h)}</span>
+            <button class="tiny ghost" data-reveal="${esc(l.path)}">${t("part.open","打开")}</button>
+          </div>`).join("")}
+        </div>`
+        : `<div class="dsk">
+          <div class="dskh"><b>${t("st.otherDrives","其他位置")}</b>
+            <span>${t("st.otherDrivesNote","库目录不在这几个盘上")}</span></div>
+        </div>`}
+      ${gs.length ? gs.map(gameRow).join("")
+        : `<div class="empty" style="margin:4px 0 10px">${t("st.noGamesOnDrive","这个盘上没有已安装游戏。")}</div>`}
+    `).join("");
     $("stGames").querySelectorAll(".vrow").forEach(el => el.addEventListener("click", () => {
       const g = games.find(x => x.appid === el.dataset.appid);
       if (!g) return;
@@ -2998,11 +3025,18 @@ function renderViewNav() {
 }
 
 /** 统一切换两个子页面：扫描概览（含可清理项）/ Steam 游戏库。
-    常规清理已并入扫描概览页（可清理项面板），不再有第三个视图。 */
+    常规清理已并入扫描概览页（可清理项面板），不再有第三个视图。
+    流畅性：切换只对「进入的页面」做一次方向性滑入动画（无退出动画），
+    Steam 页内容没变就不重建 DOM —— 反复 innerHTML 重挂是切换发白卡顿的主因。 */
+let _steamPageKey = "";
 function switchView(name) {
   view = name;
   $("fullView").style.display = name === "full" ? "flex" : "none";
   $("steamView").style.display = name === "steam" ? "flex" : "none";
+  const inc = $(name === "full" ? "fullView" : "steamView");
+  inc.classList.remove("slide-l", "slide-r");
+  void inc.offsetWidth;               // 强制回流，让动画类每次都能重新触发
+  inc.classList.add(name === "steam" ? "slide-l" : "slide-r");
   setToolbars(true, name === "steam" ? "compact" : "normal");
   $("btnSteam").textContent = name === "steam" ? t("nav.backFull","返回扫描概览") : t("nav.steam","游戏占用概览");
   renderViewNav();
@@ -3257,15 +3291,15 @@ function renderOverview() {
       .replace("{explained}", FS.explained).replace("{depth}", FS.max_depth)
       .replace("{engine}", FS.engine === "wiztree" ? t("fs.mftFast"," · WizTree MFT 加速") : "");
 
+  // 磁盘概览面板已吸收本块（原「扫描概览」小板块）：总容量/已使用/可用
+  // 由 renderDisk() 的 #diskInfo 独家呈现，这里只补「本次扫到」这个
+  // 全盘扫描特有的信息，占比环保留（它是扫描结果的直观形状）。
   $("fsOverview").innerHTML = `
     <div class="ovrow">
       <div class="ring" style="background:conic-gradient(${color} 0turn ${(usedPct/100).toFixed(3)}turn, var(--track) ${(usedPct/100).toFixed(3)}turn 1turn)">
         <div class="rt"><div class="p">${usedPct}%</div><div class="l">${t("disk.used","已使用")}</div></div>
       </div>
       <div class="ovstats">
-        <div class="stat"><span>${t("disk.total","总容量")}</span><b>${d.total_h}</b></div>
-        <div class="stat"><span>${t("disk.used","已使用")}</span><b>${d.used_h}</b></div>
-        <div class="stat"><span>${t("disk.free","可用")}</span><b class="freed">${d.free_h}</b></div>
         <div class="stat"><span>${t("fs.scannedNow","本次扫到")}</span><b>${FS.scanned_total_h} · ${FS.node_count} ${t("fs.nodesSuffix","个节点")}</b></div>
       </div>
     </div>
@@ -5010,12 +5044,10 @@ const I18N_EN = {
   "custom.scan": "Scan this directory", "custom.clear": "Cancel",
   "pane.disk": "Disk Overview",
   "pane.steamOverview": "Steam Library Overview",
-  "pane.gameList": "Game List",
   "steam.filter": "Filter by name, e.g. witcher",
   "pane.orphans": "Leftovers & Cleanup Advice",
   "pane.orphansHint": "No Steam record but the folder exists",
   "pane.epic": "Epic Games Library", "pane.gog": "GOG Games Library",
-  "pane.fs": "Scan Overview",
   "pane.fsChart": "Space Usage Ranking",
   "pane.fsChartHint": "Click any bar to drill down",
   "pnav.aria": "Side panel navigation",
@@ -5195,6 +5227,8 @@ const I18N_EN = {
   "st.diskCap": "Disk {t} total · {f} free",
   "st.filtered": "{n} matched", "st.totalN": "{n} in total",
   "st.noMatch": "No matching games.", "st.neverPlayed": "Never played",
+  "st.otherDrives": "Other locations", "st.otherDrivesNote": "Library folders not on the drives above",
+  "st.noGamesOnDrive": "No installed games on this drive.",
   "st.staleDays": "{n} days since last play",
   "st.gameBodyClean": "Game data · Cleanable", "st.gameBodyKeep": "Game data · Keep",
   "st.recSizeAt": "Steam recorded size · in {v}", "st.missing": "Folder missing",

@@ -949,10 +949,24 @@ def phase3_http() -> None:
               'class="panel acc' in html and "data-acc=" in html
               and "initAccordions" in html)
         check("侧栏不再有磁盘概览面板（已并入左栏）",
-              'id="driveHint"' in html and 'id="diskInfo"' in html
-              and html.count('id="driveHint"') == 1)
-        check("全盘页的面板改称扫描概览，避免与左栏重名",
-              'data-i18n="pane.fs">扫描概览</span>' in html and 'id="fsHint"' in html)
+              'id="diskInfo"' in html and 'id="fsHint"' in html
+              and html.count('id="fsHint"') == 1)
+        # 2026-10-29 合并：扫描概览小板块并入磁盘概览面板（全盘页不再有
+        # 独立概览面板），fsOverview 必须与 diskInfo 同面板且在其之后
+        check("扫描概览并入磁盘概览面板（不再重复统计）",
+              'id="diskInfo"' in html and 'id="fsOverview"' in html
+              and 'data-i18n="pane.fs"' not in html
+              and 0 < html.find('id="diskInfo"') < html.find('id="fsOverview"'))
+        check("Steam 库总览与游戏清单合并且按盘分组",
+              'id="stOverview"' in html and 'id="stGames"' in html
+              and 'data-i18n="pane.gameList"' not in html
+              and 0 < html.find('id="stOverview"') < html.find('id="stGames"'))
+        # 视图切换流畅性：方向性滑入动画 + Steam 页渲染缓存（切换不重挂 DOM）
+        check("视图切换带方向性滑入过渡且尊重 reduced-motion",
+              "@keyframesvin-l" in _css and ".fspanel.slide-l" in _css
+              and "prefers-reduced-motion" in _css)
+        check("Steam 页渲染缓存避免切换白闪",
+              "_steamPageKey" in html and html.count("_steamPageKey") >= 3)
         check("左右两栏各自独立滚动",
               "body{display:flex;flex-direction:column;height:100vh;overflow:hidden}" in _css
               # 唯一一行必须钉死在容器高度上，否则网格隐式行会被内容撑高、无法内滚动

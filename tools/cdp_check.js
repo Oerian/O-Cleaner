@@ -649,6 +649,32 @@ class CDP {
   checkScan("磁盘概览含可清理/保留比例条", ovInfo.hasClbar && /%/.test(ovInfo.cleanW),
         `可清理占比 ${ovInfo.cleanW}`);
   console.log(`  [信息] 概览: ${ovInfo.stats}`);
+  // 2026-10-29 合并：扫描概览小板块并入磁盘概览面板 —— fsOverview 与
+  // diskInfo 必须同面板，且不再重复「总容量/已使用/可用」三项统计
+  const mergedPanel = await evaluate(`(() => {
+    const a = document.querySelector('#diskInfo'), b = document.querySelector('#fsOverview');
+    const pa = a && a.closest('.panel'), pb = b && b.closest('.panel');
+    const stats = b ? [...b.querySelectorAll('.stat span')].map(e => e.innerText.trim()) : [];
+    return { samePanel: !!pa && pa === pb,
+             dupDisk: stats.some(s => /总容量|Total capacity/.test(s)) };
+  })()`);
+  check("扫描概览已并入磁盘概览面板（同面板、不重复统计）",
+        mergedPanel.samePanel && !mergedPanel.dupDisk, JSON.stringify(mergedPanel));
+  // 视图切换流畅性：方向性滑入动画类 + 渲染缓存存在
+  const smooth = await evaluate(`(() => {
+    let kf = false, slide = false, cache = false;
+    for (const sheet of document.styleSheets) {
+      let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
+      for (const r of rules) {
+        if (r.type === CSSRule.KEYFRAMES_RULE && /vin-(l|r)/.test(r.name)) kf = true;
+        if (r.selectorText && /\\.fspanel\\.slide-(l|r)/.test(r.selectorText)) slide = true;
+      }
+    }
+    try { cache = typeof _steamPageKey === "string"; } catch (_) {}
+    return { kf, slide, cache };
+  })()`);
+  check("视图切换滑入动画与渲染缓存就位",
+        smooth.kf && smooth.slide && smooth.cache, JSON.stringify(smooth));
 
   const chart = await evaluate(`(() => {
     const rows = [...document.querySelectorAll('#fsChart .vrow')];
@@ -1382,8 +1408,8 @@ class CDP {
       libCount: (window.STEAM && STEAM.games) ? STEAM.games.length : 0,
       // found=false 有两种成因：本机确实没有 Steam，或后端枚举失败。后者要看得见。
       steamErr: (window.STEAM && STEAM.error) ? String(window.STEAM.error).slice(0, 80) : '',
-      drives: document.querySelectorAll('#stOverview .dsk').length,
-      driveRows: [...document.querySelectorAll('#stOverview .dsk .dskh')]
+      drives: document.querySelectorAll('#stGames .dsk').length,
+      driveRows: [...document.querySelectorAll('#stGames .dsk .dskh')]
         .map(e => e.innerText.replace(/\\n/g, ' ').slice(0, 60)),
       games: document.querySelectorAll('#stGames .vrow').length,
       sorts: document.querySelectorAll('#stSort .seg').length,
