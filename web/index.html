@@ -409,13 +409,33 @@
      滚过整个模块后这块自然跟着面板走，不会盖到别的面板（「模块内固定」）。
      负 margin 抵消面板内边距，吸顶时行内容不从背后漏出；
      底部分隔线让吸顶态与常态有同一视觉锚。 */
-  .fshead{position:sticky;top:0;z-index:6;margin:-14px -14px 12px;
-          padding:12px 14px 9px;background:var(--panel);
+  .fshead{position:sticky;top:0;z-index:6;margin:-14px -14px 12px;          padding:12px 14px 9px;background:var(--panel);
           border-bottom:1px solid var(--line);border-radius:12px 12px 0 0}
   .fshead h3{margin-bottom:0}
   .fshead .upcard,.fshead .crumbs{margin-top:9px}
   .fshead .drillhint{margin-top:6px}
   .fstabbar{margin-top:9px}
+  /* 游戏占用概览模块：库分区统一「XX 游戏库」样式（同面板内分隔） +
+     残留建议折叠头与勾选行（2026-10-29 用户要求：库名统一、置顶折叠可勾选）。 */
+  .libsec{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+  .libsec h3{margin-bottom:8px}
+  .orphanhead{display:flex;align-items:center;gap:9px;padding:9px 12px;
+    border:1px solid var(--line2);border-radius:8px;background:var(--panel2);
+    cursor:pointer;user-select:none;transition:.13s}
+  .orphanhead:hover{border-color:var(--accent)}
+  .orphanhead .ochev{color:var(--dim2);width:11px;flex:none}
+  .orphanhead b{white-space:nowrap}
+  .orphanhead .osum{color:var(--dim);font-size:12px;flex:1;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .orphanhead .ohint{color:var(--dim2);font-size:11px;white-space:nowrap}
+  .orowbar{display:flex;gap:8px;align-items:center;margin:10px 0 4px}
+  .orowbar .ospace{flex:1}
+  .orow{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px;cursor:pointer}
+  .orow:hover{background:var(--panel-hover)}
+  .orow input[type=checkbox]{width:15px;height:15px;flex:none;accent-color:var(--accent)}
+  .orow .oname{font-weight:600;white-space:nowrap}
+  .orow .osize{flex:1;color:var(--dim2);font-size:11.5px;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .seg{padding:5px 12px;border-radius:99px;border:1px solid var(--line);
        background:var(--panel2);color:var(--dim);font-size:12.5px;cursor:pointer;
        transition:.13s}
@@ -712,46 +732,54 @@
     <div id="fsOverview"></div>
   </div>
 
-  <!-- Steam 库独立视图：从工具栏「Steam」入口进入。
-       库总览与游戏清单合并在一个面板里，按硬盘分组展示（每盘：占用概览
-       + 库列表 + 装在这个盘上的游戏）；残留 / Epic / GOG / 自定义库不变。 -->
+  <!-- 游戏占用概览独立视图：从工具栏入口进入，一个面板承载全部。
+       吸顶模块头（标题 + 排序 + 筛选，与占用排行同款 fshead）→ 残留与清理建议
+       （置顶、默认折叠、勾选批量删）→ Steam 游戏库（按盘分组）→
+       Epic / GOG / 自定义游戏库，库分区统一样式。 -->
   <section id="steamView" class="fspanel" style="display:none">
     <div class="panel">
-      <h3><span data-i18n="pane.steamOverview">Steam 库总览</span> <span class="hint" id="stHint"></span><span class="hint" id="stListHint"></span></h3>
-      <div id="stOverview"></div>
-      <div class="segbtns" id="stSort" style="margin-top:12px"></div>
-      <div style="margin-top:10px"><input type="text" id="stFilter"
-        placeholder="按名称筛选，例如 witcher" style="width:100%" data-i18n-ph="steam.filter"></div>
-      <div id="stGames" style="margin-top:12px"></div>
-    </div>
-    <div class="panel" id="stOrphanPanel" style="display:none">
-      <h3><span data-i18n="pane.orphans">残留与清理建议</span> <span class="hint" data-i18n="pane.orphansHint">Steam 无记录但目录还在</span></h3>
-      <div id="stOrphans"></div>
-    </div>
-    <div class="panel" id="epicPanel" style="display:none">
-      <h3><span data-i18n="pane.epic">Epic 游戏库</span> <span class="hint" id="epicHint"></span></h3>
-      <div id="epicGames"></div>
-      <div id="epicOrphans" style="display:none;margin-top:10px"></div>
-    </div>
-    <div class="panel" id="gogPanel" style="display:none">
-      <h3><span data-i18n="pane.gog">GOG 游戏库</span> <span class="hint" id="gogHint"></span></h3>
-      <div id="gogGames"></div>
-      <div id="gogOrphans" style="display:none;margin-top:10px"></div>
-    </div>
-    <div class="panel">
-      <h3><span data-i18n="pane.customLibs">自定义游戏库</span>
-        <span class="hint" data-i18n="pane.customLibsHint">手动添加任意游戏库或单个游戏目录</span></h3>
-      <div id="cgList"></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-        <input type="text" id="cgName" data-i18n-ph="cg.namePh"
-               placeholder="名称，例如：网盘游戏库" style="flex:1;min-width:150px">
-        <input type="text" id="cgPath" data-i18n-ph="cg.pathPh"
-               placeholder="目录，例如 D:\Games" style="flex:2;min-width:230px">
-        <button id="cgAdd" class="primary" data-i18n="cg.add">添加</button>
+      <div class="fshead" id="stHead">
+        <h3><span data-i18n="pane.steamOverview">游戏占用概览</span> <span class="hint" id="stListHint"></span></h3>
+        <div class="fstabbar">
+          <div class="segbtns" id="stSort"></div>
+          <div style="margin-top:6px"><input type="text" id="stFilter"
+            placeholder="按名称筛选，例如 witcher" style="width:100%" data-i18n-ph="steam.filter"></div>
+        </div>
       </div>
-      <div style="color:var(--dim2);font-size:11.5px;margin-top:8px;line-height:1.6"
-           data-i18n-html="cg.note">
-        只做只读展示（量体积、列顶层子项），不会清理这里面的任何内容；同名目录重复添加视为改名。
+      <div id="stOrphanPanel" style="display:none">
+        <div class="orphanhead" id="stOrphanToggle" role="button" tabindex="0"></div>
+        <div id="stOrphanBody" style="display:none"></div>
+      </div>
+      <div class="libsec">
+        <h3><span data-i18n="pane.steamPanel">Steam 游戏库</span> <span class="hint" id="stHint"></span></h3>
+        <div id="stOverview"></div>
+        <div id="stGames" style="margin-top:12px"></div>
+      </div>
+      <div class="libsec" id="epicPanel" style="display:none">
+        <h3><span data-i18n="pane.epic">Epic 游戏库</span> <span class="hint" id="epicHint"></span></h3>
+        <div id="epicGames"></div>
+        <div id="epicOrphans" style="display:none;margin-top:10px"></div>
+      </div>
+      <div class="libsec" id="gogPanel" style="display:none">
+        <h3><span data-i18n="pane.gog">GOG 游戏库</span> <span class="hint" id="gogHint"></span></h3>
+        <div id="gogGames"></div>
+        <div id="gogOrphans" style="display:none;margin-top:10px"></div>
+      </div>
+      <div class="libsec">
+        <h3><span data-i18n="pane.customLibs">自定义游戏库</span>
+          <span class="hint" data-i18n="pane.customLibsHint">手动添加任意游戏库或单个游戏目录</span></h3>
+        <div id="cgList"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <input type="text" id="cgName" data-i18n-ph="cg.namePh"
+                 placeholder="名称，例如：网盘游戏库" style="flex:1;min-width:150px">
+          <input type="text" id="cgPath" data-i18n-ph="cg.pathPh"
+                 placeholder="目录，例如 D:\Games" style="flex:2;min-width:230px">
+          <button id="cgAdd" class="primary" data-i18n="cg.add">添加</button>
+        </div>
+        <div style="color:var(--dim2);font-size:11.5px;margin-top:8px;line-height:1.6"
+             data-i18n-html="cg.note">
+          只做只读展示（量体积、列顶层子项），不会清理这里面的任何内容；同名目录重复添加视为改名。
+        </div>
       </div>
     </div>
   </section>
@@ -2102,6 +2130,7 @@ async function runRule(rule, silent) {
 
 /* ============ Steam 游戏库（独立子页面） ============ */
 let STEAM = null, steamSort = "size", steamFilter = "";
+let stOrphanOpen = false;   // 残留与清理建议的折叠态（默认收起）
 let GAMES = null;   // 全平台游戏库（/​__oc__/games）：Epic/GOG 从这里取
 
 async function loadSteam(force) {
@@ -2117,7 +2146,6 @@ async function loadSteam(force) {
   } catch (e) {
     GAMES = null;
   }
-  renderSteam();
   if (view === "steam") renderSteamPage();
   return STEAM;
 }
@@ -2130,43 +2158,8 @@ function daysSince(d) {
   return Math.floor((Date.now() - t) / 86400000);
 }
 
-/** 侧栏精简版已随面板删去（2026-10-29：与游戏占用概览整页重复）。
- *  loadSteam 的调用链还在，这里留一个守卫版兜底，避免空引用。 */
-function renderSteam() {
-  if (!$("steamPanel")) return;
-  const el = $("steamPanel");
-  const s = STEAM;
-  if (!s || !s.found) {
-    $("steamHint").textContent = "";
-    el.innerHTML = `<div class="empty" style="margin:0">` +
-      (s && s.error ? t("st.readFail","读取失败：") + esc(s.error)
-        : t("st.notFound","未检测到 Steam 安装或库中没有已安装游戏。")) +
-      `<div style="margin-top:6px;color:var(--dim2);font-size:11.5px">` +
-      t("st.manifestNote","数据读自 Steam 自己的清单文件（libraryfolders.vdf / appmanifest_*.acf），不扫描磁盘，直接读取 Steam 自身的记录。") +
-      `</div></div>`;
-    return;
-  }
-  $("steamHint").textContent = `${s.game_count} ${t("st.countSuffix","个")} · ${s.total_size_h}`;
-  const top = [...s.games].sort((a, b) => b.size - a.size).slice(0, 5);
-  el.innerHTML = `
-    <div class="stat"><span>${t("st.installed","已安装")}</span><b>${s.game_count} ${t("st.gamesSuffix","个游戏")}</b></div>
-    <div class="stat"><span>${t("st.recSize","记录体积")}</span><b class="freed">${esc(s.total_size_h)}</b></div>
-    ${(s.by_drive || []).map(d => `<div class="stat">
-        <span>${esc(d.drive)}: ${t("st.driveSuffix","盘")} <span style="color:var(--dim2);font-size:11.5px">${t("st.driveShare","占该盘 {n}%").replace("{n}", d.share)}</span></span>
-        <b>${esc(d.size_h)}</b></div>`).join("")}
-    ${top.map(g => `<div class="sgame">
-        <div class="sgl"><span class="sgn">${esc(g.display_name || g.name)}</span>
-          <span class="sgs">${esc(g.size_h)}</span></div></div>`).join("")}
-    <button class="primary" id="btnSteamDetail" style="width:100%;margin-top:11px">
-      ${t("st.openPage","打开 Steam 游戏库页面")}</button>
-    <div style="color:var(--dim2);font-size:11.5px;margin-top:9px;line-height:1.6">
-      ${t("st.fromManifest","读自 Steam 清单，<b>不是扫描结果</b>。要卸载游戏请在 Steam 客户端里操作。")}
-    </div>`;
-  const b = $("btnSteamDetail");
-  if (b) b.addEventListener("click", () => switchView("steam"));
-}
-
-/** 独立页面：库总览 + 完整游戏清单 + 残留清理 */
+/** 独立页面：吸顶模块头 + 残留清理（折叠勾选）+ Steam 游戏库（按盘分组）
+ *  + Epic / GOG / 自定义游戏库（2026-10-29 起：一个面板承载全部） */
 function renderSteamPage() {
   loadCustomLibs();          // 自定义游戏库：进页面就刷新（有 10 分钟缓存，不贵）
   const s = STEAM;
@@ -2317,32 +2310,74 @@ function renderSteamPage() {
     }));
   }
 
-  // ---- 残留与清理建议 ----
+  // ---- 残留与清理建议（置顶、默认折叠、勾选批量删）----
+  // 最值得回收的一类空间，所以放在库分区前面；默认折叠省空间，
+  // 展开后逐项勾选（默认全选），一次确认批量删除 —— 替代原来每行一个
+  // 「删除」按钮的碎交互。删除走与删游戏同一条 clean-game 后端校验。
   if (s.orphan_count) {
     $("stOrphanPanel").style.display = "";
-    $("stOrphans").innerHTML = `
+    const orphanTotal = s.orphan_size_h
+      ? ` · ${t("st.orphanTotal","（合计 {v}）").replace("{v}", esc(s.orphan_size_h))}` : "";
+    $("stOrphanToggle").innerHTML = `
+      <span class="ochev">${stOrphanOpen ? "▾" : "▸"}</span>
+      <b>${t("pane.orphans","残留与清理建议")}</b>
+      <span class="osum">${t("st.orphanFoundSteam","发现 {n} 个目录在 Steam 清单里没有对应记录").replace("{n}", s.orphan_count)}${orphanTotal}</span>
+      <span class="ohint">${t("st.orphanExpand","点击展开 · 勾选后可批量删除")}</span>`;
+    $("stOrphanBody").innerHTML = `
       <div class="warnpane warm">
-        <b>${t("st.orphanFoundSteam","发现 {n} 个目录在 Steam 清单里没有对应记录").replace("{n}", s.orphan_count)}</b>
-        ${s.orphan_size_h ? `${t("st.orphanTotal","（合计 {v}）").replace("{v}", esc(s.orphan_size_h))}` : ""}。
         ${t("st.orphanNoteSteam","这通常是卸载不干净留下的残留，是最值得回收的一类空间。")}
         <b>${t("st.orphanCheck","删前请先确认里面没有你想留的东西")}</b> —— ${t("st.orphanSavesMaybe","有些游戏的存档或 MOD 可能在这里。")}
       </div>
-      ${(s.orphans || []).map(o => `<div class="sgame">
-        <div class="sgl"><span class="sgn">${esc(o.name)}</span>
-          <span class="sgs mono">${esc(o.path)}</span></div>
-        <span class="fsize">${esc(o.size_h || "")}</span>
-        <button class="tiny" data-delgame="${esc(o.path)}" data-orphan="1">${t("st.delete","删除")}</button>
-        <button class="tiny ghost" data-reveal="${esc(o.path)}">${t("st.openDir","打开目录")}</button>
-      </div>`).join("")}`;
-    // 残留目录一键删除：它就在 steamapps\common 的顶层，后端的二次识别天然放行；
-    // 点击直接进确认弹窗（体积行上已可见），与删游戏同一道后端校验。
-    $("stOrphans").querySelectorAll("[data-delgame]").forEach(b =>
-      b.addEventListener("click", () => {
-        const o = (s.orphans || []).find(x => x.path === b.dataset.delgame);
-        if (o) confirmDeleteGame({ ...o }, "steam", true);
-      }));
+      <div class="orowbar">
+        <button class="tiny ghost" id="stOrphanAll">${t("btn.all","全选")}</button>
+        <button class="tiny ghost" id="stOrphanNone">${t("btn.none","全不选")}</button>
+        <span class="ospace"></span>
+        <button class="tiny primary" id="stOrphanDel" disabled></button>
+      </div>
+      ${(s.orphans || []).map(o => `
+        <label class="orow">
+          <input type="checkbox" class="ock" data-path="${esc(o.path)}" checked>
+          <span class="oname">${esc(o.name)}</span>
+          <span class="osize mono">${esc(o.path)}</span>
+          <span class="fsize">${esc(o.size_h || "")}</span>
+          <button class="tiny ghost" data-reveal="${esc(o.path)}" type="button">${t("st.openDir","打开目录")}</button>
+        </label>`).join("")}`;
+    $("stOrphanBody").style.display = stOrphanOpen ? "" : "none";
+    const bulkBtn = () => {
+      const boxes = [...$("stOrphanBody").querySelectorAll(".ock")];
+      const items = boxes.filter(b => b.checked)
+        .map(b => (s.orphans || []).find(x => x.path === b.dataset.path)).filter(Boolean);
+      const del = $("stOrphanDel");
+      del.disabled = !items.length;
+      del.textContent = items.length
+        ? t("st.delSel","删除勾选的 {n} 项（预计释放 {v}）")
+            .replace("{n}", items.length)
+            .replace("{v}", fmt(items.reduce((a, o) => a + (o.size || 0), 0)))
+        : t("st.delSel0","勾选要删除的目录");
+      return items;
+    };
+    $("stOrphanBody").querySelectorAll(".ock").forEach(b =>
+      b.addEventListener("change", bulkBtn));
+    $("stOrphanAll").addEventListener("click", () => {
+      $("stOrphanBody").querySelectorAll(".ock").forEach(b => { b.checked = true; });
+      bulkBtn();
+    });
+    $("stOrphanNone").addEventListener("click", () => {
+      $("stOrphanBody").querySelectorAll(".ock").forEach(b => { b.checked = false; });
+      bulkBtn();
+    });
+    $("stOrphanDel").addEventListener("click", () => {
+      const items = bulkBtn();
+      if (items.length) confirmDeleteOrphans(items);
+    });
+    $("stOrphanToggle").addEventListener("click", () => {
+      stOrphanOpen = !stOrphanOpen;
+      $("stOrphanBody").style.display = stOrphanOpen ? "" : "none";
+      $("stOrphanToggle").querySelector(".ochev").textContent = stOrphanOpen ? "▾" : "▸";
+    });
   } else {
     $("stOrphanPanel").style.display = "none";
+    stOrphanOpen = false;   // 残留清空后复位折叠态，下次出现仍从折叠开始
   }
 
   // ---- Epic / GOG 游戏库（有才显示）----
@@ -4212,6 +4247,69 @@ function showDetail(it) {
   if (ba) ba.addEventListener("click", () => aiExplainInto(it, ba));
 }
 
+/** 批量删除残留目录（2026-10-29）：残留建议折叠面板勾选后一次确认、
+ *  逐个调用 clean-game（与删游戏同一条后端校验），汇总结果一次性展示。
+ *  走单次确认弹窗而不是逐项弹窗 —— 勾选本身就是逐项确认。 */
+async function confirmDeleteOrphans(items) {
+  const total = items.reduce((a, o) => a + (o.size || 0), 0);
+  $("modal").innerHTML = `
+    <h2>${t("st.bulkHead","删除 {n} 个残留目录 —— 执行后无法恢复").replace("{n}", items.length)}</h2>
+    <div class="mbody">
+      <div class="warnpane"><b>${t("dg.permanent","将永久删除整个目录")}</b>：${t("dg.orphanWhat","这是 Steam 清单里已无记录的目录（通常是卸载不干净的残留）")}。
+        ${t("st.orphanCheck","删前请先确认里面没有你想留的东西")}。${t("st.bulkCheck","已勾选目录会逐个删除，过程中请勿关闭页面。")}</div>
+      <div style="margin-top:8px;max-height:34vh;overflow-y:auto">
+        ${items.map(o => `<div style="display:flex;gap:9px;padding:5px 2px;border-bottom:1px solid var(--line)">
+          <span style="flex:1;min-width:0;word-break:break-all">${esc(o.display_name || o.name)}</span>
+          <span style="color:var(--dim2);white-space:nowrap">${esc(o.size_h || "")}</span>
+        </div>`).join("")}
+      </div>
+      <div id="delGameMsg" style="color:var(--dim);font-size:12px;margin-top:9px"></div>
+    </div>
+    <div class="mfoot">
+      <div class="left">${t("dg.willFree","预计释放")} <b style="color:var(--ok)">${fmt(total)}</b></div>
+      <button id="dgCancel" class="ghost">${t("dg.cancel","取消")}</button>
+      <button id="dgGo" class="go">${t("st.bulkGo","逐个删除")}</button>
+    </div>`;
+  $("mask").classList.add("on");
+  $("dgCancel").addEventListener("click", closeModal);
+  $("dgGo").addEventListener("click", async () => {
+    const btn = $("dgGo"), msg = $("delGameMsg");
+    if (!btn || !msg) return;
+    btn.disabled = true;
+    const results = [];
+    for (let i = 0; i < items.length; i++) {
+      const o = items[i];
+      btn.textContent = t("st.bulkProgress","正在删除 {i}/{n}…")
+        .replace("{i}", i + 1).replace("{n}", items.length);
+      msg.textContent = `${t("st.bulkDeleting","正在删除")}：${o.display_name || o.name}`;
+      try {
+        results.push({ o, r: await apiJSON(`${API}/__oc__/clean-game`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: o.path }),
+        }) });
+      } catch (e) {
+        results.push({ o, r: { ok: false, error: String(e) } });
+      }
+    }
+    const freedSum = results.reduce((a, x) => a + (x.r.freed || 0), 0);
+    const okN = results.filter(x => x.r.ok).length;
+    $("modal").innerHTML = `
+      <h2>${okN === items.length ? t("st.bulkDoneAll","全部删除完成") : t("st.bulkDoneSome","删除完成（{n}/{m} 成功）").replace("{n}", okN).replace("{m}", items.length)}</h2>
+      <div class="mbody">
+        <div class="dadv ${okN ? "yes" : "no"}"><b>${t("dg.freed","释放")}</b>
+          <b style="color:var(--ok)">${fmt(freedSum)}</b>。
+          ${t("dg.diskStale","磁盘概览是删除之前扫的，数字已经过期；需要最新数据时再点「全盘扫描本盘」。")}</div>
+        ${results.filter(x => !x.r.ok).map(x => `
+          <div class="dadv no" style="margin-top:8px"><b>${esc(x.o.display_name || x.o.name)}</b>：${esc(x.r.error || t("dg.failed","删除失败"))}</div>`).join("")}
+      </div>
+      <div class="mfoot"><button id="dgClose" class="primary">${t("det.ok","知道了")}</button></div>`;
+    $("dgClose").addEventListener("click", closeModal);
+    // 数据已变：强制刷新清单与残留列表（10 分钟缓存对删除场景不合适）
+    STEAM = null;
+    try { await loadSteam(true); } catch (_) {}
+  });
+}
+
 /* 删除单个游戏本体 / Steam 残留目录 —— 「游戏是可清理项」的落地动作。
    与常规清理不同，这里删的是整个目录（动辄几十 GB），所以：
    * 确认弹窗把名称、体积、路径和存档风险全部写明，按钮用红色；
@@ -5043,10 +5141,9 @@ const I18N_EN = {
   "custom.placeholder": "e.g. D:\\Downloads or E:\\GameCache — press Enter to scan known junk folders inside",
   "custom.scan": "Scan this directory", "custom.clear": "Cancel",
   "pane.disk": "Disk Overview",
-  "pane.steamOverview": "Steam Library Overview",
+  "pane.steamOverview": "Game Storage",
   "steam.filter": "Filter by name, e.g. witcher",
   "pane.orphans": "Leftovers & Cleanup Advice",
-  "pane.orphansHint": "No Steam record but the folder exists",
   "pane.epic": "Epic Games Library", "pane.gog": "GOG Games Library",
   "pane.fsChart": "Space Usage Ranking",
   "pane.fsChartHint": "Click any bar to drill down",
@@ -5054,7 +5151,7 @@ const I18N_EN = {
   "pane.guide": "Environment Self-check",
   "pane.guideHint": "Read this on first use",
   "pane.presets": "One-click Presets",
-  "pane.steamPanel": "Steam Library",
+  "pane.steamPanel": "Steam Games Library",
   "pane.customLibs": "Custom Game Libraries",
   "pane.customLibsHint": "Manually add any game library or a single game folder",
   "cg.namePh": "Name, e.g. Cloud-drive library",
@@ -5213,22 +5310,26 @@ const I18N_EN = {
   "sf.epicGame": "Epic game", "sf.gogGame": "GOG game",
   "sf.gameLib": "game library", "sf.file": "file", "sf.dir": "folder",
   "sf.locatedAt": "in {v}",
-  "st.installed": "Installed", "st.gamesSuffix": "games", "st.countSuffix": "",
-  "st.recSize": "Recorded size", "st.driveSuffix": "drive",
-  "st.driveShare": "{n}% of this drive", "st.openPage": "Open the Steam library page",
-  "st.fromManifest": "Read from the Steam manifest, <b>not a scan result</b>. Uninstall games from the Steam client.",
+  "st.gamesSuffix": "games", "st.countSuffix": "",
+  "st.driveSuffix": "drive",
   "st.loading": "Reading the Steam manifest…",
   "st.notFound": "No Steam installation detected, or no installed games in its libraries.",
   "st.notFoundNote": "This tool looks for Steam in the registry and common paths, then reads libraryfolders.vdf. If your Steam lives in an unusual location, tell me the library path and I'll add a rule.",
   "st.installedGames": "Installed games", "st.totalSize": "Steam recorded total",
   "st.libCount": "Steam libraries",
-  "st.byDrive": "Steam usage per drive (the \"D/E drive storage\" view you asked for)",
   "st.driveLine": "Steam {v} · {n} games · {p}% of this drive",
   "st.diskCap": "Disk {t} total · {f} free",
   "st.filtered": "{n} matched", "st.totalN": "{n} in total",
   "st.noMatch": "No matching games.", "st.neverPlayed": "Never played",
   "st.otherDrives": "Other locations", "st.otherDrivesNote": "Library folders not on the drives above",
   "st.noGamesOnDrive": "No installed games on this drive.",
+  "st.orphanExpand": "Click to expand · tick items to delete in bulk",
+  "st.delSel": "Delete {n} selected (frees {v})", "st.delSel0": "Tick folders to delete",
+  "st.bulkHead": "Delete {n} leftover folders — this cannot be undone",
+  "st.bulkCheck": "Selected folders are deleted one by one; keep this page open until it finishes.",
+  "st.bulkGo": "Delete all", "st.bulkDeleting": "Deleting",
+  "st.bulkProgress": "Deleting {i}/{n}…",
+  "st.bulkDoneAll": "All deleted", "st.bulkDoneSome": "Finished ({n}/{m} succeeded)",
   "st.staleDays": "{n} days since last play",
   "st.gameBodyClean": "Game data · Cleanable", "st.gameBodyKeep": "Game data · Keep",
   "st.recSizeAt": "Steam recorded size · in {v}", "st.missing": "Folder missing",
@@ -5420,7 +5521,6 @@ const I18N_EN = {
   "acc.toggle": "Click to expand / collapse", "acc.goto": "Expand and jump to this panel",
   "esc.busy": "A scan is running; press Esc again after it finishes",
   "clean.done": "Cleaning finished",
-  "st.readFail": "Failed to read: ", "st.manifestNote": "Data is read from Steam's own manifest files (libraryfolders.vdf / appmanifest_*.acf) — no disk scan, just Steam's own records.",
   "packs.confirmDel": "Delete resource pack \"{n}\"?\n", "packs.confirmDel2": "Its explanations stop taking effect immediately; re-import to restore them.",
   "fs.stale1": "Content was just deleted; the usage tree is stale. ",
   "fs.stale2": "Click \"Full-disk scan\" in the toolbar to rescan.",

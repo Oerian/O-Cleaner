@@ -961,6 +961,15 @@ def phase3_http() -> None:
               'id="stOverview"' in html and 'id="stGames"' in html
               and 'data-i18n="pane.gameList"' not in html
               and 0 < html.find('id="stOverview"') < html.find('id="stGames"'))
+        # 2026-10-29 改版：模块吸顶头（排序+筛选入吸顶）→ 残留建议（折叠勾选）
+        # → Steam/Epic/GOG/自定义 游戏库分区（统一 libsec 样式）
+        check("游戏占用概览模块吸顶头与分区顺序",
+              'class="fshead" id="stHead"' in html
+              and 0 < html.find('id="stHead"') < html.find('id="stOrphanPanel"')
+              < html.find('id="stOverview"')
+              and html.count('class="libsec"') >= 4
+              and 'data-i18n="pane.steamPanel">Steam 游戏库</span>' in html
+              and 'data-i18n="pane.epic">Epic 游戏库</span>' in html)
         # 视图切换流畅性：方向性滑入动画 + Steam 页渲染缓存（切换不重挂 DOM）
         check("视图切换带方向性滑入过渡且尊重 reduced-motion",
               "@keyframesvin-l" in _css and ".fspanel.slide-l" in _css
@@ -995,11 +1004,11 @@ def phase3_http() -> None:
               'id="viewNav"' in html and html.count('data-v="') == 2)
         check("侧栏面板目录条存在（吸顶导航）",
               'id="panelNav"' in html and "initPanelNav" in html)
-        # Steam 残留目录（孤儿）的一键删除：与删游戏共用同一条后端校验链路，
-        # 前端这里只负责入口与「可能是清单漏记的活游戏」的提醒文案
-        check("Steam 残留目录有删除入口并走同一确认流程",
-              "data-delgame" in html and "confirmDeleteGame" in html
-              and "先排除一种误报" in html)
+        # Steam 残留目录（孤儿）2026-10-29 改版：折叠面板 + 勾选批量删，
+        # 一次确认后逐个走 clean-game（与删游戏同一后端校验链路）
+        check("Steam 残留目录折叠勾选批量删并走同一确认流程",
+              "confirmDeleteOrphans" in html and "/__oc__/clean-game" in html
+              and "stOrphanToggle" in html and "先排除一种误报" in html)
         # 高风险项「删进回收站」：确认弹窗的选项、请求参数与结果说明三处齐备；
         # 后端 rm_trash 用 SHFileOperationW 带 FOF_ALLOWUNDO，且容量守卫文本存在
         # —— 超限时系统会把「移入回收站」静默转成永久删除，必须由我们先行拒绝。

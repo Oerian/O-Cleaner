@@ -759,7 +759,7 @@ class CDP {
   // 模块头吸顶（2026-10-29）：「占用排行」标题 + 返回上一级/面包屑/当前目录 +
   // 视图页签 + 排序行整体 sticky 在模块顶部，列表再长导航也不离手。
   const sticky = await evaluate(`(() => {
-    const head = document.querySelector('.fshead');
+    const head = document.querySelector('#fullView .fshead');
     if (!head) return { ok: false };
     const cs = getComputedStyle(head);
     return { ok: true, pos: cs.position, top: cs.top, z: cs.zIndex,
@@ -779,7 +779,7 @@ class CDP {
   // 量完把滚动位置还原，不影响后面的断言。
   const stickTest = await evaluate(`(async () => {
     const col = document.querySelector('#leftcol');
-    const head = document.querySelector('.fshead');
+    const head = document.querySelector('#fullView .fshead');
     if (!col || !head) return { ok: false };
     const colTop = Math.round(col.getBoundingClientRect().top);
     // sticky 的语义：模块头顶到滚动容器顶**之后**才钉住。所以要滚到
@@ -808,7 +808,7 @@ class CDP {
   // 除非向上滚回模块顶 —— 实测：滚到最底，模块头仍应在容器顶。
   const stickBottom = await evaluate(`(async () => {
     const col = document.querySelector('#leftcol');
-    const head = document.querySelector('.fshead');
+    const head = document.querySelector('#fullView .fshead');
     if (!col || !head) return { ok: false };
     const colTop = Math.round(col.getBoundingClientRect().top);
     const max = col.scrollHeight - col.clientHeight;
@@ -1416,6 +1416,29 @@ class CDP {
       filter: !!document.querySelector('#stFilter'),
     }))()`);
     check("可进入 Steam 独立页面", st.shown && st.overviewHidden, st.hint);
+    // 2026-10-29 改版：模块吸顶头 + 分区顺序（残留建议在库前）+ 库名统一
+    const gmod = await evaluate(`(() => {
+      const head = document.querySelector('#stHead');
+      const cs = head ? getComputedStyle(head) : null;
+      const libsecs = document.querySelectorAll('#steamView .libsec').length;
+      const titles = [...document.querySelectorAll('#steamView .libsec h3 span:first-child')]
+        .map(e => e.textContent.trim());
+      const orphan = document.querySelector('#stOrphanPanel');
+      const ov = document.querySelector('#stOverview');
+      const orphanFirst = !!(orphan && ov &&
+        (orphan.compareDocumentPosition(ov) & Node.DOCUMENT_POSITION_FOLLOWING));
+      return { sticky: cs ? cs.position === 'sticky' : false,
+               libsecs, titles, orphanFirst };
+    })()`);
+    check("游戏占用概览模块头吸顶（排序+筛选常驻）",
+          gmod.sticky, `position=${gmod.sticky}`);
+    check("残留与清理建议排在库分区前面",
+          gmod.orphanFirst, `orphanFirst=${gmod.orphanFirst}`);
+    check("游戏库分区统一（Steam/Epic/GOG/自定义，libsec 样式）",
+          gmod.libsecs >= 4
+          && /Steam 游戏库|Steam Games Library/.test(gmod.titles.join("|"))
+          && /Epic 游戏库|Epic Games Library/.test(gmod.titles.join("|")),
+          `libsecs=${gmod.libsecs} titles=${gmod.titles.join(" / ").slice(0, 80)}`);
 
     // Steam 库内容检查要求本机真的装了 Steam 且有已安装游戏：CI runner 与
     // 新装机的开发机上都没有，面板会按设计显示空态（这是功能，不是缺陷）。

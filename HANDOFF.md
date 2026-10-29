@@ -1381,6 +1381,17 @@ SECURITY 该处表述未动。
 
 > **教训**：① cdp_check.js 顶层是单一大作用域，新增 evaluate 结果变量名先 grep 防撞（`merged` 已被占用）。② 用 Python 文本方式重写 JS 文件会把 CRLF 洗成 LF —— 动过之后必须跑 `fix-encoding.ps1`。③ Steam 按盘分组的真实数据路径本机与 CI 都走不到（均无 Steam），纯逻辑用 node 单测兜底 + 静态断言守结构。
 
+### 44. 游戏占用概览改版：统一库分区 + 模块吸顶 + 残留折叠勾选批量删（2026-10-29 下午）
+
+用户反馈：库名统一（Steam/Epic 游戏库放一起）、模块吸顶、残留建议置顶且点击展开可勾选；顺带自检清冗余。
+
+- **一个面板承载整个模块**：steamView 从 5 个平级 panel 改为单个 panel —— `.fshead#stHead`（复用占用排行吸顶头样式：标题 + 排序页签 + 筛选框，滚动常驻）→ `#stOrphanPanel`（残留建议，置顶）→ `.libsec` 分区 ×4（Steam / Epic / GOG / 自定义游戏库，统一样式与命名「XX 游戏库」）。模块头随面板包围盒吸顶，与占用排行行为一致。
+- **残留与清理建议改版**：从「平铺列表 + 每行一个删除按钮」改为**折叠头（默认收起，显示数量/合计/操作提示）+ 展开后 checkbox 勾选行（默认全选，含打开目录）+ 全选/全不选/批量删除按钮**。批量删除走新增 `confirmDeleteOrphans(items)`：一次确认（列清单+预计释放）→ 逐个 POST `clean-game`（与删游戏同一后端校验）→ 汇总结果弹窗 → 强制 `loadSteam(true)` 刷新。折叠态存 `stOrphanOpen`，残留清空后复位。
+- **冗余清理**：删除死函数 `renderSteam()`（侧栏面板 2026-10-29 早前已删，函数只剩守卫返回）及其调用；EN 词典清理 8 个失效键（st.installed/recSize/driveShare/openPage/fromManifest/readFail/manifestNote/byDrive、pane.orphansHint）；`pane.steamOverview` 文案改为模块名「游戏占用概览 / Game Storage」，Steam 分区标题用 `pane.steamPanel`（"Steam 游戏库 / Steam Games Library"）。
+- 门禁：CDP **102-0-5**（新增 3 条：stHead 吸顶、残留在库分区前、libsec ≥4 且 Steam/Epic 标题统一）；selftest **475-0-6**（新增 1 条模块头与分区顺序断言，改写 1 条残留断言为折叠勾选批量删流程）。
+
+> **教训**：cdp_check 里三处裸 `querySelector('.fshead')` 在 steamView 也有 fshead 后全部取错元素（hasNav:false 假红）—— 引用「某类头」的选择器必须限定父容器（`#fullView .fshead`）。同类坑下次还会出现：凡是「文档里第一个 X」式选择器，新增同类结构时都要回头检查。改 i18n 词典时逐键确认还在用（本轮差点误删 st.gamesSuffix/countSuffix/driveSuffix/loading/notFound/notFoundNote 六个在用键）。
+
 ---
 
 ## 七、文件资产与代码清单
