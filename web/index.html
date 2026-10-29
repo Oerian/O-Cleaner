@@ -5491,7 +5491,8 @@ function setLang(l) {
   ["renderChart", "renderDisk", "renderCumulative", "renderUnits",
    "renderRules", "renderPresets", "renderPacks", "renderSteamPage",
    "renderGuide", "drawDiskTrend", "renderDrives", "renderConvToggle",
-   "renderSchedule", "renderHistory", "renderOverview", "renderAI"].forEach(fn => {
+   "renderSchedule", "renderHistory", "renderOverview", "renderAI",
+   "renderCustomLibs"].forEach(fn => {
     try { if (typeof window[fn] === "function") window[fn](); } catch (e) {}
   });
   // 后端返回的长文本（释义/建议）随请求的 lang 走：清掉旧语言的缓存
