@@ -13,6 +13,8 @@ config/packs-state.json
 config/packs-user/
 # AI 设置：含 API 密钥，绝不进版本库
 config/ai.json
+# 用户自定义游戏库（游戏占用概览的手动添加条目，本机数据）
+config/game-libs.json
 
 # 本机真实测试用例（含本机真实目录名，绝不外发）
 tools/local-cases.json

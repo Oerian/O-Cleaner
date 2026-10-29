@@ -1,18 +1,17 @@
 {
   "_comment": "全盘扫描的自动识别知识库（精简版）。只用于解释『占用较大』的项，小文件不参与识别。识别顺序：文件夹名/文件名 → 扩展名 → 所在路径。每条都说明『是什么』与『怎么处理』，让用户能自己判断。",
   "_size_policy": "只有大于 min_size_to_explain 的项才会走识别与解释，阈值在 app.py 的 DISK_SCAN_MIN_SIZE 里改。",
+
   "confidence_labels": {
     "high": "高（名称特征明确）",
     "medium": "中（按名称推断，可能有同名歧义）",
     "low": "低（仅按扩展名或路径推断）"
   },
+
   "folder_rules": [
     {
       "id": "steam-library",
-      "match": [
-        "steamlibrary",
-        "steamapps"
-      ],
+      "match": ["steamlibrary", "steamapps"],
       "kind": "substring",
       "title": "Steam 游戏库",
       "category": "游戏",
@@ -25,13 +24,7 @@
     },
     {
       "id": "game-generic",
-      "match": [
-        "game",
-        "games",
-        "游戏",
-        "steam",
-        "epic"
-      ],
+      "match": ["game", "games", "游戏", "steam", "epic"],
       "kind": "substring",
       "title": "游戏目录",
       "category": "游戏",
@@ -44,14 +37,7 @@
     },
     {
       "id": "emulator",
-      "match": [
-        "mumu",
-        "ldplayer",
-        "bluestacks",
-        "夜神",
-        "雷电",
-        "模拟器"
-      ],
+      "match": ["mumu", "ldplayer", "bluestacks", "夜神", "雷电", "模拟器"],
       "kind": "substring",
       "title": "安卓模拟器",
       "category": "模拟器",
@@ -64,9 +50,7 @@
     },
     {
       "id": "gopro-exports",
-      "match": [
-        "gopro"
-      ],
+      "match": ["gopro"],
       "kind": "substring",
       "title": "GoPro 视频导出",
       "category": "个人数据",
@@ -79,16 +63,7 @@
     },
     {
       "id": "video-media",
-      "match": [
-        "电影",
-        "影片",
-        "视频",
-        "movies",
-        "video",
-        "剧集",
-        "番剧",
-        "动画"
-      ],
+      "match": ["电影", "影片", "视频", "movies", "video", "剧集", "番剧", "动画"],
       "kind": "substring",
       "title": "影视媒体库",
       "category": "个人数据",
@@ -101,13 +76,7 @@
     },
     {
       "id": "photo-cloud",
-      "match": [
-        "photos",
-        "pictures",
-        "照片",
-        "相册",
-        "icloud"
-      ],
+      "match": ["photos", "pictures", "照片", "相册", "icloud"],
       "kind": "substring",
       "title": "照片 / 云盘同步目录",
       "category": "个人数据",
@@ -120,19 +89,12 @@
     },
     {
       "id": "download-dir",
-      "match": [
-        "download",
-        "downloads",
-        "下载",
-        "迅雷",
-        "thunder",
-        "idm"
-      ],
+      "match": ["download", "downloads", "下载", "迅雷", "thunder", "idm"],
       "kind": "substring",
       "title": "下载目录",
       "category": "下载",
       "risk": "高",
-      "cleanable": "true",
+      "cleanable": false,
       "confidence": "high",
       "what": "浏览器或下载工具的默认下载位置。下载目录里经常混着还没安装的软件、要留用的文档与资料，按名字无法区分哪些还有用 —— 外部安全审计（2026-10）确认「所有下载目录默认可清理」属于误删高风险设计，本工具已改为默认建议保留。",
       "advice": "建议你亲自打开目录翻一遍再决定：装完就冗余的 .exe/.msi 安装包、.iso 镜像、.part 未完成分片可以删；文档、照片、项目资料不要删。需要清理时请在排行里手动勾选（界面会要求二次确认）。",
@@ -140,15 +102,7 @@
     },
     {
       "id": "chat-cache",
-      "match": [
-        "telegram",
-        "wechat",
-        "weixin",
-        "微信",
-        "tencent files",
-        "qq",
-        "xwechat"
-      ],
+      "match": ["telegram", "wechat", "weixin", "微信", "tencent files", "qq", "xwechat"],
       "kind": "substring",
       "title": "聊天软件数据",
       "category": "聊天软件",
@@ -161,15 +115,7 @@
     },
     {
       "id": "cloud-disk",
-      "match": [
-        "quark",
-        "夸克",
-        "baidunetdisk",
-        "百度网盘",
-        "aliyundrive",
-        "阿里云盘",
-        "onedrive"
-      ],
+      "match": ["quark", "夸克", "baidunetdisk", "百度网盘", "aliyundrive", "阿里云盘", "onedrive"],
       "kind": "substring",
       "title": "云盘数据目录",
       "category": "云盘",
@@ -182,17 +128,7 @@
     },
     {
       "id": "editing-project",
-      "match": [
-        "剪映",
-        "jianying",
-        "capcut",
-        "premiere",
-        "vegas",
-        "davinci",
-        "达芬奇",
-        "project",
-        "工程"
-      ],
+      "match": ["剪映", "jianying", "capcut", "premiere", "vegas", "davinci", "达芬奇", "project", "工程"],
       "kind": "substring",
       "title": "剪辑工程 / 项目",
       "category": "创作数据",
@@ -205,11 +141,7 @@
     },
     {
       "id": "photoshop",
-      "match": [
-        "photoshop",
-        "adobe",
-        "ps"
-      ],
+      "match": ["photoshop", "adobe", "ps"],
       "kind": "substring",
       "title": "Photoshop / Adobe 数据",
       "category": "创作软件",
@@ -222,14 +154,7 @@
     },
     {
       "id": "office-tools",
-      "match": [
-        "office tool",
-        "officetool",
-        "office tool plus",
-        "wps office",
-        "kingsoft",
-        "wps"
-      ],
+      "match": ["office tool", "officetool", "office tool plus", "wps office", "kingsoft", "wps"],
       "kind": "substring",
       "title": "Office 部署工具 / WPS",
       "category": "软件",
@@ -242,15 +167,7 @@
     },
     {
       "id": "browser-data",
-      "match": [
-        "chrome",
-        "edge",
-        "firefox",
-        "brave",
-        "browser",
-        "浏览器",
-        "microsoft edge"
-      ],
+      "match": ["chrome", "edge", "firefox", "brave", "browser", "浏览器", "microsoft edge"],
       "kind": "substring",
       "title": "浏览器数据目录",
       "category": "浏览器",
@@ -263,14 +180,7 @@
     },
     {
       "id": "game-launcher",
-      "match": [
-        "pcl",
-        "hmcl",
-        "mcldownload",
-        "minecraft",
-        "launcher",
-        "启动器"
-      ],
+      "match": ["pcl", "hmcl", "mcldownload", "minecraft", "launcher", "启动器"],
       "kind": "substring",
       "title": "游戏启动器与版本缓存",
       "category": "游戏",
@@ -283,14 +193,7 @@
     },
     {
       "id": "music-app",
-      "match": [
-        "kugou",
-        "酷狗",
-        "cloudmusic",
-        "网易云音乐",
-        "qqmusic",
-        "spotify"
-      ],
+      "match": ["kugou", "酷狗", "cloudmusic", "网易云音乐", "qqmusic", "spotify"],
       "kind": "substring",
       "title": "音乐软件缓存与下载",
       "category": "音乐",
@@ -303,16 +206,7 @@
     },
     {
       "id": "model-weights",
-      "match": [
-        "ollama",
-        "models",
-        "huggingface",
-        "checkpoints",
-        "lora",
-        "stable-diffusion",
-        "comfyui",
-        "模型"
-      ],
+      "match": ["ollama", "models", "huggingface", "checkpoints", "lora", "stable-diffusion", "comfyui", "模型"],
       "kind": "substring",
       "title": "AI 模型权重",
       "category": "AI 模型",
@@ -325,13 +219,7 @@
     },
     {
       "id": "docker-vm",
-      "match": [
-        "docker",
-        "wsl",
-        "virtualbox",
-        "vmware",
-        "虚拟机"
-      ],
+      "match": ["docker", "wsl", "virtualbox", "vmware", "虚拟机"],
       "kind": "substring",
       "title": "虚拟化镜像",
       "category": "虚拟机",
@@ -344,13 +232,7 @@
     },
     {
       "id": "software-dir",
-      "match": [
-        "软件",
-        "software",
-        "tools",
-        "工具",
-        "应用"
-      ],
+      "match": ["软件", "software", "tools", "工具", "应用"],
       "kind": "substring",
       "title": "软件安装目录",
       "category": "软件",
@@ -363,14 +245,7 @@
     },
     {
       "id": "drivers",
-      "match": [
-        "drivergenius",
-        "driverbooster",
-        "驱动精灵",
-        "驱动人生",
-        "驱动备份",
-        "驱动安装包"
-      ],
+      "match": ["drivergenius", "driverbooster", "驱动精灵", "驱动人生", "驱动备份", "驱动安装包"],
       "kind": "substring",
       "title": "驱动备份 / 驱动包",
       "category": "系统",
@@ -383,13 +258,7 @@
     },
     {
       "id": "windows-update-cache",
-      "match": [
-        "deliveryoptimization",
-        "softwaredistribution",
-        "$windows.~bt",
-        "$windows.~ws",
-        "windows.old"
-      ],
+      "match": ["deliveryoptimization", "softwaredistribution", "$windows.~bt", "$windows.~ws", "windows.old"],
       "kind": "substring",
       "title": "Windows 更新缓存 / 升级残留",
       "category": "系统",
@@ -402,11 +271,7 @@
     },
     {
       "id": "game-shadercache",
-      "match": [
-        "shadercache",
-        "shader_cache",
-        "shaders_cache"
-      ],
+      "match": ["shadercache", "shader_cache", "shaders_cache"],
       "kind": "substring",
       "title": "游戏内着色器缓存",
       "category": "游戏",
@@ -419,14 +284,7 @@
     },
     {
       "id": "cache-temp",
-      "match": [
-        "cache",
-        "caches",
-        "缓存",
-        "temp",
-        "tmp",
-        "临时"
-      ],
+      "match": ["cache", "caches", "缓存", "temp", "tmp", "临时"],
       "kind": "substring",
       "title": "缓存 / 临时目录",
       "category": "缓存",
@@ -439,15 +297,7 @@
     },
     {
       "id": "logs-dumps",
-      "match": [
-        "log",
-        "logs",
-        "日志",
-        "crashdump",
-        "minidump",
-        "dump",
-        "转储"
-      ],
+      "match": ["log", "logs", "日志", "crashdump", "minidump", "dump", "转储"],
       "kind": "substring",
       "title": "日志 / 崩溃转储",
       "category": "诊断",
@@ -460,9 +310,7 @@
     },
     {
       "id": "node-modules",
-      "match": [
-        "node_modules"
-      ],
+      "match": ["node_modules"],
       "kind": "exact",
       "title": "Node.js 依赖",
       "category": "开发",
@@ -475,13 +323,7 @@
     },
     {
       "id": "python-env",
-      "match": [
-        "venv",
-        "conda",
-        "anaconda",
-        "miniconda",
-        "__pycache__"
-      ],
+      "match": ["venv", "conda", "anaconda", "miniconda", "__pycache__"],
       "kind": "substring",
       "title": "Python 环境 / 缓存",
       "category": "开发",
@@ -494,10 +336,7 @@
     },
     {
       "id": "recycle-bin",
-      "match": [
-        "$recycle.bin",
-        "recycler"
-      ],
+      "match": ["$recycle.bin", "recycler"],
       "kind": "substring",
       "title": "回收站",
       "category": "回收站",
@@ -510,9 +349,7 @@
     },
     {
       "id": "system-volume",
-      "match": [
-        "system volume information"
-      ],
+      "match": ["system volume information"],
       "kind": "exact",
       "title": "系统还原点与卷影副本",
       "category": "系统",
@@ -525,10 +362,7 @@
     },
     {
       "id": "backup-dir",
-      "match": [
-        "backup",
-        "备份"
-      ],
+      "match": ["backup", "备份"],
       "kind": "substring",
       "title": "备份目录",
       "category": "备份",
@@ -540,21 +374,12 @@
       "tip": "滚动式自动备份通常可以只保留最近 1-2 份。"
     }
   ],
+
   "file_rules": [
     {
       "id": "game-exe",
-      "match": [
-        "rdr2",
-        "witcher3",
-        "cyberpunk2077",
-        "gta5",
-        "eldenring",
-        "skyrim",
-        "fallout4",
-        "portal2",
-        "redlauncher",
-        "gamelaunch"
-      ],
+      "match": ["rdr2", "witcher3", "cyberpunk2077", "gta5", "eldenring", "skyrim",
+                 "fallout4", "portal2", "redlauncher", "gamelaunch"],
       "kind": "substring",
       "title": "游戏可执行文件",
       "category": "游戏",
@@ -567,15 +392,7 @@
     },
     {
       "id": "game-data-pack",
-      "match": [
-        ".rpf",
-        ".big",
-        ".bdt",
-        ".bnd",
-        ".arc",
-        ".vpk",
-        ".forge"
-      ],
+      "match": [".rpf", ".big", ".bdt", ".bnd", ".arc", ".vpk", ".forge"],
       "kind": "extension",
       "title": "游戏数据包",
       "category": "游戏",
@@ -588,9 +405,7 @@
     },
     {
       "id": "pagefile",
-      "match": [
-        "pagefile.sys"
-      ],
+      "match": ["pagefile.sys"],
       "kind": "exact",
       "title": "虚拟内存分页文件",
       "category": "系统",
@@ -603,9 +418,7 @@
     },
     {
       "id": "hiberfil",
-      "match": [
-        "hiberfil.sys"
-      ],
+      "match": ["hiberfil.sys"],
       "kind": "exact",
       "title": "休眠文件",
       "category": "系统",
@@ -618,12 +431,7 @@
     },
     {
       "id": "installer-pkg",
-      "match": [
-        ".exe",
-        ".msi",
-        ".msix",
-        ".appx"
-      ],
+      "match": [".exe", ".msi", ".msix", ".appx"],
       "kind": "extension",
       "title": "安装包",
       "category": "安装包",
@@ -636,14 +444,7 @@
     },
     {
       "id": "iso-image",
-      "match": [
-        ".iso",
-        ".img",
-        ".vhd",
-        ".vhdx",
-        ".wim",
-        ".esd"
-      ],
+      "match": [".iso", ".img", ".vhd", ".vhdx", ".wim", ".esd"],
       "kind": "extension",
       "title": "磁盘镜像 / 系统映像",
       "category": "镜像",
@@ -656,14 +457,7 @@
     },
     {
       "id": "archive",
-      "match": [
-        ".zip",
-        ".rar",
-        ".7z",
-        ".tar",
-        ".gz",
-        ".xz"
-      ],
+      "match": [".zip", ".rar", ".7z", ".tar", ".gz", ".xz"],
       "kind": "extension",
       "title": "压缩包",
       "category": "压缩包",
@@ -676,17 +470,7 @@
     },
     {
       "id": "video-file",
-      "match": [
-        ".mp4",
-        ".mkv",
-        ".avi",
-        ".mov",
-        ".flv",
-        ".ts",
-        ".m4v",
-        ".mpg",
-        ".webm"
-      ],
+      "match": [".mp4", ".mkv", ".avi", ".mov", ".flv", ".ts", ".m4v", ".mpg", ".webm"],
       "kind": "extension",
       "title": "视频文件",
       "category": "视频",
@@ -699,13 +483,7 @@
     },
     {
       "id": "audio-file",
-      "match": [
-        ".flac",
-        ".wav",
-        ".ape",
-        ".mp3",
-        ".m4a"
-      ],
+      "match": [".flac", ".wav", ".ape", ".mp3", ".m4a"],
       "kind": "extension",
       "title": "音频文件",
       "category": "音频",
@@ -718,12 +496,7 @@
     },
     {
       "id": "disk-image-backup",
-      "match": [
-        ".gho",
-        ".tib",
-        ".bkf",
-        ".pbd"
-      ],
+      "match": [".gho", ".tib", ".bkf", ".pbd"],
       "kind": "extension",
       "title": "系统备份镜像",
       "category": "备份",
@@ -736,14 +509,7 @@
     },
     {
       "id": "ai-weights",
-      "match": [
-        ".gguf",
-        ".safetensors",
-        ".ckpt",
-        ".pt",
-        ".pth",
-        ".onnx"
-      ],
+      "match": [".gguf", ".safetensors", ".ckpt", ".pt", ".pth", ".onnx"],
       "kind": "extension",
       "title": "AI 模型权重文件",
       "category": "AI 模型",
@@ -756,12 +522,7 @@
     },
     {
       "id": "game-asset",
-      "match": [
-        ".ucas",
-        ".pak",
-        ".utoc",
-        ".uasset"
-      ],
+      "match": [".ucas", ".pak", ".utoc", ".uasset"],
       "kind": "extension",
       "title": "游戏资源包",
       "category": "游戏",
@@ -774,12 +535,7 @@
     },
     {
       "id": "log-dump-file",
-      "match": [
-        ".log",
-        ".dmp",
-        ".mdmp",
-        ".etl"
-      ],
+      "match": [".log", ".dmp", ".mdmp", ".etl"],
       "kind": "extension",
       "title": "日志 / 转储文件",
       "category": "诊断",
@@ -792,16 +548,7 @@
     },
     {
       "id": "office-doc",
-      "match": [
-        ".docx",
-        ".xlsx",
-        ".pptx",
-        ".pdf",
-        ".psd",
-        ".doc",
-        ".xls",
-        ".ppt"
-      ],
+      "match": [".docx", ".xlsx", ".pptx", ".pdf", ".psd", ".doc", ".xls", ".ppt"],
       "kind": "extension",
       "title": "文档 / 设计文件",
       "category": "文档",

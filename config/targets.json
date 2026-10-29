@@ -1,14 +1,10 @@
 {
-  "app": {
-    "name": "O-Cleaner",
-    "version": "test",
-    "port": 51727
-  },
+  "_comment": "清理目标。路径含 %DRIVE% 的属于『所选磁盘』专属项；使用 %LOCALAPPDATA% / %USERPROFILE% 等的属于用户级通用项，任何盘的清理都包含。%DRIVE% 替换为盘符（如 C:），%DRIVE_LETTER% 替换为单字母（如 C）。",
   "presets": [
     {
       "id": "safe",
-      "label": "测试预设",
-      "desc": "只选无风险测试项",
+      "label": "安全清理",
+      "desc": "只清『删掉会自动重建』的缓存与临时文件，跳过回收站和需要管理员权限的项。",
       "select": {
         "risk": [
           "无"
@@ -16,19 +12,42 @@
       }
     },
     {
-      "id": "pick",
-      "label": "按 id 选",
-      "desc": "验证显式 id 选择不被回收站过滤器清空",
+      "id": "deep",
+      "label": "深度清理",
+      "desc": "在安全清理基础上加着色器缓存、缩略图缓存、崩溃转储与系统日志，首次使用会稍慢但会自动重建。",
+      "select": {
+        "risk": [
+          "无",
+          "低",
+          "中"
+        ]
+      }
+    },
+    {
+      "id": "dev",
+      "label": "开发者清理",
+      "desc": "只清包管理器缓存（uv / pip），适合磁盘紧张但不想丢浏览器缓存的场景。之后重装依赖需重新下载。",
       "select": {
         "ids": [
-          "sandbox-tree"
+          "uv-cache",
+          "pip-cache"
+        ]
+      }
+    },
+    {
+      "id": "recycle",
+      "label": "只清回收站",
+      "desc": "只选中回收站一项，逐盘清理各盘的回收站。展开后可挑单个大文件删除。",
+      "select": {
+        "ids": [
+          "recycle-bin"
         ]
       }
     },
     {
       "id": "none",
       "label": "全部取消",
-      "desc": "取消所有勾选",
+      "desc": "取消所有勾选。",
       "select": {
         "ids": []
       }
@@ -36,33 +55,383 @@
   ],
   "targets": [
     {
-      "id": "sandbox-tree",
-      "label": "沙箱目录",
-      "path": "%DRIVE%\\_ocleaner_selftest\\tree",
-      "category": "测试",
+      "id": "uv-cache",
+      "label": "uv (Python) 包缓存",
+      "path": "%LOCALAPPDATA%\\uv\\cache",
+      "category": "包管理器",
       "risk": "无",
       "needs_admin": false,
       "kind": "tree",
-      "short": "HTTP 端到端测试目录。",
-      "what": "测试数据。",
-      "rebuild": "测试。",
-      "impact": "无。",
-      "keep_if": "无。"
+      "short": "uv 下载过的 Python 包与构建产物副本，通常是最大的一项。",
+      "what": "uv 每次安装依赖时会把下载的 wheel、sdist 和构建结果留一份在这里，下次装同样的包直接复用本地副本。纯粹是『省下载时间』的缓存，不含任何项目源码。",
+      "rebuild": "自动重建 —— 下次 uv sync / pip install 时按需重新下载。",
+      "impact": "立即可省最多空间。唯一副作用：重装依赖需重新联网下载，离线环境会失败。",
+      "keep_if": "你经常在离线或弱网环境下装 Python 依赖，就保留它。"
     },
     {
-      "id": "sandbox-files",
-      "label": "沙箱 glob",
-      "path": "%DRIVE%\\_ocleaner_selftest\\files",
-      "category": "测试",
+      "id": "pip-cache",
+      "label": "pip 包缓存",
+      "path": "%LOCALAPPDATA%\\pip\\Cache",
+      "category": "包管理器",
+      "risk": "无",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "pip 下载过的 .whl / .tar.gz 安装包存档。",
+      "what": "pip 每装一个包都会把原始 wheel 存到这里，重复安装时不再走网络。里面只有官方包文件，没有你的代码或配置。",
+      "rebuild": "自动重建 —— 下次 pip install 时重新下载。",
+      "impact": "pip install 会重新走网络，速度变慢但不影响已装好的环境。",
+      "keep_if": "常用离线安装，或经常重装同一批依赖。"
+    },
+    {
+      "id": "chrome-cache",
+      "label": "Chrome 网页缓存",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\Cache",
+      "category": "浏览器",
+      "risk": "无",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "Chrome 缓存的图片、脚本、字体等网页静态资源。",
+      "what": "浏览网页时 Chrome 把图片、CSS、JS 等下载下来存这里，让你再次访问同一网站更快。不含密码、书签、历史记录、Cookie —— 那些在同一个 User Data 目录下的其他子目录里。",
+      "rebuild": "自动重建 —— 重新访问网站时边用边存。",
+      "impact": "首次访问常去网站会稍慢一点点，其它无感，不会掉登录状态。",
+      "keep_if": "基本不需要保留。建议清理前先关闭 Chrome，否则部分文件被占用删不掉。"
+    },
+    {
+      "id": "chrome-code-cache",
+      "label": "Chrome JS 代码缓存",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\Code Cache",
+      "category": "浏览器",
+      "risk": "无",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "Chrome 把网站 JavaScript 预先编译后的机器码。",
+      "what": "JS 引擎把网页脚本编译成字节码后存这里，省掉下次的编译时间。纯派生数据，源脚本本身在网页缓存里。",
+      "rebuild": "自动重建 —— 重新访问时重新编译。",
+      "impact": "常访问的复杂网页首次加载慢几十到几百毫秒，之后恢复。",
+      "keep_if": "不需要保留。建议先关闭 Chrome。"
+    },
+    {
+      "id": "edge-cache",
+      "label": "Edge 网页缓存",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\Cache",
+      "category": "浏览器",
+      "risk": "无",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "Edge 缓存的网页图片、脚本等静态资源。",
+      "what": "和 Chrome 同理，Edge 也是 Chromium 内核。不含密码、书签、历史记录。",
+      "rebuild": "自动重建。",
+      "impact": "首次访问常去网站略慢，不影响登录状态。",
+      "keep_if": "基本不需要保留。建议先关 Edge。"
+    },
+    {
+      "id": "edge-code-cache",
+      "label": "Edge JS 代码缓存",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\Code Cache",
+      "category": "浏览器",
+      "risk": "无",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "Edge 预编译后的 JavaScript 机器码。",
+      "what": "同 Chrome 的 Code Cache，属于派生数据。",
+      "rebuild": "自动重建。",
+      "impact": "网页首次加载略慢，之后恢复。",
+      "keep_if": "不需要保留。"
+    },
+    {
+      "id": "user-temp",
+      "label": "用户临时目录 Temp",
+      "path": "%LOCALAPPDATA%\\Temp",
+      "category": "临时文件",
+      "risk": "无",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "各种软件运行时生成的临时文件，通常用完不删。",
+      "what": "安装程序、脚本、软件运行过程中在这里写中间文件。很多软件（包括 O-Cleaner 本身）用完不会主动清理，日积月累很可观。里面偶尔会有正在被占用的文件。",
+      "rebuild": "自动重建 —— 软件下次运行时重新创建。",
+      "impact": "正在运行的程序占用的文件会删除失败并跳过，这是正常的，不是错误。",
+      "keep_if": "不需要保留。占用中的文件会自动跳过。"
+    },
+    {
+      "id": "inet-cache",
+      "label": "系统网络缓存 INetCache",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\INetCache",
+      "category": "临时文件",
+      "risk": "无",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "Windows 内置网络组件（IE 内核、部分 Office 组件）的下载缓存。",
+      "what": "老式 WinINet 接口的缓存目录，一些桌面软件的更新检查和内嵌网页会用它。",
+      "rebuild": "自动重建。",
+      "impact": "几乎无感。",
+      "keep_if": "不需要保留。"
+    },
+    {
+      "id": "thumb-cache",
+      "label": "资源管理器缩略图缓存",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer",
+      "category": "缩略图",
+      "risk": "低",
+      "needs_admin": false,
+      "kind": "files",
+      "glob": "thumbcache_*.db",
+      "short": "文件夹里图片/视频的小预览图数据库。",
+      "what": "为了让你打开图片文件夹时立刻看到缩略图，资源管理器把生成的缩略图存进这些 .db 文件。只匹配 thumbcache_*.db，同目录下的其它文件不会被碰。",
+      "rebuild": "自动重建 —— 重新打开文件夹时重新生成。",
+      "impact": "下次浏览大量图片/视频的文件夹时，缩略图会空白几秒再逐个出现。",
+      "keep_if": "常浏览大图片库且在意流畅度可保留。"
+    },
+    {
+      "id": "icon-cache",
+      "label": "资源管理器图标缓存",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer",
+      "category": "缩略图",
+      "risk": "低",
+      "needs_admin": false,
+      "kind": "files",
+      "glob": "iconcache_*.db",
+      "short": "程序与文件类型的小图标数据库。",
+      "what": "资源管理器为 exe、文档等生成的图标缓存，只匹配 iconcache_*.db。",
+      "rebuild": "自动重建。",
+      "impact": "偶发图标短暂变白再恢复，刷新即可。",
+      "keep_if": "不需要保留。"
+    },
+    {
+      "id": "crash-dumps",
+      "label": "程序崩溃转储 CrashDumps",
+      "path": "%LOCALAPPDATA%\\CrashDumps",
+      "category": "诊断",
+      "risk": "中",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "崩溃程序留下的内存快照（.dmp），单个可达上百 MB。",
+      "what": "程序崩溃时 Windows 会把内存快照 dump 下来方便事后排查。对普通用户而言是死数据；但如果你正被某个软件反复崩溃困扰，这些文件是排查原因的唯一线索。",
+      "rebuild": "不重建 —— 但下次崩溃时会重新生成。",
+      "impact": "失去已发生崩溃的排查依据，无法事后分析。",
+      "keep_if": "正在排查某个软件的崩溃问题，就先别删。"
+    },
+    {
+      "id": "user-crash-reports",
+      "label": "Windows 错误报告 WER",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\WER",
+      "category": "诊断",
+      "risk": "中",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "程序崩溃后生成的错误报告归档。",
+      "what": "Windows 错误报告机制会为崩溃的程序收集并归档一份报告，用于统计和排查。对日常使用没有作用。",
+      "rebuild": "不重建 —— 下次崩溃时重新生成。",
+      "impact": "历史崩溃报告丢失。",
+      "keep_if": "正在排查软件崩溃问题就先留着。"
+    },
+    {
+      "id": "nvidia-dxcache",
+      "label": "NVIDIA DirectX 着色器缓存",
+      "path": "%LOCALAPPDATA%\\NVIDIA\\DXCache",
+      "category": "显卡缓存",
+      "risk": "低",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "游戏预先编译好的 GPU 着色器程序，通常很大。",
+      "what": "显卡驱动把游戏的着色器提前编译好存在这里，避免每次启动都现编译。它和游戏本体、存档、配置完全无关，删了不会损坏任何游戏。",
+      "rebuild": "自动重建 —— 游戏下次启动时重新编译。",
+      "impact": "玩过的游戏第一次启动会有短暂卡顿（正在重新编译着色器），之后恢复。这是唯一副作用。",
+      "keep_if": "你最近常玩大型 3D 游戏、且在意首次启动的流畅度，可以保留。"
+    },
+    {
+      "id": "nvidia-glcache",
+      "label": "NVIDIA OpenGL 着色器缓存",
+      "path": "%LOCALAPPDATA%\\NVIDIA\\GLCache",
+      "category": "显卡缓存",
+      "risk": "低",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "OpenGL 游戏的着色器缓存。",
+      "what": "与 DXCache 同理，只是走 OpenGL 接口的游戏和软件用这个目录。",
+      "rebuild": "自动重建。",
+      "impact": "对应程序首次启动略慢。",
+      "keep_if": "同 DXCache。"
+    },
+    {
+      "id": "d3dscache",
+      "label": "系统 D3D 着色器缓存",
+      "path": "%LOCALAPPDATA%\\D3DSCache",
+      "category": "显卡缓存",
+      "risk": "低",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "Windows 自身的 Direct3D 着色器缓存。",
+      "what": "由 Windows 图形栈维护，与显卡驱动的 DXCache 是两套不同机制。",
+      "rebuild": "自动重建。",
+      "impact": "首次渲染略慢。",
+      "keep_if": "不需要保留。"
+    },
+    {
+      "id": "win-temp",
+      "label": "%DRIVE_LETTER% 盘系统临时目录 Windows\\Temp",
+      "path": "%DRIVE%\\Windows\\Temp",
+      "category": "临时文件",
+      "risk": "无",
+      "needs_admin": true,
+      "kind": "tree",
+      "short": "所选磁盘上系统级临时文件目录。",
+      "what": "系统服务和安装程序使用的临时目录。普通权限通常读得到但删不掉，O-Cleaner 会明确提示权限不足而不是报错，也不影响同批次其它项的清理。",
+      "rebuild": "自动重建。",
+      "impact": "需要管理员权限；无权限时该项会失败并说明原因。",
+      "keep_if": "不需要保留。",
+      "system_only": true
+    },
+    {
+      "id": "win-temp-tmpfiles",
+      "label": "%DRIVE_LETTER% 盘 Windows 临时文件 *.tmp",
+      "path": "%DRIVE%\\Windows\\Temp",
+      "category": "临时文件",
       "risk": "无",
       "needs_admin": false,
       "kind": "files",
+      "glob": "*.tmp",
+      "short": "只清 Windows\\Temp 顶层的 *.tmp 文件，比清空整个目录更保守。",
+      "what": "只匹配顶层 .tmp 文件，不递归子目录、不动其它扩展名。适合无管理员权限又想清一部分的场景。",
+      "rebuild": "自动重建。",
+      "impact": "几乎无感。",
+      "keep_if": "不需要保留。",
+      "system_only": true
+    },
+    {
+      "id": "update-download",
+      "label": "%DRIVE_LETTER% 盘 Windows 更新下载缓存",
+      "path": "%DRIVE%\\Windows\\SoftwareDistribution\\Download",
+      "category": "系统",
+      "risk": "无",
+      "needs_admin": true,
+      "kind": "tree",
+      "short": "已下载安装的 Windows 更新包残留。",
+      "what": "Windows Update 把补丁下载到这里再安装。安装完成后这些包仍会留着占空间，属于可安全清理的残留。注意：如果有更新正在下载或等待重启安装，清理会中断它。",
+      "rebuild": "不重建 —— 它本来就是残留物。下次有更新时重新下载。",
+      "impact": "需要管理员权限。正在等待安装的更新可能需要重新下载。",
+      "keep_if": "有更新正等待重启安装时，先装完再清。",
+      "system_only": true
+    },
+    {
+      "id": "delivery-optimization",
+      "label": "%DRIVE_LETTER% 盘传递优化缓存",
+      "path": "%DRIVE%\\Windows\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization\\Cache",
+      "category": "系统",
+      "risk": "无",
+      "needs_admin": true,
+      "kind": "tree",
+      "short": "Windows 更新点对点分发的缓存文件。",
+      "what": "传递优化（Delivery Optimization）让局域网内多台电脑互相分享更新包，下载内容缓存在这里。清理它不影响系统更新功能。",
+      "rebuild": "自动重建 —— 有更新时重新缓存。",
+      "impact": "需要管理员权限。下次更新时可能重新下载而非从缓存取。",
+      "keep_if": "不需要保留。",
+      "system_only": true
+    },
+    {
+      "id": "win-log-files",
+      "label": "%DRIVE_LETTER% 盘 Windows 日志文件 *.log",
+      "path": "%DRIVE%\\Windows\\Logs",
+      "category": "系统",
+      "risk": "无",
+      "needs_admin": true,
+      "kind": "files",
       "glob": "*.log",
-      "short": "只删 .log。",
-      "what": "测试数据。",
-      "rebuild": "测试。",
-      "impact": "无。",
-      "keep_if": "无。"
+      "short": "Windows\\Logs 顶层可直接清理的 .log 文件。",
+      "what": "Windows 和第三方软件在这里写运行日志。只匹配顶层 *.log，不递归子目录（子目录里有 CBS、DISM 等结构化日志，另有单独条目）。",
+      "rebuild": "自动重建 —— 系统继续记录新日志。",
+      "impact": "需要管理员权限。历史日志丢失，排查旧问题时线索变少。",
+      "keep_if": "不排查历史问题就不需要保留；比整目录删除更保守。",
+      "system_only": true
+    },
+    {
+      "id": "win-logs-cbs",
+      "label": "%DRIVE_LETTER% 盘系统组件日志 CBS/DISM",
+      "path": "%DRIVE%\\Windows\\Logs\\CBS",
+      "category": "诊断",
+      "risk": "中",
+      "needs_admin": true,
+      "kind": "tree",
+      "short": "系统组件安装日志（CBS.log 等），用于排查更新失败。",
+      "what": "CBS 与 DISM 把每次系统组件的安装过程详细记在这里，专门用于排查『更新装不上』这类问题。正常使用中是死数据，体积会随系统更新不停增长。",
+      "rebuild": "自动重建 —— 系统继续写新日志。",
+      "impact": "需要管理员权限。将来系统更新失败需要看历史日志时，线索会缺失。",
+      "keep_if": "系统更新最近报过错、你打算排查，就先保留。",
+      "system_only": true
+    },
+    {
+      "id": "prefetch",
+      "label": "%DRIVE_LETTER% 盘预读取文件 Prefetch",
+      "path": "%DRIVE%\\Windows\\Prefetch",
+      "category": "系统",
+      "risk": "低",
+      "needs_admin": true,
+      "kind": "files",
+      "glob": "*.pf",
+      "short": "Windows 记录的常用程序启动痕迹，用于加速启动。",
+      "what": "系统会记录你常用程序的加载文件清单，下次启动时预读它们以加快速度。清理后系统会在几天内重新学习。",
+      "rebuild": "自动重建 —— 系统会重新学习你的使用习惯。",
+      "impact": "需要管理员权限。清理后头几次启动常用程序会略慢。",
+      "keep_if": "若你在意开机速度，建议保留。",
+      "system_only": true
+    },
+    {
+      "id": "minidump",
+      "label": "%DRIVE_LETTER% 盘蓝屏转储 Minidump",
+      "path": "%DRIVE%\\Windows\\Minidump",
+      "category": "诊断",
+      "risk": "中",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "系统蓝屏时留下的崩溃转储文件。",
+      "what": "蓝屏（BSOD）时 Windows 会把内存快照写到这个目录，用于分析蓝屏原因。如果你近期没遇到蓝屏，它就是死数据；如果正在排查蓝屏，这是关键线索。",
+      "rebuild": "不重建 —— 下次蓝屏时重新生成。",
+      "impact": "失去已发生蓝屏的排查依据。",
+      "keep_if": "近期出现过蓝屏、打算排查，就先保留。",
+      "system_only": true
+    },
+    {
+      "id": "drive-temp",
+      "label": "%DRIVE_LETTER% 盘根目录临时目录 \\Temp",
+      "path": "%DRIVE%\\Temp",
+      "category": "临时文件",
+      "risk": "中",
+      "needs_admin": false,
+      "kind": "tree",
+      "short": "所选磁盘根目录下 Temp 文件夹的内容。",
+      "what": "很多软件会把临时文件放在盘符根目录的 Temp 下（而不是系统 Temp）。如果这个目录是你或某个程序手工创建的，里面的内容可能还有用，所以标为中风险并默认不勾选。",
+      "rebuild": "不重建 —— 需要时由相关程序重新创建。",
+      "impact": "如果某个正在运行的程序把工作数据放在这里，可能导致它出错。请先展开确认。",
+      "keep_if": "不确定这个目录是谁建的，就先保留。"
+    },
+    {
+      "id": "drive-part-files",
+      "label": "%DRIVE_LETTER% 盘未完成下载分片",
+      "path": "%DRIVE%\\",
+      "category": "临时文件",
+      "risk": "低",
+      "needs_admin": false,
+      "kind": "files",
+      "glob": "*.part",
+      "short": "下载工具（浏览器、迅雷等）中断后留下的未完成分片。",
+      "what": "下载中断时留下的 .part / .crdownload 之类分片文件。只匹配盘根目录顶层，不递归、不动子目录。如果下载任务还在进行中，对应文件会因占用而跳过。",
+      "rebuild": "不重建 —— 重新下载时生成。",
+      "impact": "未完成的下载需要重新开始。已完成的下载不受影响。",
+      "keep_if": "有下载任务正在进行，就先别清。"
+    },
+    {
+      "id": "recycle-bin",
+      "label": "%DRIVE_LETTER% 盘回收站",
+      "path": "%DRIVE%\\$Recycle.Bin",
+      "category": "回收站",
+      "risk": "高",
+      "needs_admin": false,
+      "kind": "recyclebin",
+      "drive_letter": "%DRIVE_LETTER%",
+      "short": "该盘删除过但尚未彻底清除的文件，清空后无法恢复。",
+      "what": "回收站里是已经删过一遍的文件。扫描时会列出其中较大的条目，供你判断是否真的不要了。一旦清空，这些文件无法通过任何常规手段找回。",
+      "rebuild": "不重建 —— 这是不可逆操作。",
+      "impact": "永久失去该盘回收站内的所有文件。",
+      "keep_if": "默认不勾选。请先展开看清单，确认里面没有你还需要的文件。"
     }
   ]
 }
