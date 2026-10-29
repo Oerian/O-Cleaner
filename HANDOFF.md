@@ -1394,7 +1394,7 @@ SECURITY 该处表述未动。
 
 ### 45. 游戏占用概览功能批 ×4 + v2.9 发版（2026-10-29 傍晚）
 
-用户要求把此前提出的 8 个优化方向全部落地并发 v2.9。
+用户要求把此前提出的 8 个优化方向全部落地并发 v2.9。**发版已完成**：`1a2fc55`（功能批）+ `441d850`（页签双路径修复）+ `cb16efc`（selftest 豁免）之后全量 CI 三门全绿（run 40857705926），重建双产物并逐项核对 zip 内关键文件与源码 sha256 一致，tag `v2.9` + GitHub Release（附双语说明与两个 zip 的 SHA-256）。
 
 **后端（app.py）**：
 - 版本 2.9：`APP_VERSION` 与 `config/drives.json` 的 `app.version`（/state 的版本号来自 drives.json，两处都要动；**改 drives.json 必须纯文本替换** —— json.dumps 重排会把紧凑数组撑成多行，diff 噪声一片）。
