@@ -1139,6 +1139,7 @@ def phase3_http() -> None:
         check("setLang 重画列表覆盖全部渲染函数（豁免：Steam 系、ViewNav、SubdirList）",
               _sl_m is not None
               and _sl_defs - _sl_listed <= {"renderSteam", "renderOtherPlatforms",
+                                            "renderSteamTabs",
                                             "renderViewNav", "renderSubdirList"},
               f"未列={sorted(_sl_defs - _sl_listed)[:8]}")
         check("Esc 绑定为返回上一级子目录",
