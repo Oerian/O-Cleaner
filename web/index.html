@@ -80,7 +80,9 @@
            border-radius:9px;padding:3px}
   .viewnav button{border:0;background:transparent;padding:5px 13px;border-radius:7px;
                   font-size:12.5px;color:var(--dim)}
-  .viewnav button:hover{background:#252b36;color:var(--fg)}
+  /* hover 用主题变量：此前硬编码了暗色面板的色值，
+     白天模式下一键预设等按钮悬停/按下会突然变黑，与整体色调冲突 */
+  .viewnav button:hover{background:var(--panel-hover);color:var(--fg)}
   .viewnav button.on{background:var(--accent);color:#fff;font-weight:600}
   .themeseg{display:flex;gap:2px;margin-left:6px}
   .themeseg button{padding:4px 10px;font-size:12px}
@@ -211,7 +213,7 @@
   /* ================= 按钮 ================= */
   button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel2);
          color:var(--fg);padding:7px 13px;border-radius:8px;transition:.14s;white-space:nowrap}
-  button:hover:not(:disabled){background:#252b36;border-color:var(--line2)}
+  button:hover:not(:disabled){background:var(--panel-hover);border-color:var(--line2)}
   button:disabled{opacity:.45;cursor:not-allowed}
   button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
   button.primary:hover:not(:disabled){background:#2f74e0}
@@ -653,8 +655,9 @@
   </div>
   <div id="adminwarn" class="warnbar" style="display:none">
     <span data-i18n="adminwarn.a">当前以普通权限运行，系统目录的项目会提示「需要管理员权限」。以管理员身份重新启动</span>
-    <code>start-ocleaner.bat</code>
+    <code>启动 O-Cleaner.bat</code>
     <span data-i18n="adminwarn.b">可清理它们。</span>
+    <button id="btnElevate" class="tiny" data-i18n="adminwarn.elevate">一键提权重启</button>
   </div>
 </header>
 
@@ -1093,6 +1096,7 @@ async function scan() {
     if (drive !== myDrive || scope !== myScope) return;   // 旧盘的迟到响应，不渲染
     SCAN = {};
     (data.results || []).forEach(r => SCAN[r.id] = r);
+    renderPresets();          // 预设按钮上的「预计可清 n 项」随扫描结果刷新
     renderDisk(data.disk);
     $("scantime").textContent = t("scan.lastTime","上次扫描 {v}").replace("{v}", data.scan_time);
     // 扫描后不自动套预设：勾选只由用户点「一键预设」或手动勾选决定
@@ -1158,7 +1162,7 @@ function renderGuide() {
   const rows = [
     { ok: admin, t: t("gd.admin","管理员权限"),
       d: admin ? t("gd.adminOk","已具备，可统计回收站与 Windows\\Temp")
-               : t("gd.adminNo","未具备。回收站、Windows\\Temp 会显示「需要管理员权限」，右键 start-ocleaner.bat → 以管理员身份运行可获得完整统计") },
+               : t("gd.adminNo","未具备。回收站、Windows\\Temp 会显示「需要管理员权限」，右键 启动 O-Cleaner.bat → 以管理员身份运行可获得完整统计") },
     { ok: !!STATE.data_dir, t: t("gd.dataDir","数据存档目录"), d: (STATE.data_dir || t("gd.unknown","（未知）"))
         + (STATE.data_dir_redirected
            ? t("gd.redirected","（已重定向到这里）")
@@ -1667,11 +1671,52 @@ window.addEventListener("resize", () => {
 /* 卡片（常规清理列表）已移除：可清理项直接在占用排行行内勾选，
    按 id（行上有 target_id 时）或按路径（服务端重校验）接入清理。 */
 /* ==================== 预设 ==================== */
+/** 某预设按当前扫描结果会选中多少项、合计多大 —— 显示在按钮上，
+ *  让用户点击前就有预期（此前「点了常常没多少可清项」，用户觉得无用）。
+ *  没扫过（SCAN 空）时不显示数字，避免误导。 */
+function presetYield(p) {
+  if (!SCAN || !Object.keys(SCAN).length) return null;
+  const sel = p.select || {};
+  let ids;
+  if (Array.isArray(sel.ids)) {
+    ids = STATE.targets.filter(t => sel.ids.includes(t.base_id)).map(t => t.id);
+  } else {
+    const risks = sel.risk || [];
+    ids = STATE.targets.filter(t =>
+      risks.includes(t.risk) && (!t.needs_admin || sel.allow_admin)).map(t => t.id);
+  }
+  if (scope === "drive") {
+    const userIds = new Set(STATE.targets.filter(t => t.scope === "user").map(t => t.id));
+    ids = ids.filter(i => !userIds.has(i));
+  }
+  let n = 0, sum = 0;
+  for (const id of ids) {
+    const s = SCAN[id];
+    if (!s || s.missing || s.error) continue;
+    n += 1; sum += s.size || 0;
+  }
+  return { n, sum };
+}
+
 function renderPresets() {
-  $("presets").innerHTML = STATE.presets.map(p =>
-    `<button class="preset" data-id="${esc(p.id)}">
-       <strong>${esc(presetLabel(p))}</strong><span>${esc(presetDesc(p))}</span>
-     </button>`).join("");
+  const _actId = $("presets").querySelector(".preset.act")?.dataset.id || "";
+  $("presets").innerHTML = STATE.presets.map(p => {
+    // 「全部取消」这类空选择没有统计意义，不显示数字（否则像在报「没得清」）
+    const sel0 = p.select || {};
+    const isEmptyPreset = Array.isArray(sel0.ids) && sel0.ids.length === 0;
+    const y = isEmptyPreset ? null : presetYield(p);
+    const stat = y && y.n
+      ? `<span style="color:var(--accent-soft-fg);font-weight:600">${
+          t("pre.yield", "预计可清 {n} 项 · {v}").replace("{n}", y.n).replace("{v}", fmt(y.sum))}</span>`
+      : (y && !y.n ? `<span>${t("pre.yield0", "本机没有匹配的可清项")}</span>` : "");
+    return `<button class="preset" data-id="${esc(p.id)}">
+       <strong>${esc(presetLabel(p))}</strong><span>${esc(presetDesc(p))}</span>${stat}
+     </button>`;
+  }).join("");
+  if (_actId) {
+    const _b = $("presets").querySelector(`.preset[data-id="${CSS.escape(_actId)}"]`);
+    if (_b) _b.classList.add("act");
+  }
   $("presets").querySelectorAll(".preset").forEach(b =>
     b.addEventListener("click", () =>
       applyPreset(STATE.presets.find(p => p.id === b.dataset.id))));
@@ -1701,7 +1746,11 @@ function applyPreset(p) {
   }
   ids.forEach(id => {
     const s = SCAN[id];
-    if (s && !s.missing && !s.error) selected.add(id);
+    // 只有**确认不可用**（目标不存在 / 量体积出错）才排除。
+    // 此前反过来「没测过就不选」—— 扫描还没跑完就点预设，一个都选不中，
+    // 用户看到「0 项可清」自然觉得预设没用。
+    if (s && (s.missing || s.error)) return;
+    selected.add(id);
   });
   $("presets").querySelectorAll(".preset").forEach(b =>
     b.classList.toggle("act", b.dataset.id === p.id));
@@ -4534,6 +4583,35 @@ $("btnSteam").addEventListener("click", () => {
   loadCustomLibs();
 });
 $("cgAdd").addEventListener("click", () => { addCustomLib(); });
+$("btnElevate").addEventListener("click", async () => {
+  const b = $("btnElevate");
+  if (b.disabled) return;
+  b.disabled = true;
+  let r;
+  try {
+    r = await apiJSON(`${API}/__oc__/elevate`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+  } catch (e) {
+    toast(t("el.fail", "提权未完成：") + e); b.disabled = false; return;
+  }
+  if (!r.ok) { toast(t("el.fail", "提权未完成：") + (r.error || "")); b.disabled = false; return; }
+  toast(t("el.ok", "正在以管理员身份重启，页面会自动恢复…"));
+  // 老实例正在让位；轮询同端口，等新实例就绪且已是管理员后整页刷新
+  const deadline = Date.now() + 45000;
+  const tick = async () => {
+    try {
+      const st = await apiJSON(`${API}/__oc__/state?drive=C`);
+      if (st && st.is_admin) { location.reload(); return; }
+    } catch (_) {}
+    if (Date.now() < deadline) setTimeout(tick, 1500);
+    else {
+      toast(t("el.timeout", "等待管理员实例超时，请手动重新打开 O-Cleaner"));
+      b.disabled = false;
+    }
+  };
+  setTimeout(tick, 2500);
+});
 $("cgPath").addEventListener("keydown", e => {
   if (e.key === "Enter") addCustomLib();
 });
@@ -4910,8 +4988,14 @@ const I18N_EN = {
   "theme.dark": "Dark", "theme.dark.title": "Dark mode",
   "theme.system": "Auto", "theme.system.title": "Follow system",
   "lang.aria": "Language / 语言",
-  "adminwarn.a": "Running without administrator rights. Items in system directories will ask for admin permission. Restart ",
-  "adminwarn.b": " as administrator to clean them.",
+  "adminwarn.a": "Running without administrator rights. Items in system directories will ask for admin permission. Restart via ",
+  "adminwarn.b": " or click the button to elevate now.",
+  "adminwarn.elevate": "Elevate & restart",
+  "pre.yield": "Est. {n} items · {v} cleanable",
+  "pre.yield0": "No matching cleanable items on this machine",
+  "el.ok": "Restarting as administrator — this page will recover automatically…",
+  "el.fail": "Elevation failed: ",
+  "el.timeout": "Timed out waiting for the elevated instance. Please reopen O-Cleaner.",
   "btn.scan": "Rescan", "btn.fullScan": "Full-disk scan", "btn.steam": "Game Storage",
   "btn.bigFiles": "Largest files",
   "btn.all": "Select all", "btn.none": "Select none", "btn.save": "Save",
@@ -5160,7 +5244,7 @@ const I18N_EN = {
   "drv.free": "{v} free",
   "gd.admin": "Administrator rights",
   "gd.adminOk": "Present — Recycle Bin and Windows\\Temp can be tallied",
-  "gd.adminNo": "Missing. Recycle Bin and Windows\\Temp will show \"needs administrator\"; right-click start-ocleaner.bat → Run as administrator for full stats",
+  "gd.adminNo": "Missing. Recycle Bin and Windows\\Temp will show \"needs administrator\"; right-click 启动 O-Cleaner.bat → Run as administrator for full stats",
   "gd.dataDir": "Data folder", "gd.unknown": "(unknown)",
   "gd.redirected": "(redirected here)",
   "gd.dataDirNote": "(next to the program by default: history and configs live inside, copy the whole folder to migrate, USB sticks included)",

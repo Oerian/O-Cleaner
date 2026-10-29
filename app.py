@@ -109,11 +109,39 @@ USER_PACKS_DIR = CONFIG_DIR / "packs-user"
 PACKS_STATE_PATH = CONFIG_DIR / "packs-state.json"
 # AI 设置（含密钥）。只存本机、不进版本库，见 .gitignore。
 AI_CONFIG_PATH = CONFIG_DIR / "ai.json"
-HISTORY_PATH = DATA_DIR / "history.json"
+# 运行数据目录（2026-10-29 起）：history/schedule/趋势/回执/删除中断日志/锁文件
+# 全部收进 data/ 子目录，程序根目录不再散落一堆 json。旧版把这类文件直接
+# 放在数据目录根下 —— 启动时 _migrate_runtime_files() 会把它们搬进来，
+# 老用户无感升级。gitignore 整个 data/，运行数据永不进版本库。
+RUNTIME_DIR = DATA_DIR / "data"
+HISTORY_PATH = RUNTIME_DIR / "history.json"
 # 各盘用量快照（磁盘趋势曲线的数据源）：每天每盘最多记一条，保留 90 天。
 # 运行数据，不进版本库、不进分发包。
-DISK_TREND_PATH = DATA_DIR / "disk-trend.json"
-SCHEDULE_PATH = DATA_DIR / "schedule.json"
+DISK_TREND_PATH = RUNTIME_DIR / "disk-trend.json"
+SCHEDULE_PATH = RUNTIME_DIR / "schedule.json"
+
+
+def _migrate_runtime_files() -> None:
+    """老版本把运行数据散在数据目录根下；搬进 data/（一次性、幂等）。"""
+    moves = [
+        DATA_DIR / "history.json", DATA_DIR / "disk-trend.json",
+        DATA_DIR / "schedule.json", DATA_DIR / "pending-deletes.json",
+    ]
+    try:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        for old in moves:
+            new = RUNTIME_DIR / old.name
+            if old.exists() and not new.exists():
+                old.replace(new)
+        old_rc = DATA_DIR / "receipts"
+        new_rc = RUNTIME_DIR / "receipts"
+        if old_rc.is_dir() and not new_rc.exists():
+            old_rc.replace(new_rc)
+    except OSError:
+        pass        # 迁移失败不挡启动：新文件照常写在 data/，旧文件留在原地
+
+
+_migrate_runtime_files()          # 模块导入即迁移：老布局一次性收进 data/
 
 # 绝不允许删除的目录名（即使配置文件被改坏也拦得住）
 PROTECTED_DIR_NAMES = {
@@ -245,6 +273,41 @@ def is_admin() -> bool:
         return False
 
 
+# 当前实例实际绑定的端口（一键提权重启时原样传给新实例）
+_BOUND_PORT: int | None = None
+
+
+def elevate_relaunch() -> dict:
+    """一键提权：弹 UAC 以管理员身份重启自身，成功后本实例延迟退出让位。
+
+    新实例带 --port（沿用当前端口）+ --wait-free（等老实例退出释放端口），
+    浏览器照常自动打开 —— 用户直接落到管理员会话。
+    UAC 被取消 / 失败时本实例**不退出**（rc<=32 即失败，ShellExecuteW 约定）。"""
+    if not IS_WINDOWS:
+        return {"ok": False, "error": "仅 Windows 支持一键提权"}
+    if is_admin():
+        return {"ok": False, "error": "当前已经是管理员权限，无需提权"}
+    import sys
+    script = str(Path(__file__).resolve())
+    port_arg = f" --port {_BOUND_PORT} --wait-free 25" if _BOUND_PORT else ""
+    rc = ctypes.windll.shell32.ShellExecuteW(
+        None, "runas", sys.executable, f'"{script}"{port_arg}', None, 1)
+    if rc <= 32:
+        return {"ok": False,
+                "error": f"提权未完成（UAC 被取消或失败，代码 {rc}）"}
+
+    def _bye():
+        # 给响应包留出发送时间；新实例由 --wait-free 负责等端口
+        try:
+            print("  [提权] 正在让出端口，切换到管理员实例…")
+        except Exception:
+            pass
+        os._exit(0)
+
+    threading.Timer(1.2, _bye).start()
+    return {"ok": True}
+
+
 def data_dir_writable() -> bool:
     """实测数据存档目录的可写性（自检面板据此判断历史/配置能否落盘）。
     只查目录存在不够 —— 目录存在但只读（如被放进 Program Files、
@@ -259,7 +322,8 @@ def data_dir_writable() -> bool:
     if _DATA_DIR_WRITABLE is not None:
         return _DATA_DIR_WRITABLE
     try:
-        probe = DATA_DIR / f".oc_write_probe_{os.getpid()}"
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)   # 全新安装时 data/ 还不存在
+        probe = RUNTIME_DIR / f".oc_write_probe_{os.getpid()}"
         probe.write_bytes(b"")
         try:
             probe.unlink()
@@ -1892,11 +1956,12 @@ def _cross_process_lock(name: str, timeout: float = 3.0):
     超时后**放行**而不是报错：宁可极小概率丢一条历史，也不能因为别人
     持锁就把用户的清理卡死。
     """
-    path = DATA_DIR / f".oc-{name}.lock"
+    path = RUNTIME_DIR / f".oc-{name}.lock"
     fh = None
     locked = False
     try:
         try:
+            RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
             fh = open(path, "a+b")
         except OSError:
             yield          # 连锁文件都建不了（只读目录）：降级为无锁
@@ -2398,9 +2463,9 @@ def append_history(entry: dict) -> None:
         traceback.print_exc()  # 回执失败不影响清理本身，也不影响历史入账
 
 
-RECEIPT_DIR = DATA_DIR / "receipts"
+RECEIPT_DIR = RUNTIME_DIR / "receipts"
 # 改名暂存的中断恢复日志：rm_tree_strict 改名前后登记，启动时据此还原
-PENDING_DELETES_PATH = DATA_DIR / "pending-deletes.json"
+PENDING_DELETES_PATH = RUNTIME_DIR / "pending-deletes.json"
 
 
 def _write_receipt(entry: dict) -> None:
@@ -7509,6 +7574,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "ai": ai_public_config()})
         if route == "/__oc__/ai/test":
             return self._json(ai_test())
+        if route == "/__oc__/elevate":
+            # 一键提权重启（清理时遇到权限不足，不用找 bat 右键「以管理员运行」）
+            return self._json(elevate_relaunch())
         if route == "/__oc__/ai/models":
             return self._json(ai_list_models())
         if route == "/__oc__/ai/explain":
@@ -7582,6 +7650,9 @@ def main() -> None:
                     help="数据存档目录：config/ 与历史记录、定时任务等运行数据"
                          "的存放位置（也可用环境变量 OC_DATA_DIR；默认跟程序同目录，"
                          "整个文件夹拷走即完成数据迁移）")
+    ap.add_argument("--wait-free", type=int, default=0, metavar="SECONDS",
+                    help="启动前等指定端口空闲（一键提权重启时老实例让位用，"
+                         "配合 --port 固定端口）。等不到就照常顺延端口。")
     ap.add_argument("--lint", action="store_true",
                     help="只跑规则 linter（发布/贡献规则前用），不开服务")
     args = ap.parse_args()
@@ -7661,7 +7732,21 @@ def main() -> None:
         print(f"{'合计':<42}{human(total):>12}")
         return
 
-    port = pick_port(args.port or int(dcfg.get("app", {}).get("port", 8770)))
+    preferred = args.port or int(dcfg.get("app", {}).get("port", 8770))
+    # 一键提权重启：老实例延迟退出让位，新实例在这里等端口真正空出来
+    # （最多 --wait-free 秒；等不到就照常顺延，不让启动卡死）。
+    if args.wait_free > 0:
+        deadline = time.time() + max(1, args.wait_free)
+        while time.time() < deadline:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(("127.0.0.1", preferred)) != 0:
+                    break                    # 连不上 = 空闲
+            time.sleep(0.3)
+        else:
+            print(f"  等待端口 {preferred} 空闲超时，改用顺延端口。")
+    port = pick_port(preferred)
+    global _BOUND_PORT
+    _BOUND_PORT = port
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     httpd.busy = False  # type: ignore[attr-defined]
     httpd.daemon_threads = True

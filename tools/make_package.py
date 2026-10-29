@@ -39,7 +39,7 @@ ROOT = HERE.parent
 INCLUDE = [
     "app.py",
     "ps_scripts.py",
-    "start-ocleaner.bat",
+    "启动 O-Cleaner.bat",
     "README.md",
     "docs/USAGE.md",
     "docs/CUSTOMIZE.md",
@@ -153,7 +153,7 @@ def build_zip(out_path: Path, ver: str) -> None:
     print("\n  包含文件:")
     for name, data in payloads:
         print(f"    {name:<44} {len(data) / 1024:>8,.1f} KB")
-    print("\n  在别的电脑上：解压 -> 确认已装 Python 3 -> 双击 start-ocleaner.bat\n")
+    print("\n  在别的电脑上：解压 -> 确认已装 Python 3 -> 双击 启动 O-Cleaner.bat\n")
 
 
 def main() -> None:

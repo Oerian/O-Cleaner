@@ -7,7 +7,7 @@
 
 ## 零、接手快速通道（先读这个）
 
-- **跑起来**：双击 `start-ocleaner.bat`（需系统已装 Python 3.8+），或解压免安装包直接运行；浏览器自动打开本地页面。
+- **跑起来**：双击 `启动 O-Cleaner.bat`（需系统已装 Python 3.8+），或解压免安装包直接运行；浏览器自动打开本地页面。
 - **跑门禁**（改动后依次执行，详见第六节）：
   ```bash
   python -X utf8 tools/lint_rules.py --strict
@@ -1356,6 +1356,20 @@ SECURITY 该处表述未动。
 >
 > 另：切语言重画列表（setLang 的 forEach）必须覆盖全部 `render*` 函数 —— selftest 有一条覆盖检查（豁免集合之外的新增渲染函数漏进列表就会假红），`renderCustomLibs` 上线时就漏了，补上即绿。
 
+### 42. 五件体验批：预设实统计 + hover 变黑 + 一键提权 + data/ 收敛 + bat 更名（2026-10-29）
+
+用户反馈五件事一次处理：
+
+- **一键预设「点击常常没多少可清项」**：两处根因。① `applyPreset` 原逻辑是「扫描没测过的项一律不选」—— 扫描没跑完就点预设，结果一个都选不中；改为**只有确认 missing/error 才排除，没测过也选中**（服务端清理时会重新识别校验，前端不必替它保守）。② 按钮上加**实时统计** `presetYield(p)`：按当前 SCAN 结果算「预计可清 n 项 · 体积」，扫描完成后随 `renderPresets` 刷新，点击前就有预期。**空选择预设（`none`，ids===[]）豁免统计**—— 显示「0 项可清」会误导成「没得清」，这类预设本来就没有统计意义。
+- **白天模式点击变黑**：`.viewnav button:hover` 与 `button:hover:not(:disabled)` 硬编码了暗色面板色值（#252b36 系）；改走主题变量 `var(--panel-hover)`（暗 #1a1e26 / 亮 #f6f8fb 分档）。CDP 用 stylesheet 遍历断言 hover 色必须是 `var(--panel-hover)`。**注意写注释时别把被禁的色值字面量写回文件** —— selftest 有 `#252b36 not in index.html` 断言，连注释里出现都算红。
+- **一键提权**：adminwarn 栏新增按钮 → `POST /__oc__/elevate` → 后端 `elevate_relaunch()`：非 Windows / 已是管理员直接拒绝；否则 `ShellExecuteW(None, "runas", sys.executable, '"<script>" --port <port> --wait-free 25', None, 1)`，rc<=32 视为用户拒绝 UAC 不退出；成功后 `Timer(1.2, os._exit)` 让位。`argparse` 新增 `--wait-free SECONDS`：main 里先等端口空闲（`connect_ex() != 0`）再 `pick_port`，解决「新实例抢不到旧实例端口」的启动竞态。前端轮询 `/state` 的 `is_admin`，成功后 reload（45s 超时）。**真实 UAC 弹窗链路只能用户实测**，自测只覆盖「已是管理员必须拒绝且不弹窗」的守卫分支。
+- **本体目录收敛**：运行数据从仓库根迁入 `data/`（`RUNTIME_DIR = DATA_DIR / "data"`：history / disk-trend / schedule / pending-deletes / receipts）；`_migrate_runtime_files()` **模块导入即执行、幂等**，老布局自动搬家；`.gitignore` 加整个 `data/`；跨进程锁与写探针同步改用 `RUNTIME_DIR`。根目录只剩代码 + 配置 + 启动脚本。
+- **bat 更名**：`start-ocleaner.bat` → `启动 O-Cleaner.bat`（git mv，内容纯 ASCII 不变，新手一眼看懂）。全量引用更新：make_exe（含 zip 内路径）/ make_package / selftest / README / 双语 USAGE / HANDOFF / 前端 adminwarn 与 gd.adminNo 词条。
+
+门禁：CDP **97-0-5**（新增 2 条：预设实时统计（空预设豁免）、hover 色走主题变量）；selftest 新增 4 条（提权守卫、RUNTIME_DIR 三路径、禁色值回归、bat 更名）；lint_rules / guard_matrix / _lint_selftest / pyflakes 全过；迁移实测（根目录收敛）与提权守卫实测通过。
+
+> **教训**：① CDP 断言与产品行为同步演进 —— 「每个预设都必须显示统计」在空预设豁免后过时，红灯先查是断言过时还是代码错，改断言要连豁免理由写进注释。② 本会话环境里 Bash 工作目录**不跨调用持久**、后台任务固定从会话目录起跑 —— 每条命令都必须自带 `cd <repo> &&` 或用绝对路径，selftest 以绝对路径调用最稳（`python /e/O-Cleaner/tools/selftest.py`）。
+
 ---
 
 ## 七、文件资产与代码清单
@@ -1367,7 +1381,7 @@ SECURITY 该处表述未动。
 | `app.py` | ~312 KB | 后端全功能核心：HTTP 服务、安全删除校验（含内容指纹与祖先链守卫）、锁定预检与三态删除、WizTree MFT 加速调用与管理、Steam 解析、分区分析、资源包加载与合并、自有 AI 接口、定时任务、被占用文件探测与占用进程候选、游戏本体删除（含后端二次识别）、按路径清理（服务端重新识别校验）、勾选包含关系去重、`--data-dir` 数据目录重定向、快速扫描注入游戏本体、i18n 载荷三层合并（`apply_lang_payload`）、自定义聚合组（`/fsgroups`）、自定义目录垃圾文件夹发现（`discover_junk_folders`，v2.0 起坏、2026-10-20 复活）、检查更新、大文件排行；PowerShell 脚本模板经 `ps_scripts.py` 导入（`PS_*` re-export，下游引用方式不变） |
 | `ps_scripts.py` | ~16 KB | PowerShell 系统脚本模板集中地：9 个 `PS_*` 常量（全盘递归、目录测量、回收站、Steam、被占用探测等）+ UTF-8 管道前置；受 linter 第 [7/8] 节括号配平与自测阶段七解析器校验约束 |
 | `web/index.html` | ~308 KB | 前端单文件：命名网格两栏布局、可折叠侧栏、占用排行树形折叠懒加载列表（可清理项行内勾选 + 行内归档/管理按钮）、环境自检面板、Steam 面板、资源包面板、AI 助手面板、大文件排行面板、清理活动折线图、细分弹窗、占用进程一键查找、游戏删除确认、自定义聚合组管理弹窗、全量英文 i18n（`I18N_EN` 词典 + `t()`/`data-i18n` 双通道） |
-| `start-ocleaner.bat`| ~1 KB | 双击启动入口：纯 ASCII + CRLF，检测 Python 并拉起默认浏览器 |
+| `启动 O-Cleaner.bat`| ~1 KB | 双击启动入口：纯 ASCII + CRLF，检测 Python 并拉起默认浏览器 |
 | `config/targets.json` | ~20.6 KB | 26 个预定义系统级目标与 5 个预设（安全/深度/开发者/回收站/清空） |
 | `config/filetypes.json`| ~27.6 KB | 占用识别知识库：28 条目录规则 + 14 条文件规则（合计 42 条），定义识别特征与处置建议 |
 | `config/game-names.json`| ~7.8 KB | 游戏中文译名映射库：58 条条目（纯显示，与 `packs/games-titles.json` 分工见 §九） |

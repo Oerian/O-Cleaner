@@ -10,7 +10,7 @@
 ## 一、快速开始
 
 1. 确认已装 Python 3（命令行执行 `python --version` 能看到版本号即可）
-2. 双击 **`start-ocleaner.bat`**
+2. 双击 **`启动 O-Cleaner.bat`**
 3. 浏览器会自动打开 `http://127.0.0.1:8770/`
 
 > **那个黑色命令行窗口就是服务本体，清理期间不要关闭它。**
@@ -19,7 +19,7 @@
 ### 免安装版（不需要 Python）
 
 `O-Cleaner-v<版本>-win64-embed.zip` 是**内嵌了官方 Python 运行时**的免安装
-版：解压后直接双击 `start-ocleaner.bat`，这台电脑上不需要安装或配置 Python。
+版：解压后直接双击 `启动 O-Cleaner.bat`，这台电脑上不需要安装或配置 Python。
 
 - 便携使用：历史记录与配置都写在解压出来的文件夹内，整个文件夹放到任意
   可写目录即可；不要放在 Program Files 这类需要管理员权限的位置。
@@ -32,7 +32,7 @@
 
 ```
 cd /d "你的 O-Cleaner 目录"
-start-ocleaner.bat
+启动 O-Cleaner.bat
 ```
 
 命令行参数：
@@ -529,7 +529,7 @@ D:\某缓存目录                  → 17.9 GB
 - **按类别累计** 包管理器 / 浏览器 / 临时文件 / 显卡缓存……各占多少
 - **贡献最多的项目** 哪些清理项贡献最大
 
-数据存在 `history.json`（最多保留 200 次）。「最近清理记录」面板里可一键清空，
+数据存在 `data\history.json`（最多保留 200 次）。「最近清理记录」面板里可一键清空，
 清空后累计统计一并归零。
 
 ---
@@ -637,7 +637,7 @@ D:\某缓存目录                  → 17.9 GB
 
 ```
 O-Cleaner\
-├─ start-ocleaner.bat      双击启动
+├─ 启动 O-Cleaner.bat      双击启动
 ├─ app.py                  主程序（扫描 / 全盘扫描 / API / 删除 / 换算 / 资源包 / AI 调用）
 ├─ README.md               项目简介
 ├─ docs\
@@ -667,13 +667,18 @@ O-Cleaner\
 │   ├─ make_package.py     打包成可拷贝的 zip（内存打包，无暂存目录）
 │   ├─ sync_packs.py       主仓 packs/ 与公开分发仓的一致性校验与同步
 │   └─ local-cases.json.example   本机真实用例的干净模板
-├─ history.json            清理历史与累计统计（运行后生成）
-├─ schedule.json           定时设置（运行后生成）
+├─ data\                   运行数据（运行后生成，整目录即全部历史状态）
+│   ├─ history.json        清理历史与累计统计
+│   ├─ schedule.json       定时设置
+│   ├─ disk-trend.json     各盘用量趋势快照
+│   ├─ pending-deletes.json  删除中断时的暂存日志（启动时据此还原）
+│   └─ receipts\           每次清理的逐项回执
 └─ LICENSE / CONTRIBUTING.md / SECURITY.md / HANDOFF.md
 ```
 
-`history.json`、`schedule.json`、`config/custom-rules.json` 是运行数据，
-想恢复出厂状态直接删掉它们即可（不影响程序）。
+`data\` 整个目录都是运行数据（2026-10-29 起收进这里，程序根目录不再散落
+json），想恢复出厂状态直接删掉它即可（不影响程序）；旧版本散在根目录的
+`history.json` 等文件会在新版首次启动时自动搬进 `data\`。
 
 > 仓库里还有 `.github\workflows\ci.yml`（CI 的三个作业）与 `.gitattributes`
 > （换行与编码契约的声明）。前者只在 GitHub 上运行；后者决定文件必须使用哪种换行。
@@ -764,5 +769,5 @@ linter 会做八项检查：结构校验、资源包结构、语义自相矛盾�
 不需要。所有 `config\*.json` 改完刷新网页即可生效。
 
 **Q：怎么彻底重置？**
-删掉 `history.json`、`schedule.json`、`config\custom-rules.json`，
+删掉 `data\`（或其中的 `history.json`、`schedule.json`）与 `config\custom-rules.json`，
 再把 `config\convert.json` 恢复到默认内容，就是全新状态。

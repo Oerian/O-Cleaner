@@ -56,7 +56,7 @@ EMBEDDED_BAT = (
 README_RUN = """\ufeffO-Cleaner 免安装版（内嵌 Python 运行时）
 ========================================
 
-启动：双击 start-ocleaner.bat，浏览器会自动打开界面。
+启动：双击 启动 O-Cleaner.bat，浏览器会自动打开界面。
 
 本包自带官方 Python 运行时（python/ 目录），不需要在这台电脑上安装
 或配置 Python；也请不要把 python/ 目录单独挪走或精简。
@@ -129,13 +129,13 @@ def embed_runtime_payloads() -> list[tuple[str, bytes]]:
 def build_embed_zip(out_path: Path, ver: str) -> None:
     payloads: list[tuple[str, bytes]] = []
     for rel in INCLUDE:
-        if rel == "start-ocleaner.bat":
+        if rel == "启动 O-Cleaner.bat":
             continue                     # 免安装版换成免检测启动器
         p = ROOT / rel
         if not p.exists():
             fail(f"分发清单里的文件不存在：{rel}")
         payloads.append((f"O-Cleaner/{rel}", p.read_bytes()))
-    payloads.append(("O-Cleaner/start-ocleaner.bat", EMBEDDED_BAT.encode("ascii")))
+    payloads.append(("O-Cleaner/启动 O-Cleaner.bat", EMBEDDED_BAT.encode("ascii")))
     payloads.append(("O-Cleaner/README-RUN.txt", README_RUN.encode("utf-8")))
     payloads.extend(embed_runtime_payloads())
 
@@ -163,7 +163,7 @@ def build_embed_zip(out_path: Path, ver: str) -> None:
     print(f"  大小  : {size / 1024 / 1024:,.1f} MB"
           f"    项目文件 {n_proj} 个 + 内嵌运行时 {n_rt} 个"
           f"（逐条 sha256 自校验通过）")
-    print("\n  使用：解压 -> 双击 start-ocleaner.bat（无需安装 Python）")
+    print("\n  使用：解压 -> 双击 启动 O-Cleaner.bat（无需安装 Python）")
     print("  提示：未做代码签名，SmartScreen 首次运行选「更多信息 -> 仍要运行」。\n")
 
 

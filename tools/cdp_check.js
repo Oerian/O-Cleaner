@@ -453,6 +453,38 @@ class CDP {
   })()`);
   check("一键预设文字不溢出框位", presetOverflow.length === 0, presetOverflow.join(" | "));
 
+  // 预设按钮带实时「预计可清」统计（扫描完成后才有；没扫完记跳过）。
+  // 此前「点击常常没有多少可清项」没有预期 —— 现在点击前就能看到数量与体积。
+  const presetStat = await evaluate(`(() => {
+    const btns = [...document.querySelectorAll('.preset')];
+    const withStat = btns.filter(b => /预计可清|Est\\. \\d+ items/.test(b.innerText));
+    const zero = btns.filter(b => /本机没有匹配|No matching cleanable/.test(b.innerText));
+    // 「全部取消」这类空选择预设（select.ids === []）不显示统计是**正确行为**
+    const empty = (STATE.presets || []).filter(p =>
+      Array.isArray((p.select || {}).ids) && p.select.ids.length === 0).length;
+    return { total: btns.length, withStat: withStat.length, zero: zero.length, empty };
+  })()`);
+  checkScan("一键预设按钮显示实时可清统计（空选择预设豁免，其余显示数量+体积或 0）",
+            presetStat.total > 0
+            && presetStat.withStat + presetStat.zero + presetStat.empty === presetStat.total,
+            JSON.stringify(presetStat));
+  // 悬停变黑修复：按钮 hover 色必须是主题变量（此前硬编码暗色 #252b36）
+  const hoverVar = await evaluate(`(() => {
+    for (const sheet of document.styleSheets) {
+      let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
+      for (const r of rules) {
+        if (r.selectorText && r.selectorText.includes("button:hover:not(:disabled)")
+            && /background\\s*:/.test(r.style?.cssText || r.cssText)) {
+          return (r.style || r).cssText;
+        }
+      }
+    }
+    return "";
+  })()`);
+  check("按钮悬停色走主题变量（白天模式不再变黑）",
+        hoverVar.includes("var(--panel-hover)"),
+        hoverVar.slice(0, 90));
+
   // 规则功能。先「全不选」：前面的预设/勾选检查可能残留选中项，
   // 不清掉的话保存出的规则会带上一批无关 id，套用后统计对不上单卡体积。
   await evaluate(`(() => { const b = document.querySelector('#btnNone');

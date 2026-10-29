@@ -11,7 +11,7 @@ Complete usage instructions. For the project's positioning, core capabilities, a
 ## 1. Quick Start
 
 1. Make sure Python 3 is installed (running `python --version` in a terminal should print a version number)
-2. Double-click **`start-ocleaner.bat`**
+2. Double-click **`启动 O-Cleaner.bat`**
 3. Your browser will open `http://127.0.0.1:8770/` automatically
 
 > **That black command-line window is the service itself — do not close it during cleanup.**
@@ -19,7 +19,7 @@ Complete usage instructions. For the project's positioning, core capabilities, a
 
 ### Portable Version (No Python Needed)
 
-`O-Cleaner-v<version>-win64-embed.zip` is a portable build that **embeds the official Python runtime**: after extracting, just double-click `start-ocleaner.bat`. No need to install or configure Python on that machine.
+`O-Cleaner-v<version>-win64-embed.zip` is a portable build that **embeds the official Python runtime**: after extracting, just double-click `启动 O-Cleaner.bat`. No need to install or configure Python on that machine.
 
 - Portable use: history and configuration are written inside the extracted folder, so you can put the whole folder in any writable directory; do not place it in locations requiring administrator rights such as Program Files.
 - The `python/` directory is the embedded runtime — keep it intact; do not move or trim it on its own.
@@ -29,7 +29,7 @@ To clean system directories (Windows Update cache, system logs, etc.), run **as 
 
 ```
 cd /d "your O-Cleaner directory"
-start-ocleaner.bat
+启动 O-Cleaner.bat
 ```
 
 Command-line arguments:
@@ -527,7 +527,7 @@ When you want to dig deeper, expand "View Detailed Charts" (查看明细图表),
 - **Cumulative by category** package managers / browsers / temporary files / GPU caches… and their shares
 - **Top contributors** which cleanup items contributed most
 
-Data is stored in `history.json` (up to 200 cleanups kept). The "Recent Cleanup Records" panel offers one-click clearing;
+Data is stored in `data\history.json` (up to 200 cleanups kept). The "Recent Cleanup Records" panel offers one-click clearing;
 clearing also resets the cumulative statistics to zero.
 
 ---
@@ -635,7 +635,7 @@ If the scheduled time passed while it was closed, a catch-up run happens immedia
 
 ```
 O-Cleaner\
-├─ start-ocleaner.bat      double-click to start
+├─ 启动 O-Cleaner.bat      double-click to start
 ├─ app.py                  main program (scan / full-disk scan / API / deletion / conversion / resource packs / AI calls)
 ├─ README.md               project introduction
 ├─ docs\
@@ -665,12 +665,12 @@ O-Cleaner\
 │   ├─ make_package.py     package into a copyable zip (in-memory packaging, no staging directory)
 │   ├─ sync_packs.py       consistency check and sync between the main repo's packs/ and the public distribution repo
 │   └─ local-cases.json.example   clean template for real local cases
-├─ history.json            cleanup history and cumulative statistics (generated after running)
+├─ data\history.json            cleanup history and cumulative statistics (generated after running)
 ├─ schedule.json           schedule settings (generated after running)
 └─ LICENSE / CONTRIBUTING.md / SECURITY.md / HANDOFF.md
 ```
 
-`history.json`, `schedule.json`, and `config/custom-rules.json` are runtime data;
+`data\history.json`, `schedule.json`, and `config/custom-rules.json` are runtime data;
 to reset to factory state, just delete them (the program is unaffected).
 
 > The repository also contains `.github\workflows\ci.yml` (CI's three jobs) and `.gitattributes`
@@ -761,5 +761,5 @@ then it recovers automatically. This is the only side effect; it does not damage
 No. All `config\*.json` changes take effect by refreshing the page.
 
 **Q: How to fully reset?**
-Delete `history.json`, `schedule.json`, and `config\custom-rules.json`,
+Delete `data\history.json`, `schedule.json`, and `config\custom-rules.json`,
 then restore `config\convert.json` to its default contents — that's a brand-new state.

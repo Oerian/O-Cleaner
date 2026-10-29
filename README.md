@@ -11,7 +11,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 > a knowledge base that explains what is safe to remove, Recycle Bin handling, and an
 > optional WizTree (MFT) accelerator. Zero third-party dependencies — standard-library
 > Python only, or use the embeddable-runtime build. Copy the folder to another PC and it
-> just works. Quick start: extract to a writable folder, run `start-ocleaner.bat`,
+> just works. Quick start: extract to a writable folder, run `启动 O-Cleaner.bat`,
 > the UI opens at `http://127.0.0.1:8770/`. Full user guide in English:
 > [docs/USAGE-en.md](docs/USAGE-en.md).
 
@@ -26,10 +26,10 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 **免安装版**（推荐，内嵌官方 Python 运行时）：
 
 1. 解压到任意可写目录（不建议 `Program Files` 等需要管理员权限的位置）；
-2. 运行 `start-ocleaner.bat`；
+2. 运行 `启动 O-Cleaner.bat`；
 3. 浏览器自动打开界面地址（默认 `http://127.0.0.1:8770/`）。
 
-**便携版**（约 300 KB）：要求计算机已安装 Python 3，解压后同样运行 `start-ocleaner.bat`。
+**便携版**（约 300 KB）：要求计算机已安装 Python 3，解压后同样运行 `启动 O-Cleaner.bat`。
 
 命令行窗口为服务进程，运行期间请勿关闭；关闭窗口即停止服务。
 程序未做代码签名，首次运行时 SmartScreen 提示「已保护你的电脑」属正常现象，
@@ -99,7 +99,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 **界面语言不对 / 想换语言** — 点右上角 `A / 中 / EN`：`A` 跟随浏览器语言（非中文环境显英文），`中` / `EN` 强制指定并记忆在本机。界面骨架、动态文案与知识库长文本（内置规则与资源包释义的「是什么 / 怎么处理 / 提示」、风险与置信度标签、分类短词）均已双语，英文界面下扫描结果自动显示英文说明；切换语言即时生效并重新拉取数据。
 
 **提示需要管理员权限** — `Windows\Temp`、系统更新缓存等位置需要提权：
-右键 `start-ocleaner.bat` 选择「以管理员身份运行」；同批次其余项目不受单项目权限失败影响。
+右键 `启动 O-Cleaner.bat` 选择「以管理员身份运行」；同批次其余项目不受单项目权限失败影响。
 
 **部分文件删除失败** — 文件正被其他程序使用；结果弹窗里点「一键查找占用进程」，工具会先确认文件是否真的被占（可靠判定），再列出候选进程（启发式猜测）。**只列候选，不代关进程**；先在相关程序里保存并退出再重试。`System`、`explorer.exe` 等系统进程不要结束。
 
@@ -113,7 +113,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 
 | 位置 | 内容 |
 |---|---|
-| `start-ocleaner.bat` | 启动脚本 |
+| `启动 O-Cleaner.bat` | 启动脚本 |
 | `app.py` | 主程序：扫描、占用分析、清理执行、HTTP 服务 |
 | `web/index.html` | Web 界面（单文件） |
 | `config/targets.json` | 预定义清理目标（可自行增删条目） |

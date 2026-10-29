@@ -1,8 +1,12 @@
-# 运行数据 —— 不进版本库
+# 运行数据 —— 不进版本库。2026-10-29 起运行文件统一收进 data/ 子目录
+# （history/schedule/趋势/回执/删除中断日志/锁文件），整目录忽略。
+data/
+# 旧布局（v2.9 前）散在根目录的运行文件，迁移后不应再出现，保留条目兜底
 history.json
 schedule.json
 disk-trend.json
 receipts/
+pending-deletes.json
 config/custom-rules.json
 config/custom-overrides.json
 # 用户自定义聚合组（占用树自由归组，本机数据）

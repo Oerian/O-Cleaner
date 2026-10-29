@@ -275,6 +275,29 @@ def phase1() -> None:
     finally:
         shutil.rmtree(_cg_dir, ignore_errors=True)
 
+    # 一键提权守卫：已是管理员时必须拒绝（不弹 UAC、不重复提权）。
+    # monkeypatch is_admin 避免真的触发 UAC 弹窗 —— 绝不在自测里调真的提权。
+    _orig_admin = app.is_admin
+    try:
+        app.is_admin = lambda: True
+        _er = app.elevate_relaunch()
+        check("一键提权守卫：已是管理员时拒绝并说明",
+              not _er.get("ok") and "管理员" in str(_er.get("error", "")), str(_er))
+    finally:
+        app.is_admin = _orig_admin
+
+    # 运行数据统一收进 data/ 子目录（2026-10-29）：程序根目录不再散落 json
+    check("运行数据统一收进 data/ 子目录",
+          app.RUNTIME_DIR.name == "data"
+          and app.HISTORY_PATH.parent == app.RUNTIME_DIR
+          and app.RECEIPT_DIR.parent == app.RUNTIME_DIR
+          and app.PENDING_DELETES_PATH.parent == app.RUNTIME_DIR,
+          str(app.RUNTIME_DIR))
+
+    # 按钮悬停色走主题变量（此前硬编码暗色 #252b36，白天模式悬停/按下变黑）
+    check("按钮悬停色走主题变量（白天模式不再变黑）",
+          "#252b36" not in (HERE / "web" / "index.html").read_text(encoding="utf-8"))
+
     # 盘符：盘符专属项必须带 %DRIVE%，通用项必须不带
     sys_targets = app.build_targets("C")
     check("C 盘目标非空", len(sys_targets) > 10, f"{len(sys_targets)} 项")
@@ -1652,10 +1675,10 @@ def phase4_repo() -> None:
     def _lone_lf(b):
         return len(_re.findall(b"(?<!\r)\n", b))
 
-    bat = _bytes("start-ocleaner.bat")
-    check("start-ocleaner.bat 是纯 ASCII（cmd.exe 按 GBK 读，中文会乱码）",
+    bat = _bytes("启动 O-Cleaner.bat")
+    check("启动 O-Cleaner.bat 是纯 ASCII（cmd.exe 按 GBK 读，中文会乱码）",
           all(x < 128 for x in bat))
-    check("start-ocleaner.bat 无孤立 LF（LF 会让 cmd 吃掉下一行）",
+    check("启动 O-Cleaner.bat 无孤立 LF（LF 会让 cmd 吃掉下一行）",
           _lone_lf(bat) == 0, f"{_lone_lf(bat)} 个")
     mkt = _bytes("tools/make_package.py")
     check("make_package.py 不带 BOM（.py 契约：UTF-8 无 BOM）",
