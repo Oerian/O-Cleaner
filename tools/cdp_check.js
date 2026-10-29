@@ -698,15 +698,45 @@ class CDP {
   check("隐藏项页签的计数与实际行数一致",
         Number.isFinite(hidN) && (hidN === hidTab.rows || hidTab.rows >= 30),
         `页签=${hidN} 行数=${hidTab.rows}「${hidTab.label}」`);
-  // 页签吸顶（2026-10-28）：视图切换与排序两行在模块内固定，列表再长也始终在手边。
+  // 模块头吸顶（2026-10-29）：「占用排行」标题 + 返回上一级/面包屑/当前目录 +
+  // 视图页签 + 排序行整体 sticky 在模块顶部，列表再长导航也不离手。
   const sticky = await evaluate(`(() => {
-    const el = document.querySelector('.fstabbar');
-    if (!el) return { ok: false };
-    const cs = getComputedStyle(el);
-    return { ok: true, pos: cs.position, top: cs.top, z: cs.zIndex };
+    const head = document.querySelector('.fshead');
+    if (!head) return { ok: false };
+    const cs = getComputedStyle(head);
+    return { ok: true, pos: cs.position, top: cs.top, z: cs.zIndex,
+             hasNav: !!head.querySelector('#fsNav'),
+             hasTitle: !!head.querySelector('h3'),
+             hasTabs: !!head.querySelector('#fsModes') };
   })()`);
-  check("占用排行的页签行在模块内吸顶（position:sticky）",
-        sticky.ok && sticky.pos === "sticky", JSON.stringify(sticky));
+  check("占用排行的模块头（标题+导航+页签）在模块内吸顶",
+        sticky.ok && sticky.pos === "sticky" && sticky.hasNav
+        && sticky.hasTitle && sticky.hasTabs, JSON.stringify(sticky));
+  // 第二条要在页面里求值（Node 侧没有 document），单独发一次 evaluate
+  const navInPanel = await evaluate(
+    `!!document.querySelector("#fsNav")?.closest(".panel")?.querySelector("#fsChart")`);
+  check("返回上一级/面包屑已并入占用排行模块（与排行图同面板）",
+        sticky.ok && sticky.hasNav && navInPanel === true, String(navInPanel));
+  // 吸顶行为实测：把左栏滚下去一段，模块头必须仍钉在滚动容器顶部；
+  // 量完把滚动位置还原，不影响后面的断言。
+  const stickTest = await evaluate(`(async () => {
+    const col = document.querySelector('#leftcol');
+    const head = document.querySelector('.fshead');
+    if (!col || !head) return { ok: false };
+    const colTop = Math.round(col.getBoundingClientRect().top);
+    // sticky 的语义：模块头顶到滚动容器顶**之后**才钉住。所以要滚到
+    // 「面板顶越过容器顶再多一点」再量，滚少了模块头还在自然位置。
+    const need = head.getBoundingClientRect().top - colTop + 60;
+    col.scrollTop += need;
+    await new Promise(r => setTimeout(r, 80));
+    const after = Math.round(head.getBoundingClientRect().top);
+    col.scrollTop -= need;
+    await new Promise(r => setTimeout(r, 80));
+    return { ok: true, colTop, scrolled: need, after,
+             stuck: Math.abs(after - colTop) <= 2 };
+  })()`);
+  check("滚动列表后模块头仍钉在模块顶部（吸顶行为实测）",
+        stickTest.ok && stickTest.stuck, JSON.stringify(stickTest));
 
   // 「游戏等大项」这个分类已按要求移除：游戏不再单列一类，
   // 而是直接进「全盘最大项目」，并带 Steam 中文名标注。
