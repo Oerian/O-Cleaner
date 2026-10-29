@@ -33,7 +33,9 @@ import app  # noqa: E402
 
 SANDBOX = Path("C:/_ocleaner_selftest")   # 与测试配置里的 %DRIVE%\_ocleaner_selftest 对应
 REAL_TARGETS = HERE / "config" / "targets.json"
-BACKUP = HERE / "config" / ".targets.backup.json"
+# 备份放进 gitignore 的运行数据目录：仓库 config/ 不再多出临时文件
+#（2026-10-30：原放在 config/.targets.backup.json，实测会误触安全拦截）
+BACKUP = app.RUNTIME_DIR / ".targets.backup.json"
 
 
 def free_port() -> int:
@@ -1013,9 +1015,12 @@ def phase3_http() -> None:
               'id="panelNav"' in html and "initPanelNav" in html)
         # Steam 残留目录（孤儿）2026-10-29 改版：折叠面板 + 勾选批量删，
         # 一次确认后逐个走 clean-game（与删游戏同一后端校验链路）
-        check("Steam 残留目录折叠勾选批量删并走同一确认流程",
-              "confirmDeleteOrphans" in html and "/__oc__/clean-game" in html
-              and "stOrphanToggle" in html and "先排除一种误报" in html)
+        check("回收建议勾选并入主清理出口（面板无独立删除按钮）",
+              "recycleSel" in html and '"recycle:" + o.key' in html
+              and "/__oc__/clean-game" in html
+              and "stOrphanToggle" in html
+              and 'id="stOrphanDel"' not in html
+              and "confirmDeleteOrphans" not in html)
         # 高风险项「删进回收站」：确认弹窗的选项、请求参数与结果说明三处齐备；
         # 后端 rm_trash 用 SHFileOperationW 带 FOF_ALLOWUNDO，且容量守卫文本存在
         # —— 超限时系统会把「移入回收站」静默转成永久删除，必须由我们先行拒绝。
@@ -1038,7 +1043,7 @@ def phase3_http() -> None:
         check("Epic/GOG 残留目录有检测与统一删除入口",
               "def platform_install_roots" in open(app.__file__, encoding="utf-8").read()
               and "GAMES.platforms" in html and "allOrphans" in html
-              and "confirmDeleteOrphans" in html)
+              and "recycleSel" in html)
         # 游戏占用趋势三件套（照磁盘趋势的快照/端点/折线模式）
         check("游戏占用趋势有三件套（快照/端点/折线）",
               "def record_game_history" in open(app.__file__, encoding="utf-8").read()
@@ -1055,6 +1060,29 @@ def phase3_http() -> None:
               and 'id="stSugg"' not in html
               and "st.suggCount" in html and "st.suggGroup" in html
               and "st.orphanGroup" in html and "scrollIntoView" in html)
+        # v2.10 功能批：折叠记忆 / 排序方向 / 趋势 hover / 异常增长 / 导出 / 残留横幅
+        check("回收建议折叠状态记忆（localStorage）",
+              'ORPHAN_OPEN_KEY = "oc-orphan-open"' in html
+              and 'localStorage.getItem(ORPHAN_OPEN_KEY)' in html
+              and 'localStorage.setItem(ORPHAN_OPEN_KEY' in html)
+        check("排序方向可切换（同项再点反向 + 箭头指示）",
+              "steamSortDir" in html and "SORT_BASE" in html
+              and 'steamSortDir = -steamSortDir' in html)
+        check("趋势图 hover 提示与异常增长提醒",
+              "gameTrendTip" in html and "gtip" in html
+              and "gameTrendGrow" in html and "st.growWarn" in html)
+        check("游戏清单导出（CSV 带 BOM / Markdown，纯前端）",
+              "function exportGameList" in html and "stExportCsv" in html
+              and "stExportMd" in html and "\\uFEFF" in html
+              and "downloadBlob" in html)
+        check("卸载残留主动提醒横幅（会话内可关）",
+              'id="orphanwarn"' in html and "checkOrphanBanner" in html
+              and 'oc-orphanwarn' in html and "ow.head" in html)
+        check("游戏行 hover 操作浮层（删除/打开不常驻）",
+              'class="ract"' in html and ".vrow:hover .ract" in html)
+        check("Epic/GOG 行统一占位图封面",
+              "renderOtherPlatforms" in html
+              and html.count("cover-placeholder") >= 3)
         # 视图不被自动扫描踢回：扫描完成回调只在 full 视图才 switchView
         check("自动扫描完成后不把用户踢回扫描概览",
               'if (view !== "steam") switchView("full")' in html

@@ -79,7 +79,7 @@ WEB_DIR = BASE_DIR / "web"
 # config/drives.json 的 app.version），2026-10-12 升 v2.3 时漏改了后两处，
 # 结果界面显示的仍是 2.2。收敛成一个常量后，drives.json 与打包脚本由自测断言
 # 强制保持一致（见 tools/selftest.py 的「版本号三处一致」）。
-APP_VERSION = "2.9"
+APP_VERSION = "2.10"
 APP_UA = f"O-Cleaner/{APP_VERSION}"
 
 TARGETS_PATH = CONFIG_DIR / "targets.json"

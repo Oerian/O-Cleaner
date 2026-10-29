@@ -1397,6 +1397,25 @@ class CDP {
   console.log("\n  --- Steam 游戏库页面 ---");
   const hasSteamBtn = await evaluate(`!!document.querySelector('#btnSteam')`);
   check("工具栏有 Steam 入口", hasSteamBtn);
+    // 残留提醒横幅（2026-10-29）：本机真有残留才断言显示（CI 无 Steam，
+    // 按 /steam API 实况门控跳过）
+    let apiOrphans = 0;
+    try {
+      const sj = await (await fetch(URL_ + "/__oc__/steam")).json();
+      apiOrphans = Array.isArray(sj.orphans) ? sj.orphans.length : 0;
+    } catch (_) {}
+    if (!apiOrphans) {
+      skip2("残留提醒横幅（本机无 Steam 残留）");
+    } else {
+      await sleep(1500);   // checkOrphanBanner 延迟 2.5s + 异步 fetch 的余量
+      const bw = await evaluate(`(() => {
+        const w = document.querySelector('#orphanwarn');
+        return { shown: !!w && w.style.display !== 'none',
+                 text: w ? w.textContent.trim().slice(0, 60) : "" };
+      })()`);
+      check("卸载残留提醒横幅出现（含数量与合计）",
+            bw.shown && /\d/.test(bw.text), bw.text);
+    }
   if (hasSteamBtn) {
     await evaluate(`document.querySelector('#btnSteam').click()`);
     // /__oc__/steam 可能要几秒（PS 枚举 + 残留测体积）——本机实测曾因
@@ -1458,20 +1477,41 @@ class CDP {
           && /Epic 游戏库|Epic Games Library/.test(gmod.titles.join("|")),
           `libsecs=${gmod.libsecs} titles=${gmod.titles.join(" / ").slice(0, 80)}`);
     // 2026-10-29 晚间批次：平台页签 / 趋势图容器 / 回收建议折叠面板
-    // （建议卡已并入折叠面板，#stSugg 容器已删除，不允许再出现）
+    // （建议卡已并入折叠面板，#stSugg 容器已删除；面板内独立删除按钮
+    //   #stOrphanDel 也已删除 —— 勾选项并入主工具栏「清理选中项」）
     const gadd = await evaluate(`(() => ({
       tabs: document.querySelectorAll('#stTabs .seg').length,
       trendBox: !!document.querySelector('#gameTrendBox'),
       suggGone: !document.querySelector('#stSugg'),
+      delGone: !document.querySelector('#stOrphanDel'),
       orphanToggle: !!document.querySelector('#stOrphanToggle'),
+      exportBar: !!document.querySelector('#stExportBar'),
       found: !!(typeof STEAM !== 'undefined' && STEAM && STEAM.found),
       cta: !!document.querySelector('#stOverview button.tiny'),
+      recMap: typeof recycleSel !== 'undefined' && recycleSel instanceof Map,
     }))()`);
     check("吸顶头有平台页签（Steam/Epic/GOG/自定义）", gadd.tabs >= 4,
           `${gadd.tabs} 个页签`);
     check("游戏占用趋势容器就位且独立建议卡已移除", gadd.trendBox && gadd.suggGone,
           `trendBox=${gadd.trendBox} suggGone=${gadd.suggGone}`);
+    check("回收建议面板无独立删除按钮（并入主清理出口）",
+          gadd.delGone && gadd.recMap, `delGone=${gadd.delGone} recMap=${gadd.recMap}`);
     check("回收建议折叠头存在（无内容时面板隐藏但结构在）", gadd.orphanToggle);
+    // 折叠状态记忆：展开面板后 localStorage 必须记下 "1"
+    const orphanMem = await evaluate(`(async () => {
+      const t = document.querySelector('#stOrphanToggle');
+      const b = document.querySelector('#stOrphanBody');
+      if (!t || !b) return { skip: true };
+      const was = b.style.display !== 'none';
+      if (!was) t.click();                       // 展开 → 应写入记忆
+      const v1 = localStorage.getItem('oc-orphan-open');
+      if (!was) t.click();                       // 还原折叠态，不惊扰后续检查
+      return { v1 };
+    })()`);
+    if (orphanMem && !orphanMem.skip) {
+      check("回收建议展开/折叠写入 localStorage 记忆",
+            orphanMem.v1 === "1" || orphanMem.v1 === "0", `v=${orphanMem.v1}`);
+    }
     if (!gadd.found && (await evaluate(`typeof STEAM !== 'undefined' && STEAM !== null`))) {
       check("Steam 未装时空态给「手动添加游戏库」直达按钮", gadd.cta);
     }
@@ -1484,6 +1524,56 @@ class CDP {
       console.log(`  [信息] 分盘: ${st.driveRows.join(" /// ")}`);
       check("列出游戏清单", st.games > 0, `${st.games} 条`);
       check("有排序与筛选", st.sorts >= 3 && st.filter);
+
+      // 排序方向切换：默认 ▼（大到小），再点同一项翻转为 ▲ 且顺序反转
+      const s0 = await evaluate(`(() => {
+        const rows = [...document.querySelectorAll('#stGames .vrow .fsize')]
+          .slice(0, 2).map(e => e.textContent.trim());
+        const seg = document.querySelector('#stSort .seg.on');
+        return { first: rows[0], seg: seg ? seg.textContent.trim() : "" };
+      })()`);
+      await evaluate(`(() => { const s = document.querySelector('#stSort .seg.on');
+        if (s) s.click(); })()`);
+      await sleep(400);
+      const s1 = await evaluate(`(() => {
+        const rows = [...document.querySelectorAll('#stGames .vrow .fsize')]
+          .slice(0, 2).map(e => e.textContent.trim());
+        const seg = document.querySelector('#stSort .seg.on');
+        return { first: rows[0], seg: seg ? seg.textContent.trim() : "" };
+      })()`);
+      check("排序同项再点反向（箭头翻转 + 首行变化）",
+            /▼/.test(s0.seg) && /▲/.test(s1.seg) && s0.first !== s1.first,
+            `${s0.seg} → ${s1.seg}`);
+      await evaluate(`(() => { const s = document.querySelector('#stSort .seg.on');
+        if (s) s.click(); })()`);          // 还原默认方向
+      await sleep(300);
+
+      // 趋势图 hover 提示：向 canvas 派发 mousemove，tooltip 应显示「日期 · 体积」
+      const tip = await evaluate(`(() => {
+        const cv = document.querySelector('#gameTrendCv');
+        const box = document.querySelector('#gameTrendBox');
+        if (!cv || !box || box.style.display === 'none') return { skip: true };
+        cv.dispatchEvent(new MouseEvent('mousemove', { clientX: 0, clientY: 0 }));
+        const t = document.querySelector('#gameTrendTip');
+        return { shown: t && t.style.display !== 'none',
+                 text: t ? t.textContent : "" };
+      })()`);
+      if (!tip || tip.skip) {
+        skip2("趋势图 hover 提示（历史数据不足 2 点，图未显示）");
+      } else {
+        check("趋势图 hover 显示「日期 · 体积」", tip.shown && tip.text.includes("·"),
+              tip.text.slice(0, 30));
+      }
+
+      // 导出条（Steam found 时可见）与行内操作浮层
+      const exp = await evaluate(`(() => ({
+        bar: !!document.querySelector('#stExportBar') &&
+             document.querySelector('#stExportBar').style.display === 'flex',
+        ract: document.querySelectorAll('#stGames .vrow .ract').length,
+      }))()`);
+      check("游戏清单导出条就位（CSV / Markdown）", exp.bar);
+      check("游戏行带 hover 操作浮层（删除/打开目录）", exp.ract >= 1,
+            `${exp.ract} 行`);
 
       // 点游戏看详情（必须带解释）
       await evaluate(`(() => { const r = document.querySelector('#stGames .vrow'); if (r) r.click(); })()`);

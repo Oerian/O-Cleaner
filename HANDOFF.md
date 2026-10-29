@@ -1436,6 +1436,20 @@ SECURITY 该处表述未动。
 
 **门禁**：CDP **110-0-4**、selftest **493-0-6**（新增：回收面板/占位图静态断言、cover-placeholder e2e 五连——默认 SVG 200、非 dataURL 400、伪 magic 400、合法 PNG 落盘回 image/png、reset 回 SVG；提权 pythonw+SW_HIDE 静态断言；编码契约照例 fix-encoding 收尾）。
 
+### 47. v2.10 功能批：清理出口统一 + 十项优化全落地（2026-10-30 凌晨）
+
+用户要求「清理按键合并 + 优化方向全做 + 全量测试 + 发版」。**v2.10 发版完成**（构建/Release 见下）。
+
+**① 清理出口统一（本批核心）**：回收建议面板内的「删除勾选的 n 项」按钮（`#stOrphanDel`）删除，全页只剩主工具栏「清理选中项」一个清理出口。勾选模型：面板勾选 → `recycleSel`（模块级 Map）→ `updateFooter()` 把项数/体积并入主按钮计数与「清理后可用」预估 → `confirmDialog()` 把回收项作为 `id: "recycle:<key>"` 行并入同一个确认弹窗（risk 高、整目录删除、**排除在「删进回收站」选项之外**——clean-game 不支持回收站）→ `doClean()` 先跑常规 clean POST，再逐个 clean-game 回收项。`confirmDeleteOrphans` 整函数删除（其 compact/riskRemember 交互由主弹窗的 risky 警告条承接），`confirmDeleteGame` 的 orphan 死分支一并清掉（残留不再走单删通道）。**行级反馈**：确认弹窗每行带 `data-ri`，回收项删完一行就把该行 `crow-done`（✓+变暗；失败 `crow-fail` ✕），结果弹窗的 freed/results 同步合并（`e.freed_h` 由前端 `fmt` 重算）。
+
+**② UI 五件**：折叠状态记忆（`oc-orphan-open` localStorage，含清空复位写 0）；排序方向切换（`steamSortDir` 同项再点反向、`SORT_BASE` 定默认方向、seg 上 ▼/▲、**方向必须进渲染缓存 key** 否则命中缓存不重绘）；趋势图 hover tooltip（`#gameTrendTip` canvas mousemove 最近点显示「日期 · 体积」，`cv.on*` 赋值式绑定避免重复叠加）；游戏行 hover 操作浮层（`.ract` 删除/打开目录 hover 或 focus-within 才显示，Steam 行新增「打开目录」，Epic/GOG 行的常驻「打开」按钮同样收进浮层）。
+
+**③ 功能四件**：残留主动提醒横幅（`#orphanwarn`，加载 2.5s 后异步查 /steam，有残留且本会话未关闭才弹；「去处理」直达 Steam 库分区；sessionStorage `oc-orphanwarn` 记住关闭）；游戏库异常增长提醒（趋势图下 `#gameTrendGrow`：近一周涨 >15% 且 >10GB 提示——**单款游戏的历史没有记录，只能看库总量**，注释里写明）；Epic/GOG 行统一占位图封面（两平台没有本地封面图源，直接 `<img src=".../cover-placeholder">` 保持视觉协调）；游戏清单导出（`#stExportBar` CSV 带 `\uFEFF` BOM / Markdown，纯前端 Blob 下载，数据源 STEAM+GAMES，found 才显示）。
+
+**④ 测试与冗余**：selftest **500-0-6**（新增 8 条：清理出口统一、折叠记忆、排序方向、趋势 hover+增长、导出、横幅、浮层、Epic/GOG 占位图）；CDP **117-0-4**（新增：横幅实况门控断言、无独立删除按钮+recycleSel Map、折叠记忆读写、排序反向箭头+首行变化、hover tooltip 实测显示、导出条、浮层行数）。audit_dead 复跑 0 死代码；死键清理 16 个（st.bulk* ×7、st.delSel/delSel0、dg.orphanHead/What/Saves/Advice/Check、dg.itemDir）+ 新增 cc.recycle* ×3、st.recHint/growWarn/export* ×5、ow.* ×3（全部双语）。**selftest 的 targets 备份文件从 `config/.targets.backup.json` 移到 `app.RUNTIME_DIR`**——仓库 config/ 不再多出临时文件（实测原路径会误触安全拦截）。**CDP 断言两踩同坑**：check() 的 cond 在 node 侧求值，页面变量（recycleSel/`document`）必须放进 evaluate 的 IIFE 里，写在外面就是 node 侧 ReferenceError。
+
+**v2.10 发版**：`APP_VERSION` + `config/drives.json` 双处 2.10（**替换串手滑多打一个逗号导致空替换，git diff 必看**）；重建双产物 + sha256 逐项核验；tag `v2.10` + GitHub Release。
+
 ---
 
 ## 七、文件资产与代码清单

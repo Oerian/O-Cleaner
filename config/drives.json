@@ -3,7 +3,7 @@
 
   "app": {
     "name": "O-Cleaner",
-    "version": "2.9",
+    "version": "2.10",
     "port": 8770,
     "tagline": "磁盘清理助手 · 多盘支持 · 累积可视化"
   },
