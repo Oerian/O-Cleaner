@@ -121,6 +121,41 @@ DISK_TREND_PATH = RUNTIME_DIR / "disk-trend.json"
 SCHEDULE_PATH = RUNTIME_DIR / "schedule.json"
 # 游戏库总体积快照（游戏占用趋势曲线的数据源）：每天最多一条，保留 180 天。
 GAME_HISTORY_PATH = RUNTIME_DIR / "game-history.json"
+# 无图标游戏的默认占位图（用户可通过 /__oc__/cover-placeholder 自定义）。
+# 存原始图片字节；不存在时回内置 SVG。运行数据，不进版本库、不进分发包。
+COVER_PLACEHOLDER_PATH = RUNTIME_DIR / "cover-placeholder.img"
+
+# 内置占位图：手柄轮廓 SVG，随包分发，恒可用。配色中性（半透明灰），
+# 在浅色/深色主题和 22px 缩略图下都不突兀。
+_PLACEHOLDER_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+    '<rect width="64" height="64" rx="14" fill="#9aa3ad" opacity="0.28"/>'
+    '<path d="M22 22h20c7 0 12 5 13 12l1.5 10c.5 4-2.5 8-7 8-3 0-5-1.5-7-4'
+    'l-2.5-3.5c-1.2-1.6-3-2.5-5-2.5H29c-2 0-3.8.9-5 2.5L21.5 48c-2 2.5-4 4-7 4'
+    '-4.5 0-7.5-4-7-8L9 34c1-7 6-12 13-12z" fill="#7d8794" opacity="0.55"/>'
+    '<path d="M18 30v8M14 34h8" stroke="#4c5560" stroke-width="2.4"'
+    ' stroke-linecap="round" opacity="0.7"/>'
+    '<circle cx="42" cy="31.5" r="2.2" fill="#4c5560" opacity="0.7"/>'
+    '<circle cx="48" cy="36.5" r="2.2" fill="#4c5560" opacity="0.7"/>'
+    "</svg>"
+)
+
+
+def _image_mime(data: bytes) -> str:
+    """按 magic bytes 认图：只认 PNG / JPEG / GIF / SVG(文本)。认不出回空串。"""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    try:
+        text = data[:512].decode("utf-8", errors="ignore").lstrip()
+    except Exception:                          # noqa: BLE001
+        return ""
+    if text.startswith("<svg") or text.startswith("<?xml"):
+        return "image/svg+xml"
+    return ""
 
 
 def _migrate_runtime_files() -> None:
@@ -284,6 +319,8 @@ def elevate_relaunch() -> dict:
 
     新实例带 --port（沿用当前端口）+ --wait-free（等老实例退出释放端口），
     浏览器照常自动打开 —— 用户直接落到管理员会话。
+    新实例优先用 pythonw.exe 启动且以 SW_HIDE 显示：管理员实例不再弹
+    黑色命令行窗口（GUI 页面照常可用；pythonw 下 print 是无害的 no-op）。
     UAC 被取消 / 失败时本实例**不退出**（rc<=32 即失败，ShellExecuteW 约定）。"""
     if not IS_WINDOWS:
         return {"ok": False, "error": "仅 Windows 支持一键提权"}
@@ -292,8 +329,12 @@ def elevate_relaunch() -> dict:
     import sys
     script = str(Path(__file__).resolve())
     port_arg = f" --port {_BOUND_PORT} --wait-free 25" if _BOUND_PORT else ""
+    # pythonw.exe = 无控制台的同一解释器；没有（如嵌入式发行版精简掉它）
+    # 就退回 python.exe —— 此时窗口交给 SW_HIDE 压掉，两条路都不弹窗。
+    target = Path(sys.executable).with_name("pythonw.exe")
+    exe = str(target) if target.is_file() else sys.executable
     rc = ctypes.windll.shell32.ShellExecuteW(
-        None, "runas", sys.executable, f'"{script}"{port_arg}', None, 1)
+        None, "runas", exe, f'"{script}"{port_arg}', None, 0)  # 0 = SW_HIDE
     if rc <= 32:
         return {"ok": False,
                 "error": f"提权未完成（UAC 被取消或失败，代码 {rc}）"}
@@ -6636,6 +6677,52 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, body, ctype)
         return self._json({"error": "no cover"}, 404)
 
+    def _cover_placeholder_get(self) -> None:
+        """无图标游戏的占位图：用户自定义图优先，否则回内置 SVG。
+
+        恒 200 —— 前端 onerror 链到这里，保证永远有图可显示，不会破图。"""
+        try:
+            data = COVER_PLACEHOLDER_PATH.read_bytes()
+        except OSError:
+            data = b""
+        mime = _image_mime(data) if data else ""
+        if mime:
+            return self._send(200, data, mime)
+        return self._send(200, _PLACEHOLDER_SVG.encode("utf-8"),
+                          "image/svg+xml")
+
+    def _cover_placeholder_post(self, body: dict) -> None:
+        """保存 / 重置默认占位图。body.data 为 dataURL（PNG/JPEG/GIF/SVG），
+        body.reset 为真时删除自定义图回到内置 SVG。
+        校验：解码后 ≤ 2 MB、magic bytes 认得出的图片才落盘。"""
+        if body.get("reset"):
+            try:
+                COVER_PLACEHOLDER_PATH.unlink(missing_ok=True)
+            except OSError as e:
+                return self._json({"error": f"重置失败：{e}"}, 500)
+            return self._json({"ok": True, "reset": True})
+        raw = str(body.get("data") or "")
+        m = re.match(r"^data:(image/[a-z+]+);base64,(.+)$", raw, re.S)
+        if not m:
+            return self._json({"error": "必须是 image/* 的 dataURL"}, 400)
+        import base64
+        try:
+            data = base64.b64decode(m.group(2), validate=True)
+        except Exception:                       # noqa: BLE001
+            return self._json({"error": "base64 解码失败"}, 400)
+        if len(data) > 2 * 1024 * 1024:
+            return self._json({"error": "图片过大（上限 2 MB）"}, 400)
+        mime = _image_mime(data)
+        if not mime:
+            return self._json(
+                {"error": "只支持 PNG / JPEG / GIF / SVG 图片"}, 400)
+        try:
+            COVER_PLACEHOLDER_PATH.parent.mkdir(parents=True, exist_ok=True)
+            COVER_PLACEHOLDER_PATH.write_bytes(data)
+        except OSError as e:
+            return self._json({"error": f"保存失败：{e}"}, 500)
+        return self._json({"ok": True, "mime": mime, "size": len(data)})
+
     def _body(self) -> dict:
         """读请求体。畸形输入一律当成空对象返回，但会记下原因。
 
@@ -6724,6 +6811,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(data if isinstance(data, list) else [])
         if route == "/__oc__/game-cover":
             return self._game_cover(q.get("appid") or "")
+        if route == "/__oc__/cover-placeholder":
+            return self._cover_placeholder_get()
         if route == "/__oc__/games":
             # 全平台游戏库（Steam + Epic + GOG），steam 负载原样透传在 .steam 里
             return self._json(apply_lang_payload(discover_games(), q.get("lang")))
@@ -6887,6 +6976,10 @@ class Handler(BaseHTTPRequestHandler):
                             "children": [], "error": str(e)}
                 out.append({"name": g["name"], "path": g["path"], **snap})
             return self._json({"ok": True, "libs": out})
+
+        # ---- 默认占位图（无图标游戏）：保存 / 重置 ----
+        if route == "/__oc__/cover-placeholder":
+            return self._cover_placeholder_post(body)
 
         # ---- 用户自定义聚合组（占用树的自由归组，纯显示层）----
         if route == "/__oc__/fsgroups":

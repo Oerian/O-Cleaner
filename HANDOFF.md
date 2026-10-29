@@ -1417,6 +1417,25 @@ SECURITY 该处表述未动。
 >
 > 另：selftest 的 setLang 覆盖检查抓到 `drawGameTrend` 漏进重画列表（趋势标签是动态文案）—— 照例补上即绿；`renderOtherPlatforms` 仍在豁免集合（renderSteamPage 已覆盖）。
 
+### 46. 回收建议合并 + 封面占位图（可自定义）+ 提权无窗口；顺手修掉「自动扫描踢回」老 bug（2026-10-29 晚）
+
+用户三项需求一次落地，另修掉一个排查中发现的既有 bug。
+
+**① 回收建议（残留中心 + 智能建议合并）**：独立建议卡 `#stSugg`/`.suggcard` 删除（容器、CSS、`st.suggHead/suggSum/suggGo` 三个失效键一并清掉），智能建议（已安装+可清理+≥10GB+超 180 天没玩，前 3 款）并入 `#stOrphanBody` 折叠面板成为第二组勾选行。面板更名 `pane.orphans`「回收建议 / Recycle Suggestions」，头部统计改为「发现 n 个残留目录 · 建议回收 m 款 · （合计 v）」。统一勾选模型：残留 `data-key="p:<path>"`、建议游戏 `data-key="g:<appid>"`，`bulkBtn`/`confirmDeleteOrphans` 全走一个 `allItems`；**建议游戏默认不勾**（只是提示，删不删用户定），残留照旧默认勾上。面板在两者皆空时隐藏。
+
+**② 封面占位图 + 自定义**：后端 `COVER_PLACEHOLDER_PATH = data/cover-placeholder.img`（原始字节落盘）+ `_image_mime()`（magic bytes 认 PNG/JPEG/GIF/SVG）+ `_PLACEHOLDER_SVG`（内置手柄 SVG 兜底）。GET `/__oc__/cover-placeholder` **恒 200**（自定义图优先，否则内置 SVG）—— 前端 `gcover` 的 onerror 从「隐藏图片」改为链到该端点（`this.onerror=null;this.src=.../cover-placeholder`），无图标游戏不再破相。POST `/__oc__/cover-placeholder`：`{data: dataURL}`（base64 严格校验、≤2MB、magic bytes 白名单）落盘，`{reset:true}` 删图回内置。自定义 UI 放在自定义游戏库分区底部（预览 `#cphPrev` + 更换 `#cphPick` + 恢复默认 `#cphReset`，FileReader 读 dataURL）。i18n 新键 `cg.ph*`、`st.suggCount/suggGroup/orphanGroup`。
+
+**③ 一键提权无窗口 + 轮询加固**：`elevate_relaunch()` 改为 `Path(sys.executable).with_name("pythonw.exe")`（存在才用，嵌入式发行版没有就退回 python.exe）+ `ShellExecuteW(..., None, 0)`（SW_HIDE）—— 管理员实例不再弹黑色命令行窗口（pythonw 下 `sys.stdout` 为 None，CPython 的 `print` 对 None stdout 是静默 no-op，已验证安全）。前端轮询：超时 45s→**180s**（UAC 等多久由用户决定）、间隔 1.5s→1s，连接失败静默继续（老实例退出/新实例未绑端口/UAC 待确认都算「还没好」），收到 `is_admin` 即 reload。
+
+**④ 顺手修掉「自动扫描踢回」老 bug**：页面启动时自动开全盘扫描，完成后回调**无条件** `switchView("full")` —— 用户在扫描期间切到游戏占用页，约 1 秒后被硬踢回扫描概览（cdp 复现：T+0 view=steam → T+1s view=full）。修复：两处（扫描完成回调 + FS_CACHE 缓存命中路径）改为 `if (view !== "steam") switchView("full")`。这正是「切页不跟手」体感的另一半来源。CDP 新增回归守卫「自动扫描完成后仍停留在游戏占用页」，selftest 新增对应静态断言。
+
+**排查中的教训（headless 截图）**：
+- `Page.captureScreenshot` 在 headless=new 下会返回**合成器旧帧** —— DOM `display:none` 的内容照样出现在截图里（evaluate 的 offsetParent/display 检查与截图矛盾时，先怀疑旧帧；`captureBeyondViewport:true` 也不一定救回来）。**DOM 事实（getComputedStyle/getBoundingClientRect）比截图可靠**，`tools/probe_ui.js` 的量几何路线是对的。
+- 磁盘概览面板（`pane.disk`）是 `main > #leftcol` 下**常驻面板**，在 steamView/fullView 两个 section 之外 —— 切到游戏占用页后它在滚动上方，游戏库在其下（v2.9 既有设计）。给 Steam 页截图必须先 `stHead.scrollIntoView()`。
+- headless 里程序性 `element.click()` 偶发不触发 listener（滚动后观察到的 toggle 点击失效），验证视觉可直接改 style，交互逻辑交给 cdp_check 断言。
+
+**门禁**：CDP **110-0-4**、selftest **493-0-6**（新增：回收面板/占位图静态断言、cover-placeholder e2e 五连——默认 SVG 200、非 dataURL 400、伪 magic 400、合法 PNG 落盘回 image/png、reset 回 SVG；提权 pythonw+SW_HIDE 静态断言；编码契约照例 fix-encoding 收尾）。
+
 ---
 
 ## 七、文件资产与代码清单

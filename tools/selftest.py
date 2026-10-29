@@ -286,6 +286,13 @@ def phase1() -> None:
     finally:
         app.is_admin = _orig_admin
 
+    # 提权重启不弹命令行窗口：优先 pythonw.exe（无控制台解释器），窗口
+    # 参数用 SW_HIDE=0；pythonw 缺失（嵌入式发行版）时退回 python.exe，
+    # 靠 SW_HIDE 压住窗口 —— 两条路都不应再出现黑色命令行。
+    check("一键提权重启无控制台窗口（pythonw 优先 + SW_HIDE）",
+          'with_name("pythonw.exe")' in open(app.__file__, encoding="utf-8").read()
+          and "SW_HIDE" in open(app.__file__, encoding="utf-8").read())
+
     # 运行数据统一收进 data/ 子目录（2026-10-29）：程序根目录不再散落 json
     check("运行数据统一收进 data/ 子目录",
           app.RUNTIME_DIR.name == "data"
@@ -1042,10 +1049,27 @@ def phase3_http() -> None:
               '"/__oc__/game-cover"' in open(app.__file__, encoding="utf-8").read()
               and "appid 必须是数字" in open(app.__file__, encoding="utf-8").read()
               and 'class="gcover"' in html)
-        # 智能回收建议卡 + 平台页签 + 风险提示记忆
-        check("智能回收建议卡与平台页签就位",
-              'id="stSugg"' in html and 'id="stTabs"' in html
-              and "st.suggGo" in html and "scrollIntoView" in html)
+        # 回收建议折叠面板（建议卡已并入）+ 平台页签 + 风险提示记忆
+        check("回收建议折叠面板与平台页签就位（独立建议卡已删）",
+              'id="stOrphanPanel"' in html and 'id="stTabs"' in html
+              and 'id="stSugg"' not in html
+              and "st.suggCount" in html and "st.suggGroup" in html
+              and "st.orphanGroup" in html and "scrollIntoView" in html)
+        # 视图不被自动扫描踢回：扫描完成回调只在 full 视图才 switchView
+        check("自动扫描完成后不把用户踢回扫描概览",
+              'if (view !== "steam") switchView("full")' in html
+              and html.count('if (view !== "steam") switchView("full")') == 2)
+        # 默认占位图：GET 恒 200（自定义图优先、内置 SVG 兜底）+ POST 校验
+        # （dataURL、magic bytes、2MB 上限、reset），前端 onerror 链到该端点
+        _appsrc = open(app.__file__, encoding="utf-8").read()
+        check("占位图端点有内置兜底与上传校验，前端 onerror 已接入",
+              "COVER_PLACEHOLDER_PATH" in _appsrc
+              and "_PLACEHOLDER_SVG" in _appsrc
+              and "/__oc__/cover-placeholder" in _appsrc
+              and "只支持 PNG / JPEG / GIF / SVG" in _appsrc
+              and "cover-placeholder" in html
+              and "cover-placeholder'" in html
+              and 'id="cphPick"' in html and 'id="cphReset"' in html)
         check("删除确认支持风险提示记忆（不再显示长说明）",
               "riskCompact" in html and "dgRiskRemember" in html
               and "dgRiskRestore" in html and 'localStorage.setItem(RISK_KEY, "1")' in html)
@@ -1534,6 +1558,62 @@ def phase3_http() -> None:
                 code = str(e)
             check(f"/game-cover appid={appid[:12]} → {want}", code == want,
                   f"HTTP {code}")
+
+        # 占位图端点：GET 恒 200 且是图片（内置 SVG 兜底，永无破图）；
+        # POST 走完整周期：非法负载 400 → 伪 magic 400 → 合法 PNG 落盘 →
+        # GET 变 image/png → reset 回内置 SVG。绝不 5xx。
+        def _ph_post(payload):
+            r = urllib.request.Request(
+                base + "/__oc__/cover-placeholder", method="POST",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(r, timeout=15) as resp:
+                    return resp.status
+            except urllib.error.HTTPError as e:
+                return e.code
+            except Exception as e:                  # noqa: BLE001
+                return str(e)
+
+        try:
+            with urllib.request.urlopen(base + "/__oc__/cover-placeholder",
+                                        timeout=15) as resp:
+                ct = resp.headers.get("Content-Type", "")
+                check("/cover-placeholder 默认回内置 SVG（200 + image/*）",
+                      resp.status == 200 and ct.startswith("image/"),
+                      f"HTTP {resp.status} {ct}")
+        except Exception as e:                      # noqa: BLE001
+            check("/cover-placeholder 默认回内置 SVG（200 + image/*）",
+                  False, str(e))
+        check("/cover-placeholder POST 非 dataURL → 400",
+              _ph_post({"data": "not-a-dataurl"}) == 400)
+        check("/cover-placeholder POST 伪图片 magic → 400",
+              _ph_post({"data": "data:image/png;base64,bm9wZQ=="}) == 400)
+        _png1x1 = ("data:image/png;base64,"
+                   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+                   "AAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+        check("/cover-placeholder POST 合法 PNG → 200",
+              _ph_post({"data": _png1x1}) == 200)
+        try:
+            with urllib.request.urlopen(base + "/__oc__/cover-placeholder",
+                                        timeout=15) as resp:
+                check("/cover-placeholder 自定义后回 PNG",
+                      resp.status == 200
+                      and "image/png" in resp.headers.get("Content-Type", ""),
+                      f"HTTP {resp.status} {resp.headers.get('Content-Type')}")
+        except Exception as e:                      # noqa: BLE001
+            check("/cover-placeholder 自定义后回 PNG", False, str(e))
+        check("/cover-placeholder reset → 200",
+              _ph_post({"reset": True}) == 200)
+        try:
+            with urllib.request.urlopen(base + "/__oc__/cover-placeholder",
+                                        timeout=15) as resp:
+                check("/cover-placeholder reset 后回内置 SVG",
+                      resp.status == 200
+                      and "image/svg" in resp.headers.get("Content-Type", ""),
+                      f"HTTP {resp.status} {resp.headers.get('Content-Type')}")
+        except Exception as e:                      # noqa: BLE001
+            check("/cover-placeholder reset 后回内置 SVG", False, str(e))
 
         # ---- 安全回归：CSRF ----
         # 威胁模型：用户浏览器开着本工具，又打开恶意网页；该网页可向

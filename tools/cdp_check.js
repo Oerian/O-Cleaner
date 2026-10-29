@@ -1427,6 +1427,13 @@ class CDP {
       filter: !!document.querySelector('#stFilter'),
     }))()`);
     check("可进入 Steam 独立页面", st.shown && st.overviewHidden, st.hint);
+    // 回归守卫（2026-10-29）：启动时的自动全盘扫描完成后，不得把已经切到
+    // 游戏占用页的用户硬踢回扫描概览（switchView("full") 只在 full 视图做）
+    await sleep(4500);
+    const stillSteam = await evaluate(
+      `typeof view !== 'undefined' ? view : 'NA'`);
+    check("自动扫描完成后仍停留在游戏占用页（不踢回）",
+          stillSteam === "steam", `view=${stillSteam}`);
     // 2026-10-29 改版：模块吸顶头 + 分区顺序（残留建议在库前）+ 库名统一
     const gmod = await evaluate(`(() => {
       const head = document.querySelector('#stHead');
@@ -1443,27 +1450,28 @@ class CDP {
     })()`);
     check("游戏占用概览模块头吸顶（排序+筛选常驻）",
           gmod.sticky, `position=${gmod.sticky}`);
-    check("残留与清理建议排在库分区前面",
+    check("回收建议面板排在库分区前面",
           gmod.orphanFirst, `orphanFirst=${gmod.orphanFirst}`);
     check("游戏库分区统一（Steam/Epic/GOG/自定义，libsec 样式）",
           gmod.libsecs >= 4
           && /Steam 游戏库|Steam Games Library/.test(gmod.titles.join("|"))
           && /Epic 游戏库|Epic Games Library/.test(gmod.titles.join("|")),
           `libsecs=${gmod.libsecs} titles=${gmod.titles.join(" / ").slice(0, 80)}`);
-    // 2026-10-29 晚间批次：平台页签 / 趋势图容器 / 残留中心与建议卡容器
+    // 2026-10-29 晚间批次：平台页签 / 趋势图容器 / 回收建议折叠面板
+    // （建议卡已并入折叠面板，#stSugg 容器已删除，不允许再出现）
     const gadd = await evaluate(`(() => ({
       tabs: document.querySelectorAll('#stTabs .seg').length,
       trendBox: !!document.querySelector('#gameTrendBox'),
-      sugg: !!document.querySelector('#stSugg'),
+      suggGone: !document.querySelector('#stSugg'),
       orphanToggle: !!document.querySelector('#stOrphanToggle'),
       found: !!(typeof STEAM !== 'undefined' && STEAM && STEAM.found),
       cta: !!document.querySelector('#stOverview button.tiny'),
     }))()`);
     check("吸顶头有平台页签（Steam/Epic/GOG/自定义）", gadd.tabs >= 4,
           `${gadd.tabs} 个页签`);
-    check("游戏占用趋势与建议卡容器就位", gadd.trendBox && gadd.sugg,
-          `trendBox=${gadd.trendBox} sugg=${gadd.sugg}`);
-    check("残留中心折叠头存在（无残留时面板隐藏但结构在）", gadd.orphanToggle);
+    check("游戏占用趋势容器就位且独立建议卡已移除", gadd.trendBox && gadd.suggGone,
+          `trendBox=${gadd.trendBox} suggGone=${gadd.suggGone}`);
+    check("回收建议折叠头存在（无内容时面板隐藏但结构在）", gadd.orphanToggle);
     if (!gadd.found && (await evaluate(`typeof STEAM !== 'undefined' && STEAM !== null`))) {
       check("Steam 未装时空态给「手动添加游戏库」直达按钮", gadd.cta);
     }
