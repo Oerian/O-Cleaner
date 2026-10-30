@@ -1093,6 +1093,10 @@ _HIDDEN_SYS_NAMES = {
     "dumpstack.log", "dumpstack.log.tmp", "$winreagent",
     "$mft", "$mftmirr", "$logfile", "$volume", "$attrdef", "$bitmap",
     "$boot", "$badclus", "$secure", "$upcase", "$extend",
+    # Store 托管的应用目录：系统建立与回收，用户从不手建；部分盘上它只有
+    # ReadOnly 属性（实测 D:\WindowsApps），Explorer 语义上仍是系统项，
+    # 不进名单就会单独混在占用排行里（2026-10-30 用户要求合并展示）。
+    "windowsapps",
 }
 
 _FILE_ATTR_HIDDEN = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0x2)
@@ -1112,7 +1116,10 @@ def _is_hidden_sys(name: str, path: str = "", attrs: int | None = None) -> bool:
       * NTFS 元文件（$MFT / $LogFile…）根本 stat 不到；
       * 某些清理工具会把条目的隐藏属性抹掉，但语义上仍是系统项。
     """
-    if str(name or "").lower() in _HIDDEN_SYS_NAMES:
+    # 名字比对前先去掉尾部的点与空白：MFT 扫描（WizTree）会把 NTFS 元文件
+    # 报成 "$LogFile." 这类带尾点的名字（它不是 Win32 名，os.stat 也够不着），
+    # 不归一化就匹配不上名单，结果元文件漏进排行（2026-10-30 用户截图实测）。
+    if str(name or "").rstrip(". ").lower() in _HIDDEN_SYS_NAMES:
         return True
     if attrs is None:
         if not path:

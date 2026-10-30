@@ -1807,6 +1807,75 @@ class CDP {
     }
   } catch (e) { INFO.push(`视图导航异常: ${e.message}`); }
 
+  // --- 隐藏项合并展示（2026-10-30 用户要求）：主列表不再出现单独的系统
+  //     隐藏项行 —— 合成一行「隐藏项（n 项）」，点击就地展开/收起成员。
+  //     断言按 FS 实况门控：本盘没有隐藏项（hidN=0）时整段跳过。
+  console.log("\n  --- 隐藏项合并展示 ---");
+  try {
+    const hv = await evaluate(`(() => {
+      if (typeof FS === 'undefined' || !FS || !FS.nodes || !FS.nodes.length) return null;
+      const seg = [...document.querySelectorAll('#fsModes .seg')].find(s => s.dataset.m === 'dirs');
+      if (!seg) return null;
+      seg.click();
+      const names = new Set(FS.nodes.filter(n => n.hidden_sys).map(n => n.name.toLowerCase()));
+      const rowNames = [...document.querySelectorAll('#fsChart .vrow .fname')]
+        .map(e => ((e.firstChild || {}).textContent || '').trim().toLowerCase());
+      return { hidN: names.size,
+               leaked: rowNames.filter(n => names.has(n)).length,
+               aggRow: !!document.querySelector('#fsChart .vrow-wrap.hagg'),
+               // 期望行数：可见项经既有 size>0 过滤 + 前 30 截断，再 + 合并行
+               expect: (() => {
+                 if (typeof fsLayerParts !== 'function') return -1;
+                 const nz = fsLayerParts().vis.filter(n => n.size > 0).length;
+                 return Math.min(nz, 30) + 1;
+               })(),
+               domRows: document.querySelectorAll('#fsChart .vrow-wrap').length };
+    })()`);
+    await sleep(300);
+    if (hv && hv.hidN > 0) {
+      check("本层视图：无单独的系统隐藏项行", hv.leaked === 0,
+            `泄漏 ${hv.leaked} 行（本盘隐藏项共 ${hv.hidN}）`);
+      check("本层视图：隐藏项合并行存在且总行数符合期望",
+            hv.aggRow && hv.domRows === hv.expect,
+            `dom=${hv.domRows} expect=${hv.expect} aggRow=${hv.aggRow}`);
+      await evaluate(`(() => {
+        const agg = document.querySelector('#fsChart .vrow-wrap.hagg .vrow');
+        if (agg) agg.click();
+      })()`);
+      await sleep(400);
+      const st = await evaluate(`({
+        mem: document.querySelectorAll('#fsChart .vrow-wrap.hidm').length,
+        expect: (typeof fsLayerParts === 'function')
+                ? Math.min(fsLayerParts().hid.length, 30) : -1 })`);
+      check("点击合并行：成员就地展开", st && st.mem > 0 && st.mem === st.expect,
+            `成员 ${st.mem}/${st.expect}`);
+      await evaluate(`(() => {
+        const agg = document.querySelector('#fsChart .vrow-wrap.hagg .vrow');
+        if (agg) agg.click();
+      })()`);
+      await sleep(400);
+      check("再点合并行：成员收起",
+            await evaluate(`document.querySelectorAll('#fsChart .vrow-wrap.hidm').length === 0`));
+      const bg = await evaluate(`(() => {
+        const seg = [...document.querySelectorAll('#fsModes .seg')].find(s => s.dataset.m === 'biggest');
+        if (!seg) return null;
+        seg.click();
+        const names = new Set(FS.nodes.filter(n => n.hidden_sys).map(n => n.name.toLowerCase()));
+        const rowNames = [...document.querySelectorAll('#fsChart .vrow .fname')]
+          .map(e => ((e.firstChild || {}).textContent || '').trim().toLowerCase());
+        return { leaked: rowNames.filter(n => names.has(n)).length,
+                 agg: !!document.querySelector('#fsChart .vrow-wrap.hagg') };
+      })()`);
+      await sleep(300);
+      check("全盘最大项目：无单独隐藏项行且合并行在",
+            bg && bg.leaked === 0 && bg.agg, JSON.stringify(bg || {}));
+    } else if (hv) {
+      skip2(`隐藏项合并展示（本盘未扫到隐藏项：hidN=${hv.hidN}）`);
+    } else {
+      skip2("隐藏项合并展示（FS 未就绪或无视图页签）");
+    }
+  } catch (e) { INFO.push(`隐藏项合并异常: ${e.message}`); }
+
   // JS 报错
   const real = errors.filter(e => !/favicon/i.test(e));
   check("无 JS 控制台报错/异常", real.length === 0, real.slice(0, 2).join(" | "));

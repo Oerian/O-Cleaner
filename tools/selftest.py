@@ -204,6 +204,13 @@ def phase1() -> None:
             skip("隐藏项属性判定", "本机无法设置文件属性（非 Windows 或权限不足）")
         check("隐藏项判定兜底名单：NTFS 元文件与回收站仍认出",
               app._is_hidden_sys("$MFT", "") and app._is_hidden_sys("$Recycle.Bin", ""))
+        # 2026-10-30：MFT 扫描把元文件报成带尾点的名字（"$LogFile."），
+        # 不归一化就漏判；WindowsApps 是 Store 托管目录，部分盘上只有
+        # ReadOnly 属性，必须靠名单兜底（用户截图实测两项都漏进了排行）。
+        check("隐藏项判定：MFT 带尾点的元文件名归一化后仍认出",
+              app._is_hidden_sys("$LogFile.", "") and app._is_hidden_sys("$extend.", ""))
+        check("隐藏项判定：WindowsApps 在名单兜底内",
+              "windowsapps" in app._HIDDEN_SYS_NAMES and app._is_hidden_sys("WindowsApps", ""))
     finally:
         shutil.rmtree(_hid_dir, ignore_errors=True)
 
@@ -985,6 +992,18 @@ def phase3_http() -> None:
               and "prefers-reduced-motion" in _css)
         check("Steam 页渲染缓存避免切换白闪",
               "_steamPageKey" in html and html.count("_steamPageKey") >= 3)
+        # 2026-10-30：系统默认隐藏项合并展示 —— 主列表（本层/全盘最大/全部
+        # 可清理）不再单独出现隐藏项行，合成一行点击就地展开；页签保留。
+        check("隐藏项合并行：合成行结构与就地展开状态就位",
+              "hiddenAggOpen" in html and "hidden_agg: true" in html
+              and "hid_member: true" in html and "fsLayerParts" in html)
+        check("隐藏项合并行：最大项目与可清理视图排除单独隐藏行",
+              html.count("!n.hidden_sys)") >= 2
+              and "n.cleanable && !n.in_game_body && !n.hidden_sys" in html)
+        check("隐藏项合并行：成员行缩进样式与徽章词条就位",
+              ".vrow-wrap.hidm{margin-left" in _css
+              and '"fs.hiddenAggName": "Hidden items"' in html
+              and '"fs.hiddenAggBadge": "Hidden"' in html)
         check("左右两栏各自独立滚动",
               "body{display:flex;flex-direction:column;height:100vh;overflow:hidden}" in _css
               # 唯一一行必须钉死在容器高度上，否则网格隐式行会被内容撑高、无法内滚动

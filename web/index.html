@@ -406,6 +406,11 @@
   .vbadge.clean{color:var(--ok-fg);border-color:var(--ok-bd);background:var(--ok-bg)}
   .vbadge.keep{color:var(--warn-fg);border-color:var(--warn-bd);background:var(--warn-bg)}
   .vbadge.unk{color:var(--dim2);border-color:var(--line);background:var(--panel2)}
+  /* 隐藏项合并行（2026-10-30）：合成行本身轻一度弱化；就地展开的成员行
+     整体右缩进，视觉上归属合并行，但仍保留完整的勾选/下钻/详情交互。 */
+  .vrow-wrap.hagg .vrow{opacity:.92}
+  .vrow-wrap.hidm{margin-left:26px}
+  .vrow-wrap.hidm .vrow{border-left:2px solid var(--line);padding-left:9px}
 
   .segbtns{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
   /* 模块头吸顶（2026-10-29 用户要求）：模块名「占用排行」+ 返回上一级/面包屑/
@@ -3329,6 +3334,9 @@ let FS_SORT = (() => {
 })();
 // 下钻路径栈：元素 { path, name, size }
 let fsStack = [];
+// 隐藏项合并行的就地展开状态（2026-10-30）：只有一个合成行，全局一个开关
+// 就够。切视图/下钻/重扫时复位（见各处 hiddenAggOpen = false）。
+let hiddenAggOpen = false;
 // 在途全盘扫描属于哪个盘、用什么作废。换盘时旧盘的扫描必须作废重开：
 // 否则「扫描中」守卫会把新盘的扫描吞掉，用户点 E 盘却一直看 C 盘的扫描面板。
 let fsScanDrive = null, fsAbort = null, fsScanDepth = null;
@@ -3513,21 +3521,26 @@ async function startFullScan() {
   }
 }
 
-/** 当前所在目录的子项。
-    隐藏项（Explorer 默认不显示的那些）不进本层列表 —— 它们统一出现在
-    「隐藏项」页签里，切换一次就能看，不必下钻再返回（用户 2026-10-28 反馈：
-    原来把隐藏项聚成一个可下钻的合成行，进去之后要「返回上一级」才能回来，
-    来回切换很别扭）。自定义聚合组仍走 hiddenKids 的合成下钻。 */
-function fsChildren() {
-  if (!FS) return [];
+/** 当前所在目录的子项，拆成「可见」与「默认隐藏」两组。
+    2026-10-30 用户要求：隐藏项不再只是收进页签 —— 主列表里把它们**合并成
+    一行**（点击就地展开成员），任何视图都不出现单独的系统隐藏项行。
+    自定义聚合组仍是显式归组优先：下钻进组后成员原样显示（含隐藏项），
+    组内不再出合成隐藏行。groupCustom 有副作用（注册 hiddenKids），
+    所以一次调用同时产出两组，调用方不得重复调用。 */
+function fsLayerParts() {
+  if (!FS) return { vis: [], hid: [] };
   const key = fsStack.length
     ? normKey(fsStack[fsStack.length - 1].path)
     : fsRootKey();
-  // 下钻进了自定义聚合组：直接返回组成员（隐藏项在组里照常显示，
-  // 用户显式归组优先于「默认隐藏」）
-  if (FS.hiddenKids && FS.hiddenKids[key]) return FS.hiddenKids[key];
+  if (FS.hiddenKids && FS.hiddenKids[key]) {
+    return { vis: FS.hiddenKids[key], hid: [] };
+  }
   const raw = (FS.kids && FS.kids[key]) || FS.nodes.filter(n => n.parent === key);
-  return groupCustom(raw, key).filter(n => !n.hidden_sys);
+  const g = groupCustom(raw, key);
+  return { vis: g.filter(n => !n.hidden_sys), hid: g.filter(n => n.hidden_sys) };
+}
+function fsChildren() {
+  return fsLayerParts().vis;
 }
 
 /** 用户自定义聚合组：STATE.fs_groups 里命中当前层的路径 → 合成组节点。
@@ -3607,6 +3620,9 @@ function fsUniqueNodes() {
 }
 
 function renderOverview() {
+  // 所有导航路径（下钻/返回/换盘/重扫）都会经过这里 —— 隐藏项合并行的
+  // 展开状态在这里复位；agg 行自己的展开/收起只调 renderChart，不受影响。
+  hiddenAggOpen = false;
   const d = FS.disk || {};
   const usedPct = d.percent || 0;
   const color = usedPct > 85 ? "var(--danger)" : usedPct > 65 ? "var(--warn)" : "var(--accent)";
@@ -3765,9 +3781,10 @@ async function loadSubLevel(node) {
 }
 
 function renderChart() {
-  const here = fsChildren();
+  const parts = fsLayerParts();
+  const here = parts.vis;
   let rows;
-  if (fsMode === "clean") rows = FS.nodes.filter(n => n.cleanable && !n.in_game_body);
+  if (fsMode === "clean") rows = FS.nodes.filter(n => n.cleanable && !n.in_game_body && !n.hidden_sys);
   else if (fsMode === "files") rows = here.filter(n => n.type === "file");
   else if (fsMode === "hidden") {
     // 隐藏项：Explorer 默认看不见的那些（带 Hidden 属性，或 NTFS 元文件）。
@@ -3788,13 +3805,14 @@ function renderChart() {
     // 因为容器名对用户没有意义，它的子项才是实体。
     // 默认扫描 1 层（2026-10-15 起）时只有首层节点，这里从 depth>=1 起取，
     // 否则该视图在默认档位下会是空的；容器过滤照常生效。
+    // 隐藏项不单独出现（2026-10-30 用户要求），由下面的合并行承接。
     const containers = new Set([
       "common", "steamapps", "steamlibrary", "downloads", "download",
       "appdata", "programdata", "cache", "caches", "temp", "tmp",
       "binaries", "content", "data", "models", "files",
     ]);
     rows = FS.nodes.filter(n => n.type === "dir" && n.depth >= 1 && n.size > 0
-      && !containers.has(n.name.toLowerCase()) && !n.in_game_body);
+      && !containers.has(n.name.toLowerCase()) && !n.in_game_body && !n.hidden_sys);
   }
   else rows = here;
   // 排序方式可选：默认按占用降序；「按名称」用中文locale排序（2026-10-13
@@ -3809,6 +3827,45 @@ function renderChart() {
       ? (a, b) => String(a.name).localeCompare(String(b.name), "zh-Hans-CN")
       : (a, b) => b.size - a.size)
     .slice(0, 30);
+
+  // 隐藏项合并行（2026-10-30 用户要求）：主列表（本层/全盘最大/全部可清理）
+  // 不再出现单独的系统隐藏项 —— 合成一行「隐藏项（n 项）」，点击就地展开
+  // 成员、再点收起，不需要跳页也没有「返回上一层」的负担。
+  // 「隐藏项」页签保留（跨层级全量视图，点页签随时看全部）。
+  if (fsMode === "dirs" || fsMode === "biggest" || fsMode === "clean") {
+    let hid;
+    if (fsMode === "dirs") hid = parts.hid;   // 本层的隐藏项（自定义组已优先收编自己的成员）
+    else {
+      const seen = new Set(); hid = [];
+      FS.nodes.forEach(n => {
+        if (!n.hidden_sys) return;
+        const k = normKey(n.path);
+        if (!seen.has(k)) { seen.add(k); hid.push(n); }
+      });
+    }
+    if (hid.length) {
+      const aggSize = hid.reduce((a, n) => a + (n.size || 0), 0);
+      const aggRow = {
+        name: t("fs.hiddenAggName", "隐藏项"), hidden_agg: true,
+        badge_label: t("fs.hiddenAggBadge", "系统隐藏"),
+        agg_count: hid.length,
+        agg_members: hid.sort((a, b) => (b.size || 0) - (a.size || 0)).slice(0, 30),
+        path: "__oc_hidden_agg__", type: "dir", depth: 1,
+        size: aggSize, modified: "", recognized: false, cleanable: false,
+        category: "", size_h: "",
+      };
+      // 按当前排序插到应有位置；展开状态下成员行在重渲染里紧跟其后
+      let at = FS_SORT === "name"
+        ? rows.findIndex(r => String(r.name).localeCompare(aggRow.name, "zh-Hans-CN") > 0)
+        : rows.findIndex(r => r.size < aggRow.size);
+      if (at < 0) at = rows.length;
+      rows.splice(at, 0, aggRow);
+      if (hiddenAggOpen) {
+        rows.splice(at + 1, 0,
+          ...aggRow.agg_members.map(m => ({ ...m, hid_member: true })));
+      }
+    }
+  }
 
   const modes = [
     ["dirs", fsStack.length ? t("fs.this","本层（{n}）").replace("{n}", here.length) : t("fs.top","顶层（{n}）").replace("{n}", here.length)],
@@ -3825,7 +3882,7 @@ function renderChart() {
   $("fsModes").innerHTML = modes.map(([k, label]) =>
     `<span class="seg${fsMode === k ? " on" : ""}" data-m="${k}">${esc(label)}</span>`).join("");
   $("fsModes").querySelectorAll(".seg").forEach(s =>
-    s.addEventListener("click", () => { fsMode = s.dataset.m; renderChart(); }));
+    s.addEventListener("click", () => { fsMode = s.dataset.m; hiddenAggOpen = false; renderChart(); }));
   // 排序方式切换（持久到 localStorage，跨会话记住偏好）
   $("fsSort").innerHTML = [
     ["size", t("sort.size","按占用")], ["name", t("sort.name","按名称")],
@@ -3847,17 +3904,13 @@ function renderChart() {
                          : t("fs.hintWizOff","（未装 WizTree，深层下钻会现场扫描，稍慢但可用）"));
 
   if (!rows.length) {
-    // 本层「没有可显示的项」有两种情况：真的空，或者剩下的全是默认隐藏项。
-    // 后者必须说清楚，否则用户会以为目录是空的（隐藏项被收进页签了）。
-    const _lvl = fsStack.length ? normKey(fsStack[fsStack.length - 1].path) : fsRootKey();
-    const _hidHere = FS.nodes.filter(n => n.parent === _lvl && n.hidden_sys).length;
+    // 本层真的没有可显示的项。注：2026-10-30 起本层隐藏项会合成一行显示，
+    // 「剩下的全是隐藏项」的场景已经由合并行承接，不会再走到空态。
     $("fsChart").innerHTML = '<div class="empty" style="margin:0">' +
       (fsMode === "hidden"
         ? t("fs.emptyHidden","本盘没有扫到默认隐藏的项。若确认存在（例如 $RECYCLE.BIN），可能是当前扫描档位较浅：换个更大的扫描深度或全盘扫描再看。")
-        : (fsMode === "dirs" && _hidHere > 0
-          ? t("fs.onlyHidden","本层剩下的 {n} 项都是默认隐藏项，已收进「隐藏项」页签。").replace("{n}", _hidHere)
-          : t("fs.emptyLayer","本层没有超过 {h} 的子项。").replace("{h}", esc(FS.min_child_h)) +
-            (fsStack.length ? "" : t("fs.emptyLayerTail","可切换上面的视图，或点返回上一级。")))) + '</div>';
+        : t("fs.emptyLayer","本层没有超过 {h} 的子项。").replace("{h}", esc(FS.min_child_h)) +
+          (fsStack.length ? "" : t("fs.emptyLayerTail","可切换上面的视图，或点返回上一级。"))) + '</div>';
     return;
   }
 
@@ -3883,11 +3936,11 @@ function renderChart() {
     // 2026-10-13：**所有行都可勾选** —— 「建议保留 / 未识别」不再是勾选禁区。
     // 用户看过内容、明确要删的目录不该被工具拦死；对应的安全约束转移到
     // 确认弹窗（明确提示包含非推荐项）与服务端（系统目录保护、占用预检照常）。
-    const canCheck = !it.hidden_group;   // 聚合组是纯前端合成项，勾选它没有服务端对应物
+    const canCheck = !it.hidden_group && !it.hidden_agg;   // 纯前端合成项，勾选它没有服务端对应物
     const rowChecked = canCheck &&
       (it.target_id ? selected.has(it.target_id) : selPaths.has(it.path));
     // 全盘视图里必须显示它在哪里，否则只看到一个名字不知道归属
-    const loc = (fsMode === "biggest" || fsMode === "hidden")
+    const loc = (fsMode === "biggest" || fsMode === "hidden") && !it.hidden_agg
       ? it.path.replace(/\\[^\\]+$/, "") + "\\" : "";
     // data-can-drill：点它会下钻而不是弹详情。渲染断言要靠它挑出「会弹详情」
     // 的叶子目录 —— 否则随手取一行可能触发下钻，测出来的结论就是错的。
@@ -3906,27 +3959,29 @@ function renderChart() {
       ? it.display_name
       : (it.title && it.title !== it.name ? it.title : "");
     return `
-    <div class="vrow-wrap" data-path="${esc(it.path)}"${it.hidden_group ? ' data-synth="1"' : ""}>
+    <div class="vrow-wrap${it.hidden_agg ? " hagg" : ""}${it.hid_member ? " hidm" : ""}" data-path="${esc(it.path)}"${(it.hidden_group || it.hidden_agg) ? ' data-synth="1"' : ""}>
       <div class="vrow ${cls}" data-i="${idx}" data-can-drill="${drillable ? 1 : 0}">
         <div class="vtop">
           ${canCheck ? `<input type="checkbox" class="rowsel" data-path="${esc(it.path)}"${it.target_id ? ` data-tid="${esc(it.target_id)}"` : ""}${rowChecked ? " checked" : ""} title="${t("fs.tickTitle","勾选这项参与清理")}">` : ""}
-          ${drillable && !it.hidden_group ? `<button class="tiny ghost expinline" data-tree="${idx}" title="${t("sub.expandTitle","就地展开查看子目录")}">${t("sub.expand","展开 ▾")}</button>` : ""}
-          <span class="fname">${esc(it.name)}${badge}${pinBadge}${
-            drillable ? `<span class="vgo">${t("fs.drillHint","点开看子项 ›")}</span>` : ""}</span>
-          ${!it.hidden_group ? `<button class="tiny ghost rowgrp" data-grp="${idx}" title="${t("fs.grpTitle","把这项归进自定义聚合组")}">${t("fs.grp","归档")}</button>` : ""}
+          ${drillable && !it.hidden_group && !it.hidden_agg ? `<button class="tiny ghost expinline" data-tree="${idx}" title="${t("sub.expandTitle","就地展开查看子目录")}">${t("sub.expand","展开 ▾")}</button>` : ""}
+          <span class="fname">${esc(it.name)}${it.hidden_agg ? t("fs.hiddenAggCount","（{n} 项）").replace("{n}", it.agg_count) : ""}${badge}${pinBadge}${
+            it.hidden_agg ? `<span class="vgo">${hiddenAggOpen ? t("sub.collapse","收起 ▴") : t("sub.expand","展开 ▾")}</span>`
+            : drillable ? `<span class="vgo">${t("fs.drillHint","点开看子项 ›")}</span>` : ""}</span>
+          ${!it.hidden_group && !it.hidden_agg ? `<button class="tiny ghost rowgrp" data-grp="${idx}" title="${t("fs.grpTitle","把这项归进自定义聚合组")}">${t("fs.grp","归档")}</button>` : ""}
           ${it.custom_group ? `<button class="tiny ghost rowgrp" data-grp="${idx}" title="${t("fs.grpMgrTitle","管理这个聚合组的成员与名称")}">${t("fs.grpMgr","管理")}</button>` : ""}
-          <button class="tiny ghost rowinfo" data-info="${idx}">${t("fs.detailBtn","详情")}</button>
+          ${!it.hidden_agg ? `<button class="tiny ghost rowinfo" data-info="${idx}">${t("fs.detailBtn","详情")}</button>` : ""}
           <span class="fsize">${fmt(it.size)}</span>
         </div>
         <div class="vtrack"><i class="vfill" style="width:${w}%${it.custom_color ? `;background:${esc(it.custom_color)}` : ""}"></i></div>
         <div class="vtop" style="margin:5px 0 0">
-          <span class="vcat">${midName ? esc(midName) + " · " : ""}${it.category ? esc(catLabel(it.category)) : ""}${
+          <span class="vcat">${it.hidden_agg ? esc(t("fs.hiddenAggDesc","资源管理器默认不显示的项，点击展开逐项查看"))
+            : `${midName ? esc(midName) + " · " : ""}${it.category ? esc(catLabel(it.category)) : ""}${
             it.steam_game ? ` · ${t("sf.steamGame","Steam 游戏")}` : ""}${
             it.steam_library ? ` · ${t("sf.steamLib","Steam 库")}` : ""}${
             it.game_platform === "epic" ? ` · ${t("sf.epicGame","Epic 游戏")}` : ""}${
             it.game_platform === "gog" ? ` · ${t("sf.gogGame","GOG 游戏")}` : ""}${
             it.game_library ? ` · ${t("sf.gameLib","游戏库")}` : ""}${
-            it.type === "file" ? ` · ${t("sf.file","文件")}` : ` · ${t("sf.dir","目录")}`}${
+            it.type === "file" ? ` · ${t("sf.file","文件")}` : ` · ${t("sf.dir","目录")}`}`}${
             loc ? ` · ${t("sf.locatedAt","位于 {v}").replace("{v}", esc(loc))}` : ""}</span>
         </div>
       </div>
@@ -3937,7 +3992,10 @@ function renderChart() {
     el.addEventListener("click", ev => {
       if (ev.target.closest("[data-info]") || ev.target.closest(".expinline")
           || ev.target.closest(".rowsel") || ev.target.closest(".rowgrp")) return;
-      fsDrill(rows[+el.dataset.i]);
+      const node = rows[+el.dataset.i];
+      // 隐藏项合并行：点击就地展开/收起成员（不发请求，成员都在内存里）
+      if (node && node.hidden_agg) { hiddenAggOpen = !hiddenAggOpen; renderChart(); return; }
+      fsDrill(node);
     }));
   $("fsChart").querySelectorAll(".rowgrp").forEach(b =>
     b.addEventListener("click", ev => {
@@ -3977,7 +4035,8 @@ function renderChart() {
       const vrow = wrap.querySelector(".vrow");
       if (!vrow) return;
       const it = rows[+vrow.dataset.i];
-      if (it) openRowOverride(it);
+      if (!it || it.hidden_agg) return;   // 合成行没有磁盘对应物，谈不上覆盖
+      openRowOverride(it);
     }));
   pinPanelSizing();
 }
@@ -5573,7 +5632,10 @@ const I18N_EN = {
   "fs.hiddenTab": "Hidden items ({n})",
   "fs.hintHidden": "Items Explorer hides by default ($RECYCLE.BIN, System Volume Information, NTFS metadata, hidden folders and files). Switch back with one click — no need to climb back up.",
   "fs.emptyHidden": "No default-hidden items were found on this drive. If you are sure they exist (e.g. $RECYCLE.BIN), the scan depth may be too shallow — try a deeper or full scan.",
-  "fs.onlyHidden": "The other {n} item(s) at this level are all default-hidden — they live in the \"Hidden items\" tab.",
+  "fs.hiddenAggName": "Hidden items",
+  "fs.hiddenAggBadge": "Hidden",
+  "fs.hiddenAggDesc": "Items Explorer hides by default — click to expand/collapse",
+  "fs.hiddenAggCount": " ({n} items)",
   "fs.hintWizOn": " (WizTree enabled — drill to any level)",
   "fs.hintWizOff": " (No WizTree — deep drills scan on the fly, slower but work)",
   "fs.emptyLayer": "Nothing above {h} at this level.",
