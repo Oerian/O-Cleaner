@@ -347,6 +347,11 @@
   .drillhint{font-size:11.5px;color:var(--dim2);margin-top:7px}
   .vrow .vgo{font-size:10.5px;color:var(--accent);border:1px solid var(--info-bd);
              background:var(--info-bg);border-radius:99px;padding:1px 7px;white-space:nowrap}
+  /* 隐藏项合并行的「展开/收起」提示：**不能复用 .vgo** —— 测试与脚本把
+     .vgo 当「这行可下钻」的选行依据，合成行点了是切换展开不是下钻，
+     复用会让下钻测试误点它（CI 4 连挂的根因）。样式与 .vgo 保持一致。 */
+  .vrow .vagg{font-size:10.5px;color:var(--accent);border:1px solid var(--info-bd);
+             background:var(--info-bg);border-radius:99px;padding:1px 7px;white-space:nowrap}
 
   /* 嵌套子项展开树 */
   .vrow-kids{display:none;margin-left:22px;padding-left:14px;border-left:2px solid var(--line2);
@@ -3965,7 +3970,7 @@ function renderChart() {
           ${canCheck ? `<input type="checkbox" class="rowsel" data-path="${esc(it.path)}"${it.target_id ? ` data-tid="${esc(it.target_id)}"` : ""}${rowChecked ? " checked" : ""} title="${t("fs.tickTitle","勾选这项参与清理")}">` : ""}
           ${drillable && !it.hidden_group && !it.hidden_agg ? `<button class="tiny ghost expinline" data-tree="${idx}" title="${t("sub.expandTitle","就地展开查看子目录")}">${t("sub.expand","展开 ▾")}</button>` : ""}
           <span class="fname">${esc(it.name)}${it.hidden_agg ? t("fs.hiddenAggCount","（{n} 项）").replace("{n}", it.agg_count) : ""}${badge}${pinBadge}${
-            it.hidden_agg ? `<span class="vgo">${hiddenAggOpen ? t("sub.collapse","收起 ▴") : t("sub.expand","展开 ▾")}</span>`
+            it.hidden_agg ? `<span class="vagg">${hiddenAggOpen ? t("sub.collapse","收起 ▴") : t("sub.expand","展开 ▾")}</span>`
             : drillable ? `<span class="vgo">${t("fs.drillHint","点开看子项 ›")}</span>` : ""}</span>
           ${!it.hidden_group && !it.hidden_agg ? `<button class="tiny ghost rowgrp" data-grp="${idx}" title="${t("fs.grpTitle","把这项归进自定义聚合组")}">${t("fs.grp","归档")}</button>` : ""}
           ${it.custom_group ? `<button class="tiny ghost rowgrp" data-grp="${idx}" title="${t("fs.grpMgrTitle","管理这个聚合组的成员与名称")}">${t("fs.grpMgr","管理")}</button>` : ""}
