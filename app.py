@@ -1294,12 +1294,16 @@ def _mft_read_at(h, offset: int, size: int, buf) -> int:
     return got.value
 
 
-def _mft_build_table(letter: str, root: str, on_progress=None):
+def _mft_build_table(letter: str, root: str, on_progress=None,
+                     file_floor_mb: int | None = None):
     """直读 $MFT 产出与 _wiztree_parse 同形的 table。
 
     返回 (table|None, info)；info 为 {"secs", "records"} 或失败原因字符串。
     内存策略：frn = 记录号（MFT 天然稠密），parent/size 走稠密数组
     （每条 8 字节），名字只给目录与达标文件留 —— 百万级记录也稳在几十 MB。
+    file_floor_mb：文件名字保留门槛（MB）。默认与目录体积门槛一致
+    （DISK_TREE_MIN_CHILD_MB）；大文件排行调用时传更低的值 —— 排行要
+    10 MB 级的文件，目录树只关心 ≥50 MB 的（见 big_files 的 MFT 路径）。
     """
     if os.name != "nt" or not is_admin():
         return None, "需要管理员权限"
@@ -1362,6 +1366,9 @@ def _mft_build_table(letter: str, root: str, on_progress=None):
 
         est_records = max(1, mft_vdl // frs_size)
         floor = DISK_TREE_MIN_CHILD_MB * 1024 * 1024
+        # 文件名字保留门槛：目录树关心的是「达到目录门槛的文件」，
+        # 大文件排行要更低的地板（10 MB 级）。目录门槛始终不变。
+        f_floor = (file_floor_mb or DISK_TREE_MIN_CHILD_MB) * 1024 * 1024
         t0 = time.time()
         arr_parent = array("q")
         arr_size = array("q")
@@ -1414,9 +1421,10 @@ def _mft_build_table(letter: str, root: str, on_progress=None):
                 arr_flags.append(1 if is_dir else 0)
                 if is_dir and name and idx != 5:
                     dir_names[idx] = name
-                elif not is_dir and name and (size >= floor or p == 5):
+                elif not is_dir and name and (size >= f_floor or p == 5):
                     # 与 _wiztree_parse 同一门槛：达标文件 + 盘根全保留
                     # （AMTAG.BIN 这类小体积隐藏文件必须进「隐藏项」页签）
+                    # 文件门槛可用 file_floor_mb 单独调低（大文件排行路径）
                     file_keep[idx] = (name, size, p)
             if on_progress and records % 65536 < frs_size // 1024 + 1:
                 try:
@@ -6728,12 +6736,26 @@ def _wiztree_big_files(csv_path: str, floor: int) -> list:
     return rows
 
 
+def _mft_big_files(tbl: dict, floor: int) -> list:
+    """从 MFT 明细缓存抽取达标文件行（path, size)，按体积降序。
+
+    与 _wiztree_big_files 同一输出形态 —— big_files 的三条引擎路径
+    （wiztree / mft / powershell）在 rows 之后共用同一套 identify 流程。
+    """
+    rows = [(full, sz)
+            for _parent, items in (tbl.get("files") or {}).items()
+            for _name, sz, full in items if sz >= floor]
+    rows.sort(key=lambda x: -x[1])
+    return rows
+
+
 def big_files(drive: str, limit: int = BIG_FILES_LIMIT) -> dict:
     """全盘最大的单个文件排行。只读，不删任何东西。
 
-    两条路径：装了 WizTree 走 MFT 明细（快），否则 PowerShell 全盘遍历
-    （与目录树的兜底路径同量级耗时）。同一个盘同时只跑一份，重复请求
-    如实报「进行中」而不是静默叠扫。
+    三条路径：装了 WizTree 走 WizTree 导出（快）；没装但本进程是管理员
+    且目标盘是 NTFS，走自研 MFT 引擎（同为秒级，2026-10-31 起）；都没有
+    才 PowerShell 全盘遍历（与目录树的兜底路径同量级耗时）。同一个盘
+    同时只跑一份，重复请求如实报「进行中」而不是静默叠扫。
     """
     letter = (drive or "C").rstrip(":").upper()
     root = letter + ":\\"
@@ -6754,6 +6776,22 @@ def big_files(drive: str, limit: int = BIG_FILES_LIMIT) -> dict:
                     rows = _wiztree_big_files(csv_path, BIG_FILES_FLOOR_WIZ)
                 finally:
                     _wiztree_cleanup(csv_path)
+        if engine == "powershell" and os.name == "nt" \
+                and is_admin() and _mft_volume_ntfs(root):
+            # 自研 MFT 中位路径：无 WizTree 时的秒级方案。文件地板降到
+            # 与 PS 路径一致（10 MB），内存增量可接受（万级条目 × ~100 B）。
+            # 任何失败都静默回落 PS walk —— 引擎链 WizTree → MFT → PS。
+            try:
+                prog_set("mft", f"内置 MFT 引擎正在读取 {letter}: 盘的文件明细",
+                         10, indeterminate=True)
+                tbl, info = _mft_build_table(letter, root,
+                                             file_floor_mb=10)
+                if tbl is not None:
+                    engine = "mft"
+                    rows = _mft_big_files(tbl, BIG_FILES_FLOOR_PS)
+            except Exception:
+                traceback.print_exc()
+                rows, engine = [], "powershell"
         if engine == "powershell":
             prog_file = os.path.join(
                 tempfile.gettempdir(), f"oc-bigfiles-{os.getpid()}-{letter}.txt")

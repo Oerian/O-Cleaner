@@ -5128,7 +5128,8 @@ async function openBigFiles() {
     </div>`).join("");
   $("modal").innerHTML = `<h2>${t("bf.title", "全盘大文件排行")}
       <span class="hint">${t("bf.n", "前 {n} 名").replace("{n}", (r.files || []).length)}
-        · ${r.engine === "wiztree" ? "WizTree MFT" : "PowerShell"}</span></h2>
+        · ${r.engine === "wiztree" ? "WizTree MFT"
+          : r.engine === "mft" ? "内置 MFT" : "PowerShell"}</span></h2>
     <div class="mbody">${rows || `<div class="empty">${t("bf.empty", "没有超过门槛的大文件")}</div>`}
     <div style="text-align:right;padding-top:10px">
       <button class="tiny" id="bfClose">${t("cc.close", "关闭")}</button></div></div>`;

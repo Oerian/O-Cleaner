@@ -764,6 +764,23 @@ def phase1() -> None:
         r2 = app.dupfiles_scan("Z")          # 无缓存的盘
         check("重复大文件：无扫描缓存时给出先扫描提示而非报错",
               "error" in r2 and not r2.get("groups"))
+
+        # ---- 大文件排行 MFT 路径（#44）：抽取纯函数 + big_files 引擎链 ----
+        check("大文件排行：_mft_big_files 抽取并降序",
+              app._mft_big_files(
+                  {"files": {"q:s": [("a.bin", 200, "Q:\\a.bin"),
+                                     ("b.bin", 500, "Q:\\b.bin"),
+                                     ("c.bin", 50, "Q:\\c.bin")]}},
+                  100) == [("Q:\\b.bin", 500), ("Q:\\a.bin", 200)])
+        # 非管理员（selftest 环境）下 MFT 路径静默回落：big_files 不炸
+        try:
+            _mft_saved = app._mft_build_table
+            app._mft_build_table = lambda *a, **k: (None, "需要管理员权限")
+            r3 = app.big_files("Z")   # Z 盘不存在 → 结构性报错而非崩溃
+            check("大文件排行：MFT 路径失败不炸（盘不存在时结构性报错）",
+                  "error" in r3 or "files" in r3, str(r3)[:80])
+        finally:
+            app._mft_build_table = _mft_saved
     finally:
         app._WIZ_DIRS.clear()
         app._WIZ_DIRS.update(_wiz_saved)
