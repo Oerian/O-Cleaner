@@ -575,6 +575,25 @@ class CDP {
 
   // ---------- 全盘扫描 + 可视化 + 点击详情 ----------
   console.log("\n  --- 全盘扫描 / 可视化 / 详情 ---");
+  // MFT 引擎（CI runner 是管理员会真实启用）会把盘上系统隐藏项量出体积并
+  // 归进「隐藏项」合并行 —— runner 的小 D 盘几乎全是系统元文件，造数据前
+  // 排行只剩 1 条真实行，下钻断言全线失据。这里先在测试盘造几个达标目录
+  // （稀疏文件秒级完成，扫描后清理），保证任何机器上都有确定的数据形态。
+  // 直接用本机 Node fs 写到扫描盘（服务与测试同机执行，路径一致）。
+  const _seedRoot = `${scanDrive}:\\_oc_cdp_seed`;
+  try {
+    fs.mkdirSync(_seedRoot, { recursive: true });
+    for (let i = 0; i < 4; i++) {
+      const dir = path.join(_seedRoot, `big${i}`);
+      fs.mkdirSync(dir, { recursive: true });
+      const f = path.join(dir, "blob.bin");
+      // 稀疏文件：只写头尾各 1 字节，logical size 60MB（超过 50MB 门槛）
+      const fd = fs.openSync(f, "w");
+      fs.writeSync(fd, Buffer.from([0x4f]), 0, 1, 0);
+      fs.writeSync(fd, Buffer.from([0x4f]), 0, 1, 60 * 1024 * 1024 - 1);
+      fs.closeSync(fd);
+    }
+  } catch (e) { /* 盘不可写时按原样跑，断言该 skip 的 skip */ }
   await evaluate(`document.querySelector('#btnFullScan').click()`);
   // 全盘扫描耗时取决于盘的内容密度：数据盘约 25 秒，系统盘（小文件极多）可达 3 分钟。
   // 因此这里给足 5 分钟，并且不强求成功 —— 若本机盘太大，明确报告跳过而不是误判失败。
@@ -2095,6 +2114,11 @@ class CDP {
     await cdp.send("Emulation.clearDeviceMetricsOverride", {}, S);
     await sleep(300);
   }
+
+  // 清理全盘扫描段造的种子数据（60MB×4 稀疏文件，逻辑体积不小，不留盘）
+  try {
+    fs.rmSync(`${scanDrive}:\\_oc_cdp_seed`, { recursive: true, force: true });
+  } catch (e) {}
 
   // 截图
   try {
