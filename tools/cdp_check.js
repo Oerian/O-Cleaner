@@ -937,6 +937,18 @@ class CDP {
   checkScan("显示当前目录路径", beforeDrill.path.length > 2, beforeDrill.path);
   checkScan("面包屑存在", beforeDrill.crumbs >= 1, `${beforeDrill.crumbs} 段`);
 
+  // 下钻链内容门控：CI runner（管理员）的 MFT 引擎会把系统元文件全量量出
+  // 体积并归进隐藏合并行，runner 的小数据盘可能一条可下钻目录都没有 ——
+  // 下钻/细分/勾选保持是**内容依赖**断言（同「柱状图渲染出多条」的 nodeN
+  // 门控）。临时关闸让这段的 checkScan 自动 skip，浅扫段前恢复；
+  // 本机有真实目录时照常严格断言（534-0-6 的下钻链全覆盖）。
+  const drillGate = beforeDrill.drillable > 0;
+  if (!drillGate) {
+    scanOk = false;
+    skip2(`下钻链（内容依赖：${scanDrive}: 盘首层没有可下钻目录——` +
+          `MFT 引擎量出体积后全被归进隐藏合并行，本机 137-0-5 已全量覆盖）`);
+  }
+
   const firstDir = await evaluate(`(() => {
     const r = [...document.querySelectorAll('#fsChart .vrow')]
       .find(x => x.querySelector('.vgo'));
@@ -1357,6 +1369,9 @@ class CDP {
   } else {
     skip2("勾选与下钻互不影响（当前占用树没有可勾选的行，内容依赖）");
   }
+
+  // 恢复下钻链门控关掉的 scanOk（浅扫段的断言与盘内容形态无关）
+  if (!drillGate) scanOk = true;
 
   // ---------- 浅扫模式（depth=1） ----------
   console.log("\n  --- 浅扫模式（1 层） ---");
