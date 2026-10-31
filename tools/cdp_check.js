@@ -593,7 +593,9 @@ class CDP {
       fs.writeSync(fd, Buffer.from([0x4f]), 0, 1, 60 * 1024 * 1024 - 1);
       fs.closeSync(fd);
     }
-  } catch (e) { /* 盘不可写时按原样跑，断言该 skip 的 skip */ }
+  } catch (e) {
+    console.log(`  [信息] 种子数据未写入（不影响断言，有展开合并行兜底）：${e.message}`);
+  }
   await evaluate(`document.querySelector('#btnFullScan').click()`);
   // 全盘扫描耗时取决于盘的内容密度：数据盘约 25 秒，系统盘（小文件极多）可达 3 分钟。
   // 因此这里给足 5 分钟，并且不强求成功 —— 若本机盘太大，明确报告跳过而不是误判失败。
@@ -613,6 +615,24 @@ class CDP {
   // 扫描「跑不跑得完」取决于盘的内容密度，不是代码正确性。CI runner 的系统盘
   // 必然超时，那里只记录跳过；本机若也超时，那才是真问题（说明扫描退化或被卡死）。
   scanOk = ready;
+  if (ready) {
+    // MFT 引擎（CI runner 是管理员 → 真实启用）会把系统隐藏项量出体积并
+    // 归进「隐藏项」合并行 —— runner 的小 D 盘几乎全是系统元文件，合并不
+    // 展开时排行只剩 1-2 条真实行，后续柱状图/下钻断言全线失据。这里把
+    // 合并行就地展开（成员是真实节点，带徽章、可下钻），后续断言一律在
+    // 「可见行足够」的形态上跑；本机 vgo 足够多时不会触发，行为不变。
+    const vis = await evaluate(`(() => {
+      const vgo = document.querySelectorAll('#fsChart .vrow .vgo').length;
+      const agg = document.querySelector('#fsChart .vrow-wrap.hagg .vrow');
+      if (vgo >= 3 || !agg) return { expanded: false, vgo };
+      agg.click();
+      return { expanded: true, vgo };
+    })()`);
+    if (vis.expanded) {
+      await sleep(700);   // 等成员行渲染
+      console.log(`  [信息] MFT 引擎下隐藏项占比过高，已展开合并行（vgo ${vis.vgo} → 成员行）`);
+    }
+  }
   if (ready) {
     check("全盘扫描完成并渲染出排行", true, `${scanDrive}: 盘，耗时 ${scanSec} 秒`);
   } else if (failed) {
