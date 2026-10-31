@@ -653,6 +653,21 @@ class CDP {
     check(`全盘扫描作用于指定盘 ${DRIVE_}:`, title.startsWith(DRIVE_),
           `面板显示「${title}」`);
   }
+  // 类型分布（#51）：WizTree/MFT 引擎扫完即渲染按扩展名的占比条；
+  // PS 递归路径拿不到全量文件清单，没有该区块（属预期，不是缺陷）
+  if (ready) {
+    const ext = await evaluate(`(() => {
+      const fast = !!document.querySelector('#fsOverview .enginebar.fast');
+      return { fast,
+               rows: document.querySelectorAll('#fsOverview .extrow').length };
+    })()`);
+    if (ext.fast) {
+      check("类型分布：扫描完成即渲染按扩展名的占比条",
+            ext.rows > 0, `${ext.rows} 行`);
+    } else {
+      skip2("类型分布（PS 递归路径无全量文件清单，属预期）");
+    }
+  }
   // 可见性而不是存在性：首轮视图整合踩过「DOM 都在、断言全绿，
   // 但 auto 行把占用树挤到视口外人眼看不见」的回归 —— 必须量盒子。
   if (ready) {
@@ -1776,7 +1791,7 @@ class CDP {
     }
   } catch (e) { INFO.push(`范围切换异常: ${e.message}`); }
 
-  // ③ 大文件排行：点开 → 遮罩亮 + 模态有内容 → 用真实关闭按钮收起
+  // ③ 大文件排行：点开 → 遮罩亮 + 模态有内容 → 时间过滤 → 关闭收起
   try {
     const bf = await evaluate(`(() => {
       document.querySelector('#btnBigFiles').click();
@@ -1786,16 +1801,38 @@ class CDP {
     })()`);
     check("大文件排行：点开弹出模态", bf.on && bf.hasModal, JSON.stringify(bf));
     // 等真实关闭按钮出现（全盘遍历可能较慢，超时则直接调 closeModal 收尾）
-    let closed = null;
-    for (let i = 0; i < 24 && !closed; i++) {
+    let bfInfo = null;
+    for (let i = 0; i < 24 && !bfInfo; i++) {
       await sleep(500);
-      closed = await evaluate(`(() => {
+      bfInfo = await evaluate(`(() => {
         const b = document.querySelector('#bfClose');
-        if (b) { b.click(); return true; }
-        return false;
+        if (!b) return null;
+        return { ok: true,
+                 hasAge: !!document.querySelector('#bfAge'),
+                 rows0: document.querySelectorAll('#bfRows .logrow').length };
       })()`);
     }
-    if (!closed) await evaluate(`typeof closeModal === 'function' && closeModal()`);
+    if (bfInfo && bfInfo.ok) {
+      check("大文件排行：时间过滤器就位（mtime 由引擎带回）",
+            bfInfo.hasAge, JSON.stringify(bfInfo));
+      const bfFilt = await evaluate(`(() => {
+        const sel = document.querySelector('#bfAge');
+        if (!sel) return { ok: false };
+        sel.value = '30';
+        sel.dispatchEvent(new Event('change'));
+        return { ok: true,
+                 rows30: document.querySelectorAll('#bfRows .logrow').length,
+                 empty: !!document.querySelector('#bfRows .empty') };
+      })()`);
+      check("大文件排行：切近 30 天过滤不重扫且行数收敛",
+            bfFilt.ok && bfFilt.rows30 <= bfInfo.rows0, JSON.stringify(bfFilt));
+      await evaluate(`(() => {
+        const b = document.querySelector('#bfClose'); if (b) b.click();
+      })()`);
+    } else {
+      INFO.push("大文件排行：扫描超时未出结果，时间过滤器断言跳过");
+      await evaluate(`typeof closeModal === 'function' && closeModal()`);
+    }
     await sleep(300);
     check("大文件排行：关闭后遮罩收起",
           await evaluate(`!document.querySelector('#mask').classList.contains('on')`));

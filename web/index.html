@@ -416,6 +416,15 @@
   .cllegend span{display:flex;align-items:center;gap:6px}
   .cllegend em{width:9px;height:9px;border-radius:2px;display:inline-block;font-style:normal}
 
+  /* 扩展名分布（类型分布）：名称 | 占比条 | 体积·个数 三段式行 */
+  .extrow{display:flex;align-items:center;gap:8px;font-size:11.5px;margin-bottom:5px}
+  .extrow .extname{flex:none;width:110px;color:var(--dim);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;text-align:right}
+  .extrow .extbar{flex:1;height:8px;border-radius:4px;background:var(--track);overflow:hidden}
+  .extrow .extbar i{display:block;height:100%;border-radius:4px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2))}
+  .extrow .extval{flex:none;min-width:130px;color:var(--dim2);font-variant-numeric:tabular-nums}
+
   /* 柱状图：柱上直接显示文件名 */
   .vchart{display:flex;flex-direction:column;gap:8px;margin-top:4px}
   .vrow{cursor:pointer;border-radius:8px;padding:6px 8px;transition:.13s;
@@ -3801,7 +3810,22 @@ function renderOverview() {
         <span><em style="background:var(--danger)"></em>${t("badge.keep","建议保留")} ${fmt(keepSum)}</span>
         <span><em style="background:var(--dim2)"></em>${t("badge.unk","未识别")} ${fmt(unkSum)}</span>
       </div>
-    </div>`;
+    </div>
+    ${(FS.by_ext && FS.by_ext.length) ? `
+    <div style="margin-top:15px;padding-top:13px;border-top:1px solid var(--line)">
+      <div style="color:var(--dim2);font-size:11.5px;margin-bottom:7px">
+        ${t("fs.extHead","空间都被什么类型吃了（按扩展名，Top 12）")}</div>
+      ${FS.by_ext.map(e => {
+        const base = FS.scanned_total || (FS.by_ext.reduce((a, x) => a + x.size, 0) || 1);
+        const pctv = Math.max(0.5, e.size / base * 100);
+        const label = e.ext === "__other__" ? t("fs.extOther","其他类型")
+          : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
+        return `<div class="extrow">
+          <span class="extname" title="${label}">${label}</span>
+          <span class="extbar"><i style="width:${pctv.toFixed(1)}%"></i></span>
+          <span class="extval">${fmt(e.size)} · ${Number(e.count).toLocaleString()}</span></div>`;
+      }).join("")}
+    </div>` : ""}`;
 
   // 面包屑 + 返回上一级
   const crumbs = [`<span class="cb${fsStack.length ? "" : " cur"}" data-i="-1">${esc(FS.drive)}: ${t("st.driveSuffix","盘")}</span>`];
@@ -5093,6 +5117,41 @@ document.querySelectorAll("#viewNav button").forEach(b => b.addEventListener("cl
 /* 大文件排行：单独一次全盘遍历，列出「占空间的最大单个文件」。
    目录树沿最粗分支展开偏向目录聚合，视频 / 镜像 / 安装包这类
    真正的大头往往就是一个文件，这里直接把它们排出来。只读不删。 */
+/* 大文件排行：三条引擎路径统一带回 mtime（'YYYY-MM-DD HH:MM'，可为空）。
+   「只看近期大文件」过滤器在前端做 —— 服务端只把 mtime 带回来，
+   切换过滤不重扫（重扫一次是秒级到分钟级的差别）。 */
+let _bfFiles = [];
+
+function _bfCutoff(days) {
+  if (!days) return "";
+  const d = new Date(Date.now() - days * 86400000);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function renderBfRows() {
+  const rowsEl = $("bfRows");
+  if (!rowsEl) return;               // 弹窗未开（语言切换也会调这里）
+  const sel = $("bfAge");
+  const days = sel ? parseInt(sel.value || "0", 10) : 0;
+  const cut = _bfCutoff(days);
+  const list = cut ? _bfFiles.filter(f => (f.mtime || "") >= cut) : _bfFiles;
+  const rows = list.map((f, i) => `
+    <div class="logrow">
+      <div class="t"><b>${i + 1}</b>. <span>${esc(f.name)}</span>
+        <span class="freed">${fmt(f.size)}</span></div>
+      <div class="d" style="word-break:break-all">${esc(f.dir)}
+        ${f.mtime ? ` · <span style="color:var(--dim2)">${esc(f.mtime)}</span>` : ""}
+        ${f.title ? ` · ${esc(f.title)}` : ""}
+        ${f.cleanable ? `<span class="vbadge clean">${t("badge.clean", "可清理")}</span>` : ""}
+        ${f.what ? `<br><span style="color:var(--dim2)">${esc(f.what)}</span>` : ""}</div>
+      <div class="d"><a href="javascript:void(0)" class="rcpt" data-p="${esc(f.path)}">
+        ${t("bf.reveal", "在资源管理器中打开位置")}</a></div>
+    </div>`).join("");
+  $("bfRows").innerHTML = rows ||
+    `<div class="empty">${cut ? t("bf.age.empty", "该时间段内没有大文件")
+      : t("bf.empty", "没有超过门槛的大文件")}</div>`;
+}
 async function openBigFiles() {
   $("modal").innerHTML = `<h2>${t("bf.title", "全盘大文件排行")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
@@ -5115,24 +5174,24 @@ async function openBigFiles() {
     $("bfClose").addEventListener("click", closeModal);
     return;
   }
-  const rows = (r.files || []).map((f, i) => `
-    <div class="logrow">
-      <div class="t"><b>${i + 1}</b>. <span>${esc(f.name)}</span>
-        <span class="freed">${fmt(f.size)}</span></div>
-      <div class="d" style="word-break:break-all">${esc(f.dir)}
-        ${f.title ? ` · ${esc(f.title)}` : ""}
-        ${f.cleanable ? `<span class="vbadge clean">${t("badge.clean", "可清理")}</span>` : ""}
-        ${f.what ? `<br><span style="color:var(--dim2)">${esc(f.what)}</span>` : ""}</div>
-      <div class="d"><a href="javascript:void(0)" class="rcpt" data-p="${esc(f.path)}">
-        ${t("bf.reveal", "在资源管理器中打开位置")}</a></div>
-    </div>`).join("");
+  _bfFiles = r.files || [];
   $("modal").innerHTML = `<h2>${t("bf.title", "全盘大文件排行")}
-      <span class="hint">${t("bf.n", "前 {n} 名").replace("{n}", (r.files || []).length)}
+      <span class="hint">${t("bf.n", "前 {n} 名").replace("{n}", _bfFiles.length)}
         · ${r.engine === "wiztree" ? "WizTree MFT"
           : r.engine === "mft" ? "内置 MFT" : "PowerShell"}</span></h2>
-    <div class="mbody">${rows || `<div class="empty">${t("bf.empty", "没有超过门槛的大文件")}</div>`}
+    <div class="mbody">
+      <div style="margin-bottom:8px;text-align:right">
+        <select id="bfAge" class="tiny">
+          <option value="0">${t("bf.age.all", "全部时间")}</option>
+          <option value="7">${t("bf.age.7", "近 7 天")}</option>
+          <option value="30">${t("bf.age.30", "近 30 天")}</option>
+          <option value="90">${t("bf.age.90", "近 90 天")}</option>
+        </select></div>
+      <div id="bfRows"></div>
     <div style="text-align:right;padding-top:10px">
       <button class="tiny" id="bfClose">${t("cc.close", "关闭")}</button></div></div>`;
+  renderBfRows();
+  $("bfAge").addEventListener("change", renderBfRows);
   $("bfClose").addEventListener("click", closeModal);
   [...document.querySelectorAll("#modal .rcpt")].forEach(a =>
     a.addEventListener("click", () => {
@@ -6101,6 +6160,8 @@ const I18N_EN = {
   "fs.wiztreeNote": "<span>Reads the MFT via the WizTree installed on this machine — faster than per-folder recursion; it is never installed or modified.</span>",
   "fs.wiztreeHint": "<span>Installing WizTree shortens full-disk scans a lot (this tool only calls it, never bundles it).</span>",
   "fs.scannedNow": "Scanned this run", "fs.nodesSuffix": "nodes",
+  "fs.extHead": "What types are eating the space (by extension, top 12)",
+  "fs.extOther": "Other types", "fs.extNone": "no extension",
   "fs.mixHead": "Of what was scanned, how much is cleanable vs. keep",
   "fs.upLevel": "Up one level", "fs.curDir": "Current folder: ",
   "fs.levelStat": "{n} items at this level, {v} total", "fs.parent": "Parent level",
@@ -6374,6 +6435,9 @@ const I18N_EN = {
   "bf.loading": "Scanning the whole drive for the biggest files (much faster with WizTree)…",
   "bf.n": "top {n}",
   "bf.empty": "No files above the size floor",
+  "bf.age.all": "All time", "bf.age.7": "Last 7 days",
+  "bf.age.30": "Last 30 days", "bf.age.90": "Last 90 days",
+  "bf.age.empty": "No big files in that period",
   "bf.reveal": "Open location in Explorer",
   "cc.close": "Close"
 };
@@ -6477,7 +6541,7 @@ function setLang(l) {
    "renderRules", "renderPresets", "renderPacks", "renderSteamPage",
    "renderGuide", "drawDiskTrend", "drawGameTrend", "renderDrives",
    "renderConvToggle", "renderSchedule", "renderHistory", "renderOverview",
-   "renderAI", "renderCustomLibs", "renderSchSummary"].forEach(fn => {
+   "renderAI", "renderCustomLibs", "renderSchSummary", "renderBfRows"].forEach(fn => {
     try { if (typeof window[fn] === "function") window[fn](); } catch (e) {}
   });
   // 后端返回的长文本（释义/建议）随请求的 lang 走：清掉旧语言的缓存

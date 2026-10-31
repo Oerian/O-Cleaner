@@ -251,6 +251,32 @@ def phase1() -> None:
         # CI 机器上 stat 不到、名字也不在兜底名单里，断言会假红。
         check("根层节点里带上了盘根的隐藏小文件（隐藏项页签的数据源）",
               "DumpStack.log.tmp" in _rf_names, str(sorted(_rf_names)))
+        # 类型分布（#51）：_wiztree_parse 顺手聚合**全量**文件的后缀
+        # （含被体积门槛裁掉的 tiny.log —— 类型分布关心小文件）
+        _ext_tbl = _wz.get("ext") or {}
+        check("类型分布：_wiztree_parse 聚合全量文件后缀（含被门槛裁掉的）",
+              _ext_tbl.get("bin") == [600000000 + 1545, 2]
+              and _ext_tbl.get("tmp") == [8192, 1]
+              and _ext_tbl.get("log") == [1024, 1]
+              and _ext_tbl.get("sys") == [17179869184, 1], str(_ext_tbl))
+        # 大文件排行（#51）：CSV 第 4 列修改时间归一化，目录行跳过
+        _bf_csv = os.path.join(_wz_dir, "bf.csv")
+        with open(_bf_csv, "w", encoding="utf-8") as _f:
+            _f.write(
+                '"WizTree","4.28"\n'
+                '"Path","Size","Allocated","Modified","Attributes","Files","Folders"\n'
+                '"C:\\",1000000000000,1000000000000,2026/11/01 01:58:55,,700000,90000\n'
+                '"C:\\big movie.mp4",8000000000,8000000000,2026/10/20 13:45:12,,0,0\n'
+                '"C:\\old backup.iso",9000000000,9000000000,2020/01/02 03:04:05,,0,0\n'
+                '"C:\\small.doc",10,10,2026/10/30 09:00:00,,0,0\n')
+        _bfr = app._wiztree_big_files(_bf_csv, 1024)
+        check("大文件排行：WizTree CSV 行带归一化修改时间（目录行/未达标行跳过）",
+              _bfr == [("C:\\big movie.mp4", 8000000000, "2026-10-20 13:45"),
+                       ("C:\\old backup.iso", 9000000000, "2020-01-02 03:04")],
+              str(_bfr))
+        check("大文件排行：畸形修改时间留空而不是炸解析",
+              app._wiz_mtime_norm("not a date") == ""
+              and app._wiz_mtime_norm("") == "")
     finally:
         shutil.rmtree(_wz_dir, ignore_errors=True)
 
@@ -766,12 +792,47 @@ def phase1() -> None:
               "error" in r2 and not r2.get("groups"))
 
         # ---- 大文件排行 MFT 路径（#44）：抽取纯函数 + big_files 引擎链 ----
-        check("大文件排行：_mft_big_files 抽取并降序",
+        check("大文件排行：_mft_big_files 抽取并降序（无 mtime 时留空）",
               app._mft_big_files(
                   {"files": {"q:s": [("a.bin", 200, "Q:\\a.bin"),
                                      ("b.bin", 500, "Q:\\b.bin"),
                                      ("c.bin", 50, "Q:\\c.bin")]}},
-                  100) == [("Q:\\b.bin", 500), ("Q:\\a.bin", 200)])
+                  100) == [("Q:\\b.bin", 500, ""), ("Q:\\a.bin", 200, "")])
+        check("大文件排行：_mft_big_files 带 mtimes 表时回填修改时间",
+              app._mft_big_files(
+                  {"files": {"q:s": [("a.bin", 200, "Q:\\a.bin"),
+                                     ("b.bin", 500, "Q:\\b.bin")]},
+                   "mtimes": {"Q:\\b.bin": "2026-10-31 12:00"}},
+                  100) == [("Q:\\b.bin", 500, "2026-10-31 12:00"),
+                           ("Q:\\a.bin", 200, "")])
+
+        # ---- 类型分布（#51 后端）：扩展名聚合纯函数 ----
+        check("类型分布：_ext_of 取小写后缀并截 16 字符",
+              app._ext_of("D:\\a\\Video_CLIP.MP4") == "mp4"
+              and app._ext_of("D:\\无扩展名") == ""
+              and app._ext_of("D:\\x." + "e" * 40) == "e" * 16)
+        check("类型分布：_ext_of_raw 从 UTF-16LE 原始名取后缀（不全名解码）",
+              app._ext_of_raw("电影.备份.MKV".encode("utf-16-le")) == "mkv"
+              and app._ext_of_raw("没有后缀".encode("utf-16-le")) == "")
+        _exts = {}
+        app._ext_bump(_exts, "D:\\a\\x.mp4", 300)
+        app._ext_bump(_exts, "D:\\a\\y.MP4", 100)
+        app._ext_bump(_exts, "D:\\a\\z.iso", 500)
+        app._ext_bump(_exts, "D:\\a\\w", 10)
+        _top = app._ext_top(_exts)
+        check("类型分布：跨大小写累加 + 体积降序 + 无后缀进空键",
+              _top[0]["ext"] == "iso" and _top[0]["size"] == 500
+              and _top[1]["ext"] == "mp4" and _top[1]["size"] == 400
+              and _top[1]["count"] == 2 and _top[2]["ext"] == ""
+              and _top[2]["count"] == 1, str(_top))
+        check("类型分布：超出 top 数并入 other（带 __other__ 哨兵）",
+              len(app._ext_top(_exts, 1)) == 2
+              and app._ext_top(_exts, 1)[1]["ext"] == "__other__"
+              and app._ext_top(_exts, 1)[1]["size"] == 410)
+        check("类型分布：_ft_to_iso 换算 FILETIME 且 0/非法返回空",
+              app._ft_to_iso(0) == ""
+              and len(app._ft_to_iso(134000000000000000)) == 16
+              and app._ft_to_iso(134000000000000000)[4] == "-")
         # 非管理员（selftest 环境）下 MFT 路径静默回落：big_files 不炸
         try:
             _mft_saved = app._mft_build_table
@@ -1223,6 +1284,13 @@ def phase3_http() -> None:
               and 'cr.top3' in html)
         check("磁盘概览直连扫描：概览卡带全盘扫描入口",
               'id="btnDiskFull"' in html and "startFullScan()" in html)
+        check("类型分布：概览渲染、占比条样式与词条就位",
+              "fs.extHead" in html and 'class="extrow"' in html
+              and ".extrow.extbari{display:block" in _css
+              and '"fs.extOther": "Other types"' in html)
+        check("大文件时间过滤：前端过滤器与渲染函数就位",
+              'id="bfAge"' in html and "renderBfRows" in html
+              and "_bfCutoff" in html and '"bf.age.all": "All time"' in html)
         check("小视口吸顶头收敛：矮窗口媒体查询压缩头部",
               "@media(max-height:700px)" in _css
               and "@media(max-height:560px)" in _css
@@ -2924,17 +2992,65 @@ def phase7_scoping_and_accel() -> None:
     check("MFT runlist：簇数在前、偏移带符号回环",
           app._mft_runlist(bytes(rl), 0) == [(100, 8), (50, 16)],
           str(app._mft_runlist(bytes(rl), 0)))
-    check("MFT 文件记录：fixup 换回 + 非驻留 $DATA 体积",
+    check("MFT 文件记录：fixup 换回 + 非驻留 $DATA 体积 + 名字惰性字节",
           app._mft_parse_record(_mft_mk_record("file"), 1024)
-          == (5, "游戏", 777 << 20, False),
+          == (5, "游戏".encode("utf-16-le"), 777 << 20, False, 0),
           str(app._mft_parse_record(_mft_mk_record("file"), 1024)))
     check("MFT 目录记录：$INDEX_ROOT 判定目录",
           app._mft_parse_record(_mft_mk_record("dir"), 1024)
-          == (5, "游戏", 0, True),
+          == (5, "游戏".encode("utf-16-le"), 0, True, 0),
           str(app._mft_parse_record(_mft_mk_record("dir"), 1024)))
     check("MFT 损坏记录返回 None（magic 不符/全零）",
           app._mft_parse_record(bytearray(b"XXXX" + bytes(1020)), 1024) is None
           and app._mft_parse_record(bytearray(1024), 1024) is None)
+
+    # mtime 解析（#51 大文件「只看近期」的数据源）：$STANDARD_INFORMATION
+    # 修改时间在内容 +8；属性布局互不重叠 —— STD_INFO(0x38,len 0x28) →
+    # FILE_NAME(0x60,len 0x98，含 2 字符名) → DATA(0xF8,len 0x48)。
+    def _mft_mk_record_si(mtime_val: int):
+        rec = bytearray(1024)
+        rec[0:4] = b"FILE"
+        _struct.pack_into("<H", rec, 4, 0x30)
+        _struct.pack_into("<H", rec, 6, 3)
+        _struct.pack_into("<H", rec, 0x14, 0x38)
+        _struct.pack_into("<H", rec, 0x16, 1)
+        _struct.pack_into("<I", rec, 0x18, 0x140)
+        _struct.pack_into("<H", rec, 0x30, 0xAAAA)
+        _struct.pack_into("<H", rec, 0x32, 0x1111)
+        _struct.pack_into("<H", rec, 0x34, 0x2222)
+        _struct.pack_into("<H", rec, 510, 0xAAAA)
+        _struct.pack_into("<H", rec, 1022, 0xAAAA)
+        a = 0x38                                   # $STANDARD_INFORMATION
+        _struct.pack_into("<I", rec, a, 0x10)
+        _struct.pack_into("<I", rec, a + 4, 0x28)
+        _struct.pack_into("<I", rec, a + 0x10, 0x18)   # content size
+        _struct.pack_into("<H", rec, a + 0x14, 0x18)   # content offset
+        _struct.pack_into("<Q", rec, a + 0x20, mtime_val)  # content+8 = mtime
+        b = 0x60                                   # $FILE_NAME（驻留）
+        _struct.pack_into("<I", rec, b, 0x30)
+        _struct.pack_into("<I", rec, b + 4, 0x98)
+        _struct.pack_into("<H", rec, b + 0x14, 0x52)
+        c = b + 0x52
+        _struct.pack_into("<Q", rec, c, 5)         # parent = 根
+        nm = "片".encode("utf-16-le")
+        rec[c + 0x40] = len(nm) // 2
+        rec[c + 0x41] = 3
+        rec[c + 0x42:c + 0x42 + len(nm)] = nm
+        d = b + 0x98                               # $DATA（非驻留）
+        _struct.pack_into("<I", rec, d, 0x80)
+        _struct.pack_into("<I", rec, d + 4, 0x48)
+        rec[d + 8] = 1
+        _struct.pack_into("<Q", rec, d + 0x38, 5 << 20)
+        _struct.pack_into("<I", rec, d + 0x48, 0xFFFFFFFF)
+        return rec
+
+    _si = _mft_mk_record_si(133000000000000000)
+    check("MFT mtime：with_mtime=True 解析出 $STANDARD_INFORMATION 修改时间",
+          app._mft_parse_at(_si, 0, 1024, True)
+          == (5, "片".encode("utf-16-le"), 5 << 20, False, 133000000000000000),
+          str(app._mft_parse_at(_si, 0, 1024, True)))
+    check("MFT mtime：默认不解析（目录树路径不付这笔开销）",
+          app._mft_parse_record(_si, 1024)[4] == 0)
 
     # ---- 5) 子进程调用的超时有界性 ----
     # 这一段对应一次实际观察到的卡死：扫描停在「正在读取 Steam 库清单」不动，
