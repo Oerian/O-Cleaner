@@ -1508,6 +1508,8 @@ SECURITY 该处表述未动。
 
 **CI 适配教训（4 轮迭代，run 41217009639 → 41219227449）**：**GitHub Actions Windows runner 默认是管理员，自研 MFT 引擎在 CI 上真实启用**（日志可见 "Direct MFT read (built-in)"）——这是引擎首次在第三方机器验证，解析出 runner D 盘 768 条记录分布正确。但 runner 的小数据盘首层几乎全是系统元文件，MFT 把它们量出体积后全归进隐藏合并行，主列表只剩 1-3 条真实行，下钻链 8 项断言全线失据。**修法**：①CDP 里 fs 写种子数据在 runner 上不可靠（本机 WorkBuddy 沙箱同样 EPERM），放弃；②扫描后「可下钻行 <3 且存在隐藏合并行」时先点开合并行用成员行（部分有效——pagefile/$LogFile 这类根文件仍会泄漏成独立行）；③最终方案：下钻链**内容门控**——`drillable==0` 时该断言及下游整段按「环境不具备」skip（既有 skip2 模式），浅扫段前恢复 scanOk。本机有真实目录时照常严格断言，保护力不降。
 
+**②补（2026-11-01，提交 8337323）：MFT 引擎反哺大文件排行**——`big_files` 引擎链补齐为 WizTree → **MFT** → PS：管理员 + NTFS 且未装 WizTree 时直接 `_mft_build_table(file_floor_mb=10)`（文件地板单独降到 10 MB，不随目录树的 50 MB 门槛，top 大文件不丢），`_mft_big_files` 纯函数抽取与另两条路径共用 identify 流程，任何失败静默回落 PS walk。selftest 536-0-6（+2）；真实管理员链路的端到端探针（`%TEMP%\oc_bigfiles_probe.py`，OC_NO_WIZTREE=1）因 UAC 未确认未跑，引擎核心已被 ① 的探针与 selftest 覆盖。
+
 ---
 
 ## 七、文件资产与代码清单
