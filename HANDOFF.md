@@ -1510,6 +1510,12 @@ SECURITY 该处表述未动。
 
 **②补（2026-11-01，提交 8337323）：MFT 引擎反哺大文件排行**——`big_files` 引擎链补齐为 WizTree → **MFT** → PS：管理员 + NTFS 且未装 WizTree 时直接 `_mft_build_table(file_floor_mb=10)`（文件地板单独降到 10 MB，不随目录树的 50 MB 门槛，top 大文件不丢），`_mft_big_files` 纯函数抽取与另两条路径共用 identify 流程，任何失败静默回落 PS walk。selftest 536-0-6（+2）；真实管理员链路的端到端探针（`%TEMP%\oc_bigfiles_probe.py`，OC_NO_WIZTREE=1）因 UAC 未确认未跑，引擎核心已被 ① 的探针与 selftest 覆盖。
 
+**③补（2026-11-01）：解析热点内联提速 + 知识产权确认 + 开源评估**——
+- **优化（#45）**：`_mft_parse_record` 热循环从「切片 + `int.from_bytes`」改为 `up = struct.unpack_from` **直接内联**（无 lambda 包装）。合成记录微基准：旧切片 486K rec/s → lambda 包装 656K → **内联 787K rec/s（+62%）**；lambda 版本被否——间接调用开销吃掉零拷贝收益（早期测得仅 +1.4% 即此原因）。一致性断言（三方案同输入同输出）+ selftest 536-0-6 通过。曾试 memoryview 替代记录切片：`.decode()` 不可用、收益 ~0.3s， reverted，保持 bytearray 简单性。
+- **自检与冗余（#46）**：pyflakes 0、lint_rules 全过、audit_dead 唯一发现 `stHead` 为误报（selftest 与 cdp_check 均有引用，工具只检索 index.html 自身脚本）；tools/ 下三张 PNG 为 CDP 再生产物且已 git-ignore。**无真实冗余代码**。
+- **知识产权确认（#47）：非逆向产物**。引擎在本仓库会话内逐行实现，git 历史完整可溯；仅参考公开的 Win32 API 语义（`FSCTL_GET_NTFS_VOLUME_DATA`、`NTFS_VOLUME_DATA_BUFFER` 官方文档）；两个关键 bug（VDB 须 96 字节、`ClustersPerFileRecordSegment==0` 的 unpacked 语义）均为本机实测发现的实证结论，非反编译他人代码所得；未复制任何第三方源码。
+- **开源评估（#48）：不单独开源，留在 O-Cleaner 公开仓库**。调研同类：pyofiles（Python，`mft=True` 即可 MFT 直读 disk_usage/walk——**最接近的竞品，已占据「Python MFT 快速磁盘用量」生态位**）、dfir_ntfs（取证 dump 解析）、Pythonic_RawCopy（取证恢复）、DiskAnalyzer（取证提取）、Koakuma（Rust CLI）、DiskMap（C# GUI）——全部面向取证/恢复或通用 UI，无一专做「实时卷目录体积聚合表」引擎，但 pyofiles 已使独立库的差异化价值有限。O-Cleaner 本身已开源（Oerian/O-Cleaner），引擎代码随之公开、可被复用；单独拆库的维护成本 > 收益。若未来 pyofiles 停更或出现明确需求再评估。
+
 ---
 
 ## 七、文件资产与代码清单
