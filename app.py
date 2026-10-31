@@ -32,6 +32,7 @@ import shutil
 import socket
 import stat
 import string
+import struct
 import subprocess
 import sys
 import tempfile
@@ -40,8 +41,9 @@ import time
 import traceback
 import uuid
 import webbrowser
+from array import array
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -1131,6 +1133,357 @@ def _is_hidden_sys(name: str, path: str = "", attrs: int | None = None) -> bool:
     return bool(int(attrs) & _FILE_ATTR_HIDDEN)
 
 
+# ======================================================================
+# 自研 MFT 直读引擎（2026-10-31）：不装 WizTree 也能走 MFT 加速。
+# 原理：以管理员权限打开卷句柄（\\.\D:），FSCTL_GET_NTFS_VOLUME_DATA 拿到
+# $MFT 的起点与记录大小，顺 runlist 顺序读全部文件记录，解析每条记录的
+# $FILE_NAME（父引用 + 名字）与 $DATA（真实体积）属性，目录由 $INDEX_ROOT
+# 识别。产出与 _wiztree_parse **同形**的 table，直接复用 _wiztree_raw_nodes
+# 的展开链路 —— 两条引擎路径的树形状完全一致。
+# 约束与兜底：只读不写；需要管理员（卷 DASD 句柄）且卷是 NTFS；任何一步
+# 失败都返回 None，由调用方静默回落 PowerShell 递归，绝不让扫描挂掉。
+# 性能：纯 Python 解析百万级记录约数十秒，仍远快于 PS 逐目录递归（分钟级）。
+# ======================================================================
+
+_MFT_FSCTL_GET_NTFS_VOLUME_DATA = 0x00090064
+
+
+def _mft_runlist(buf: bytes, off: int) -> list[tuple[int, int]]:
+    """解析非驻留属性的 runlist，返回 [(起始 LCN, 簇数), ...]。"""
+    runs: list[tuple[int, int]] = []
+    lcn = 0
+    n = len(buf)
+    while off < n and buf[off] != 0:
+        header = buf[off]
+        off += 1
+        len_len = header & 0x0F
+        off_len = (header >> 4) & 0x0F
+        if not len_len or off + len_len > n:
+            break
+        clusters = int.from_bytes(buf[off:off + len_len], "little")
+        off += len_len
+        if off_len and off + off_len > n:
+            break
+        delta = int.from_bytes(buf[off:off + off_len], "little", signed=True) \
+            if off_len else 0
+        off += off_len
+        lcn += delta
+        if clusters and lcn > 0:
+            runs.append((lcn, clusters))
+    return runs
+
+
+def _mft_parse_record(rec: bytearray, frs_size: int):
+    """解析单条 MFT 文件记录（rec 会被 fixup 原地修改）。
+
+    返回 (parent_frn, name, real_size, is_dir)；记录无效/损坏返回 None。
+    名字取第一条非 DOS(8.3) 的 $FILE_NAME；体积以 $DATA 为准（非驻留读
+    header 的 real size，驻留读 content 长度）；目录以 $INDEX_ROOT 判定。
+    """
+    if len(rec) < 0x40 or rec[:4] != b"FILE":
+        return None
+    usa_off = rec[4] | (rec[5] << 8)
+    usa_cnt = rec[6] | (rec[7] << 8)
+    # 更新序列修正：每 512 字节扇区末 2 字节被检查值占用，须换回真实数据，
+    # 否则跨扇区边界的属性字段会读到脏字节（体积算错、名字乱码）。
+    if 0 < usa_off and usa_cnt > 1 and usa_off + usa_cnt * 2 <= len(rec):
+        for i in range(1, usa_cnt):
+            end = i * 512 - 2
+            if end + 2 > len(rec):
+                return None
+            rec[end] = rec[usa_off + i * 2]
+            rec[end + 1] = rec[usa_off + i * 2 + 1]
+    parent = -1
+    name = None
+    size = 0
+    is_dir = False
+    used = int.from_bytes(rec[0x18:0x1C], "little") or frs_size
+    off = rec[0x14] | (rec[0x15] << 8)
+    # 行走边界用「记录已用大小」：最后一条属性之后到记录尾部是零填充，
+    # 读到 a_len==0 就当属性区结束（不能当损坏 —— 真实 MFT 大多如此）。
+    while 0 < off <= frs_size - 16 and off < used:
+        a_type = int.from_bytes(rec[off:off + 4], "little")
+        if a_type == 0xFFFFFFFF:
+            break
+        a_len = int.from_bytes(rec[off + 4:off + 8], "little")
+        if a_len == 0:
+            break
+        if a_len < 24 or off + a_len > frs_size or a_len % 8:
+            return None                      # 属性越界/未对齐：记录视为损坏
+        nonres = rec[off + 8]
+        if a_type == 0x30 and nonres == 0:   # $FILE_NAME（驻留）
+            if name is None:
+                c = off + (rec[off + 0x14] | (rec[off + 0x15] << 8))
+                if 0x42 <= c <= frs_size - 0x42:
+                    parent = int.from_bytes(rec[c:c + 6], "little")
+                    nl = rec[c + 0x40]
+                    ns = rec[c + 0x41]
+                    if ns != 2 and 0 < nl <= 255:   # ns==2 是 DOS 8.3 短名
+                        name = rec[c + 0x42:c + 0x42 + nl * 2].decode(
+                            "utf-16-le", "replace")
+        elif a_type == 0x80:                 # $DATA
+            if nonres:
+                if not size:
+                    size = int.from_bytes(rec[off + 0x38:off + 0x40], "little")
+            else:
+                size = int.from_bytes(rec[off + 0x10:off + 0x14], "little")
+        elif a_type == 0x90:                 # $INDEX_ROOT → 目录
+            is_dir = True
+        off += a_len
+    if parent < 0:
+        return None
+    return parent, name, size, is_dir
+
+
+_MFT_K32_READY = False
+
+
+def _mft_k32():
+    """kernel32 句柄函数签名只配一次 —— 64 位下 HANDLE 不设 argtypes/restype
+    会被截成 32 位 c_int，句柄静默损坏（这类 bug 控制台里毫无征兆）。"""
+    global _MFT_K32_READY
+    k32 = ctypes.windll.kernel32
+    if not _MFT_K32_READY:
+        k32.CreateFileW.restype = ctypes.c_void_p
+        k32.CreateFileW.argtypes = [
+            ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p,
+            ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p]
+        k32.DeviceIoControl.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong,
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+            ctypes.c_void_p]
+        k32.SetFilePointerEx.argtypes = [
+            ctypes.c_void_p, ctypes.c_longlong,
+            ctypes.POINTER(ctypes.c_longlong), ctypes.c_ulong]
+        k32.ReadFile.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_ulong), ctypes.c_void_p]
+        _MFT_K32_READY = True
+    return k32
+
+
+def _mft_open_volume(letter: str):
+    """打开卷 DASD 句柄（只读）。非管理员/失败返回 None。"""
+    k32 = _mft_k32()
+    GENERIC_READ = 0x80000000
+    h = k32.CreateFileW("\\\\.\\{}:".format(letter), GENERIC_READ, 3, None, 3, 0, None)
+    if not h:
+        return None
+    return h
+
+
+def _mft_volume_ntfs(root: str) -> bool:
+    """卷文件系统是否 NTFS（MFT 引擎只对 NTFS 有意义）。"""
+    buf = ctypes.create_unicode_buffer(32)
+    ok = ctypes.windll.kernel32.GetVolumeInformationW(root, None, 0, None,
+                                                      None, None, buf, 32)
+    return bool(ok) and buf.value.upper().startswith("NTFS")
+
+
+def _mft_read_at(h, offset: int, size: int, buf) -> int:
+    """从卷句柄绝对偏移读 size 字节进 buf（buf 须 ≥ size），返回实读字节数。"""
+    k32 = _mft_k32()
+    moved = ctypes.c_longlong(0)
+    if not k32.SetFilePointerEx(h, ctypes.c_longlong(offset),
+                                ctypes.byref(moved), 0):
+        return 0
+    got = ctypes.c_ulong(0)
+    view = (ctypes.c_char * size).from_buffer(buf)
+    if not k32.ReadFile(h, view, size, ctypes.byref(got), None):
+        return 0
+    return got.value
+
+
+def _mft_build_table(letter: str, root: str, on_progress=None):
+    """直读 $MFT 产出与 _wiztree_parse 同形的 table。
+
+    返回 (table|None, info)；info 为 {"secs", "records"} 或失败原因字符串。
+    内存策略：frn = 记录号（MFT 天然稠密），parent/size 走稠密数组
+    （每条 8 字节），名字只给目录与达标文件留 —— 百万级记录也稳在几十 MB。
+    """
+    if os.name != "nt" or not is_admin():
+        return None, "需要管理员权限"
+    if not _mft_volume_ntfs(root):
+        return None, "卷不是 NTFS"
+    k32 = _mft_k32()
+    h = _mft_open_volume(letter)
+    if not h:
+        return None, "无法打开卷句柄（需要管理员权限）"
+    try:
+        # NTFS_VOLUME_DATA_BUFFER 实际 96 字节（5 个 LARGE_INTEGER 计数
+        # + 4 个 DWORD + 5 个 LARGE_INTEGER）。曾经给 80 字节导致
+        # DeviceIoControl 直接失败（提权探针实测），字段偏移也一并修正：
+        #   40 BytesPerSector · 44 BytesPerCluster · 48 BytesPerFileRecordSegment
+        #   52 ClustersPerFileRecordSegment · 56 MftValidDataLength · 64 MftStartLcn
+        vdb = ctypes.create_string_buffer(96)
+        br = ctypes.c_ulong(0)
+        if not k32.DeviceIoControl(h, _MFT_FSCTL_GET_NTFS_VOLUME_DATA, None, 0,
+                                   vdb, 96, ctypes.byref(br), None):
+            return None, "FSCTL_GET_NTFS_VOLUME_DATA 失败"
+        bpc = struct.unpack_from("<I", vdb, 44)[0]        # BytesPerCluster
+        frs = struct.unpack_from("<I", vdb, 48)[0]        # BytesPerFileRecordSegment
+        cpf = struct.unpack_from("<i", vdb, 52)[0]        # ClustersPerFileRecordSegment
+        mft_vdl = struct.unpack_from("<q", vdb, 56)[0]    # MftValidDataLength
+        mft_lcn = struct.unpack_from("<q", vdb, 64)[0]    # MftStartLcn
+        # ClustersPerFileRecordSegment：>0 时 FRS = cpf × 簇；<0 时 FRS 打包
+        # 进簇（FRS = 簇 × 2^|cpf|）；**==0 表示未打包**，此时以
+        # BytesPerFileRecordSegment（恒 1024）为准。曾经把 0 也当打包处理
+        # 算出 frs_size=4096 —— 每 4 条真实记录只解析出 1 条，目录树断裂
+        # （提权探针实测：D 盘 15.5 万「记录」实际只覆盖 620,800 条中的 1/4）。
+        frs_size = frs if cpf >= 0 else bpc * (2 ** (-cpf))
+        if frs_size <= 0 or bpc <= 0:
+            return None, "卷参数异常"
+
+        # 记录 0 就是 $MFT 自己：读它拿 $DATA 的 runlist（MFT 的全部盘区）
+        head = bytearray(frs_size)
+        if _mft_read_at(h, mft_lcn * bpc, frs_size, head) != frs_size:
+            return None, "读取 $MFT 记录失败"
+        head_info = _mft_parse_record(head, frs_size)
+        if head_info is None:
+            return None, "$MFT 记录解析失败"
+        # $MFT 的 $DATA runlist：非驻留属性从内容偏移处开始
+        runs: list[tuple[int, int]] = []
+        _p, _n, _s, _d = head_info
+        off = head[0x14] | (head[0x15] << 8)
+        while 0 < off <= frs_size - 16:
+            a_type = int.from_bytes(head[off:off + 4], "little")
+            if a_type == 0xFFFFFFFF:
+                break
+            a_len = int.from_bytes(head[off + 4:off + 8], "little")
+            if a_len < 24 or off + a_len > frs_size:
+                break
+            if a_type == 0x80 and head[off + 8] != 0:
+                c = off + (head[off + 0x20] | (head[off + 0x21] << 8))
+                runs = _mft_runlist(head[c:frs_size], 0)
+                break
+            off += a_len
+        if not runs:
+            return None, "$MFT runlist 为空"
+
+        est_records = max(1, mft_vdl // frs_size)
+        floor = DISK_TREE_MIN_CHILD_MB * 1024 * 1024
+        t0 = time.time()
+        arr_parent = array("q")
+        arr_size = array("q")
+        arr_flags = bytearray()            # bit0: 目录
+        dir_names: dict[int, str] = {}     # frn -> 目录名
+        file_keep: dict[int, tuple[str, int, int]] = {}  # frn -> (名, 体积, 父)
+        records = 0
+
+        def read_chunks():
+            """按 runlist 顺序吐出整条记录对齐的字节块（32MB 一读）。"""
+            carry = bytearray()
+            CH = max(frs_size * 1024, 1_048_576) - \
+                (max(frs_size * 1024, 1_048_576) % frs_size)
+            for lcn, clusters in runs:
+                pos = lcn * bpc
+                left = clusters * bpc
+                while left > 0:
+                    want = min(left, CH)
+                    want -= want % frs_size
+                    if want <= 0:
+                        break
+                    buf = bytearray(want)
+                    got = _mft_read_at(h, pos, want, buf)
+                    if got <= 0:
+                        return
+                    data = carry + buf[:got]
+                    usable = len(data) - (len(data) % frs_size)
+                    carry = data[usable:]
+                    yield data[:usable]
+                    pos += got
+                    left -= got
+            # 尾块不足一条记录：丢弃（截断的卷尾）
+
+        for chunk in read_chunks():
+            total = len(chunk)
+            for off in range(0, total, frs_size):
+                rec = chunk[off:off + frs_size]
+                idx = records
+                records += 1
+                in_use = len(rec) >= 0x18 and (rec[0x16] & 0x01)
+                info = _mft_parse_record(rec, frs_size) if in_use else None
+                if info is None:
+                    arr_parent.append(0)
+                    arr_size.append(0)
+                    arr_flags.append(0)
+                    continue
+                p, name, size, is_dir = info
+                arr_parent.append(p if 0 <= p < (1 << 47) else 0)
+                arr_size.append(size)
+                arr_flags.append(1 if is_dir else 0)
+                if is_dir and name and idx != 5:
+                    dir_names[idx] = name
+                elif not is_dir and name and (size >= floor or p == 5):
+                    # 与 _wiztree_parse 同一门槛：达标文件 + 盘根全保留
+                    # （AMTAG.BIN 这类小体积隐藏文件必须进「隐藏项」页签）
+                    file_keep[idx] = (name, size, p)
+            if on_progress and records % 65536 < frs_size // 1024 + 1:
+                try:
+                    on_progress(min(1.0, records / est_records))
+                except Exception:
+                    pass
+
+        # 目录体积聚合：文件沿 parent 链向上累加（数组下标即 frn，
+        # 每条链 8 字节/步，百万文件 × 平均深度十来层 = 秒级）。
+        dir_total: dict[int, int] = {}
+        n_recs = len(arr_size)
+        for idx in range(n_recs):
+            sz = arr_size[idx]
+            if not sz or (arr_flags[idx] & 1):
+                continue
+            p = arr_parent[idx]
+            hops = 0
+            while 0 < p < n_recs and hops < 128:
+                dir_total[p] = dir_total.get(p, 0) + sz
+                if p == 5:
+                    break
+                p = arr_parent[p]
+                hops += 1
+
+        # 目录路径：从根（frn 5）BFS 拼全路径；key 格式与
+        # _wiztree_parse 对齐（盘根带尾反斜杠，其余不带）。
+        dir_path: dict[int, str] = {5: root.lower()}
+        kids: dict[int, list[int]] = {}
+        for frn in dir_names:
+            p = arr_parent[frn]
+            if 0 < p < n_recs:
+                kids.setdefault(p, []).append(frn)
+        q = [5]
+        while q:
+            cur = q.pop()
+            base = dir_path[cur]
+            prefix = base if base.endswith("\\") else base + "\\"
+            for ch in kids.get(cur, ()):
+                dir_path[ch] = prefix + dir_names[ch]
+                q.append(ch)
+
+        dirs_out: dict[str, int] = {}
+        for frn, path in dir_path.items():
+            sz = dir_total.get(frn, 0)
+            if frn == 5:
+                dirs_out[root.lower()] = sz
+            elif sz >= floor or path.count("\\") <= 1:
+                dirs_out[path] = sz
+        files_out: dict[str, list] = {}
+        for frn, (name, size, p) in file_keep.items():
+            ppath = dir_path.get(p)
+            if ppath is None:
+                continue                    # 父目录不在树里（孤儿记录）
+            files_out.setdefault(ppath, []).append(
+                (name, size, ppath.rstrip("\\") + "\\" + name))
+        secs = round(time.time() - t0, 2)
+        return {"dirs": dirs_out, "files": files_out, "rows": records}, \
+            {"secs": secs, "records": records}
+    except Exception as e:                  # noqa: BLE001 —— 加速路径绝不挂掉扫描
+        return None, f"MFT 直读异常：{type(e).__name__}: {e}"
+    finally:
+        try:
+            ctypes.windll.kernel32.CloseHandle(h)
+        except Exception:
+            pass
+
+
 def _wiztree_raw_nodes(root: str, table: dict,
                        max_depth: int, min_child: int, ratio: float,
                        floor: int, max_per_dir: int, max_nodes: int,
@@ -1400,7 +1753,8 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
                 # 表留在内存里，供「逐层拆子项」与后续下钻直接查
                 with _lock:
                     _WIZ_DIRS[letter] = {"table": table, "at": time.time(),
-                                         "parse_s": round(parsed, 2)}
+                                         "parse_s": round(parsed, 2),
+                                         "engine": "wiztree"}
             except Exception as e:
                 table = None
                 werr = f"WizTree 导出解析失败：{e}"
@@ -1417,6 +1771,36 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
         werr = "未安装 WizTree"
 
     if engine != "wiztree":
+        # 自研 MFT 直读（2026-10-31）：不装 WizTree 的机器也能享受 MFT 级
+        # 加速 —— 管理员 + NTFS 时直读 $MFT 产出同形表；失败静默再回落
+        # PowerShell。引擎间关系：WizTree（外部工具）> MFT（自研）> PS 递归。
+        mft_tbl, mft_info = _mft_build_table(
+            letter, root,
+            on_progress=lambda frac: prog_set(
+                "mft", f"正在直读 {letter}: 盘的 MFT（自研引擎，"
+                       f"{int(frac * 100)}%）", 8 + 62 * frac))
+        if mft_tbl is not None:
+            try:
+                prog_set("tree", "正在按体积展开目录树", 72)
+                roots, rootfiles, total = _wiztree_raw_nodes(
+                    root, mft_tbl, depth_cap,
+                    DISK_TREE_MIN_CHILD_MB * 1024 * 1024,
+                    DISK_TREE_MIN_DESCEND_RATIO, DISK_TREE_MIN_DESCEND_FLOOR,
+                    DISK_TREE_MAX_PER_DIR, DISK_TREE_MAX_NODES,
+                    DISK_TREE_MAX_DESCENTS)
+                r = {"root": root.lower(), "nodes": roots, "rootfiles": rootfiles,
+                     "total": total}
+                engine = "mft"
+                table = mft_tbl
+                with _lock:
+                    _WIZ_DIRS[letter] = {"table": table, "at": time.time(),
+                                         "parse_s": mft_info["secs"],
+                                         "engine": "mft"}
+            except Exception as e:
+                table = None
+                werr = f"自研 MFT 展开失败：{e}"
+
+    if engine not in ("wiztree", "mft"):
         # PowerShell 只有一次阻塞调用，中途进度靠脚本自己往临时文件里写计数
         prog_file = os.path.join(
             tempfile.gettempdir(), f"oc-prog-{os.getpid()}-{letter}.txt")
@@ -1570,6 +1954,12 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
             if isinstance(ov.get("color"), str) and re.fullmatch(r"#[0-9a-fA-F]{6}", ov["color"]):
                 item["custom_color"] = ov["color"]
                 item["custom"] = True
+            # 整目录永久排除（#36）：占用排行里仍显示（用户要看它占多少），
+            # 但带标记 —— 前端据此显示「已排除」徽章并禁止勾选。
+            if ov.get("excluded") is True:
+                item["excluded"] = True
+                item["cleanable"] = False
+                item["custom"] = True
         return item
 
     root_key = str(r.get("root") or root).lower()
@@ -1602,7 +1992,8 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
         prog_set("inject", "补齐游戏本体节点", 88, indeterminate=True)
         have = {os.path.normpath(n["path"]).lower() for n in nodes if n.get("path")}
         wiz_tbl = _wiz_table(letter)
-        wiz_dirs_tbl = wiz_tbl.get("dirs") if engine == "wiztree" else None
+        wiz_dirs_tbl = wiz_tbl.get("dirs") \
+            if engine in ("wiztree", "mft") else None
         cands: list[str] = []
         for common in steam_common:
             c = os.path.normpath(common)
@@ -1676,7 +2067,8 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
         _pins = {}
     if _pins:
         wiz_tbl = _wiz_table(letter)
-        wiz_dirs_tbl2 = wiz_tbl.get("dirs") if engine == "wiztree" else None
+        wiz_dirs_tbl2 = wiz_tbl.get("dirs") \
+            if engine in ("wiztree", "mft") else None
         have2 = {os.path.normpath(n["path"]).lower() for n in nodes if n.get("path")}
         pinned_added = 0
         for pkey in _pins:
@@ -1736,7 +2128,7 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
     # 有 WizTree 时可以直接查内存表，比只靠树里有没有子节点更准：
     # 被体积门槛挡在树外的目录（<50 MB）照样应该允许点开看。
     wiz_dirs = _wiz_table(letter).get("dirs") \
-        if engine == "wiztree" else None
+        if engine in ("wiztree", "mft") else None
     prog_set("finish", "正在整理可下钻信息", 96)
     parent_keys = {n["parent"] for n in nodes}
     for n in nodes:
@@ -1769,15 +2161,20 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
         # 用了哪条扫描路径 —— 界面上要如实告诉用户「快是因为借了 WizTree」
         "engine": engine,
         "engine_label": ("WizTree MFT 加速" if engine == "wiztree"
+                         else "MFT 直读加速（自研）" if engine == "mft"
                          else "PowerShell 递归（未安装 WizTree）"),
-        "engine_note": (f"WizTree 导出 {table['rows']:,} 行，解析 "
-                        f"{_WIZ_DIRS.get(letter, {}).get('parse_s', '?')} 秒"
-                        if engine == "wiztree" else (werr or "")),
+        "engine_note": (
+            f"WizTree 导出 {table['rows']:,} 行，解析 "
+            f"{_WIZ_DIRS.get(letter, {}).get('parse_s', '?')} 秒"
+            if engine == "wiztree" else
+            (f"MFT 直读 {table['rows']:,} 条记录，解析 "
+             f"{_WIZ_DIRS.get(letter, {}).get('parse_s', '?')} 秒"
+             if engine == "mft" else (werr or ""))),
         # 结构化的行数/秒数：前端英文界面用它拼本地化文案（engine_note 是中文）
-        "engine_rows": (table["rows"] if engine == "wiztree" else None),
+        "engine_rows": (table["rows"] if engine in ("wiztree", "mft") else None),
         "engine_secs": (_WIZ_DIRS.get(letter, {}).get("parse_s")
-                        if engine == "wiztree" else None),
-        "subdir_ready": bool(engine == "wiztree"),
+                        if engine in ("wiztree", "mft") else None),
+        "subdir_ready": bool(engine in ("wiztree", "mft")),
     }
 
 
@@ -1824,7 +2221,7 @@ def list_subdirs(drive: str, path: str, limit: int = 80) -> dict:
                              "modified": "", "type": "file"})
         children.sort(key=lambda x: -x["size"])
         children = children[:limit]
-        engine = "wiztree"
+        engine = cached.get("engine") or "wiztree"
     else:
         engine = "powershell"
         # 无 MFT 加速时要现场递归量体积，一个 C:\Windows 就要 58 秒（实测）。
@@ -2377,6 +2774,10 @@ def load_overrides() -> dict:
                 entry[f] = v[f].strip()
         if isinstance(v.get("cleanable"), bool):
             entry["cleanable"] = v["cleanable"]
+        # 整目录永久排除（#36）：true 时该项从清理清单里消失（占用排行
+        # 里仍可见但带「已排除」徽章），不被「全选可清理」收进去。
+        if isinstance(v.get("excluded"), bool):
+            entry["excluded"] = v["excluded"]
         if isinstance(v.get("pin"), bool):
             entry["pin"] = v["pin"]          # 自定义提级（2026-10-13）
         # 标签样式与颜色（2026-10-14）：label_kind 只换徽章样式与颜色，
@@ -4080,10 +4481,16 @@ def check_deletable(path: str, kind: str = "tree",
             "appdata", "local", "locallow", "roaming", "local settings",
             "programdata", "temp", "tmp", "inetcache", "$recycle.bin",
         }
+        _home_low = os.path.expanduser("~").lower().rstrip("\\")
         for i in range(len(parts) - 1):
             if parts[i].lower() in _safe_ancestors:
                 continue
             anc_path = os.path.join(drive_root, *parts[:i + 1])
+            # 用户 Home 永远不参与「已安装程序」判定：Home 下含年份的
+            # 目录太常见（数据库备份、照片 2024……两个就能凑成误判），
+            # 而 Home 本质是各种东西的混杂地，不可能是单一程序安装目录。
+            if anc_path.lower().rstrip("\\") == _home_low:
+                continue
             if os.path.isdir(anc_path) and _looks_like_installed_program(anc_path):
                 return False, (
                     f"拒绝：{parts[-1]} 是已安装程序（{parts[i]}）自带的目录，"
@@ -5361,6 +5768,16 @@ def build_targets(drive: str | None, custom_path: str | None = None) -> list[dic
     # 放在最后统一做，这样内置目标与自动发现目标都能被同一套包覆盖。
     # 用户自定义覆盖再往后一步：三条优先级里用户排最前（最后应用、最高优先）。
     user_ov = load_overrides().get("targets", {})
+    # 整目录永久排除（#36）：被排除的目标直接不进清理清单 —— 自动发现
+    # 每次扫描都会重新提出这些目录，不在这里拦就等于没排除。
+    # 键两种形态都认：base_id 键（普通目标）与归一化路径键（树行右键）。
+    if any((v or {}).get("excluded") for v in user_ov.values()):
+        def _is_excluded(t: dict) -> bool:
+            if (user_ov.get(_override_key(t)) or {}).get("excluded"):
+                return True
+            low = os.path.normpath(t.get("path", "")).lower()
+            return (user_ov.get(low) or {}).get("excluded") is True
+        out = [t for t in out if not _is_excluded(t)]
     for t in out:
         try:
             packs_enrich_target(t, drive)
@@ -5564,11 +5981,29 @@ def history_stats(unit_ids: list[str] | None = None) -> dict:
          for k, v in by_target.items()),
         key=lambda x: -x["freed"])[:12]
 
+    # 近 30 天按天聚合（#33 趋势页）：日期轴均匀补零 —— 没清理的日子也是
+    # 柱状图的一部分（全空柱=这段时间没跑，比「柱子突然挤在一起」诚实）。
+    by_day: dict[str, dict] = {}
+    today = datetime.now().date()
+    day_keys = [(today - timedelta(days=29 - i)).isoformat() for i in range(30)]
+    for k in day_keys:
+        by_day[k] = {"day": k, "freed": 0, "runs": 0}
+    for h in hist:
+        day = str(h.get("time") or "")[:10]
+        slot = by_day.get(day)
+        if slot is None:
+            continue                      # 30 天窗口外的旧记录不上图
+        slot["freed"] += int(h.get("freed") or 0)
+        slot["runs"] += 1
+    days = [{"day": k, "freed": v["freed"], "runs": v["runs"],
+             "freed_h": human(v["freed"])} for k, v in by_day.items()]
+
     return {
         "run_count": run_count,
         "total_freed": total_freed, "total_freed_h": human(total_freed),
         "total_failed": total_failed,
         "first_time": first_ts, "last_time": last_ts,
+        "by_day": days,
         "by_category": [{"name": k, "freed": v, "freed_h": human(v)}
                         for k, v in sorted(by_category.items(), key=lambda x: -x[1])],
         "by_drive": [{"drive": k, "freed": v, "freed_h": human(v)}
@@ -5597,6 +6032,23 @@ DEFAULT_SCHEDULE = {"enabled": False, "interval_hours": 24, "preset": "safe",
 def schedule_state() -> dict:
     s = dict(DEFAULT_SCHEDULE)
     s.update(_load_json(SCHEDULE_PATH, {}, use_cache=False) or {})
+    # 定时任务执行摘要（#37）：从清理历史里找最近一次定时条目，给启动
+    # 横幅用 —— 后台跑完用户无感知，下次打开界面要能看到「它干了什么」。
+    try:
+        for h in load_history():
+            if not str(h.get("trigger") or "").startswith("定时"):
+                continue
+            s["last_summary"] = {
+                "time": h.get("time", ""),
+                "freed": int(h.get("freed") or 0),
+                "freed_h": human(int(h.get("freed") or 0)),
+                "failed": int(h.get("failed") or 0),
+                "targets": int(h.get("targets") or 0),
+                "drive": h.get("drive", ""),
+            }
+            break                     # history 是新的在前，第一条即最近一次
+    except Exception:
+        pass                          # 摘要失败不影响调度状态本身
     return s
 
 
@@ -6367,6 +6819,194 @@ def _watch_bigfiles(prog_file: str, stop: threading.Event) -> None:
             pass
 
 
+# ---- 重复大文件检测（#34）------------------------------------------------
+# 数据源是全盘扫描留下的 WizTree/MFT 明细缓存（_WIZ_DIRS），不重新遍历磁盘：
+# 大体积文件的清单已经有了，这里只做「同体积分组 + 采样哈希证实」两步。
+# 哈希只读每个文件的首尾各 1MB —— 1GB 文件也是 2MB 的 IO，同组文件通常
+# 个位数，整体秒级返回。只有哈希一致的组才上报（同体积但内容不同的不算，
+# 宁可少报也不误导删除）。
+DUP_FLOOR_MB = 100
+DUP_MAX_GROUPS = 30
+DUP_MAX_PER_GROUP = 50
+_DUPFILES_LOCK = threading.Lock()
+
+
+def _sample_hash(path: str, chunk: int = 1 << 20) -> str | None:
+    """首尾各 1MB 采样哈希；读不到（权限/占用）返回 None。"""
+    try:
+        sz = os.path.getsize(path)
+        if sz <= chunk * 2:
+            with open(path, "rb") as f:
+                data = f.read()
+        else:
+            with open(path, "rb") as f:
+                head = f.read(chunk)
+                f.seek(-chunk, os.SEEK_END)
+                tail = f.read(chunk)
+            data = head + tail
+        return hashlib.md5(data).hexdigest()
+    except OSError:
+        return None
+
+
+def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
+    """在扫描缓存里找「体积相同且首尾采样一致」的大文件组。
+
+    返回 groups（按可回收体积降序）：每组带 dup 文件数、可回收体积
+    （= 文件大小 × 多余份数）与成员清单；成员里 dup=true 的文件互相重复。
+    """
+    letter = (drive or "C").rstrip(":").upper()
+    cached = _WIZ_DIRS.get(letter)
+    if not cached or not cached.get("table"):
+        return {"error": f"请先对 {letter}: 盘做一次全盘扫描"
+                         "（重复检测基于扫描明细缓存，不重复读盘）",
+                "groups": []}
+    floor = max(1, int(floor_mb)) * 1024 * 1024
+    by_size: dict[int, list] = {}
+    for _parent, items in cached["table"]["files"].items():
+        for name, sz, full in items:
+            if sz >= floor:
+                by_size.setdefault(sz, []).append((full, name))
+    cand = [(sz, fs) for sz, fs in by_size.items() if len(fs) >= 2]
+    cand.sort(key=lambda x: -(x[0] * len(x[1])))
+    cand = cand[:DUP_MAX_GROUPS]
+
+    groups = []
+    for sz, fs in cand:
+        fs = fs[:DUP_MAX_PER_GROUP]
+        hashes: dict[str, list[str]] = {}
+        for full, _name in fs:
+            h = _sample_hash(full)
+            if h:
+                hashes.setdefault(h, []).append(full)
+        dup_fulls: set[str] = set()
+        for paths in hashes.values():
+            if len(paths) >= 2:
+                dup_fulls.update(paths)
+        if not dup_fulls:
+            continue                      # 同体积但内容不同：不算重复
+        members = [{"path": full, "name": name, "dup": full in dup_fulls}
+                   for full, name in fs]
+        n_dup = len(dup_fulls)
+        groups.append({
+            "size": sz, "size_h": human(sz),
+            "dup_count": n_dup,
+            "wasted": sz * (n_dup - 1), "wasted_h": human(sz * (n_dup - 1)),
+            "files": members,
+        })
+    groups.sort(key=lambda g: -g["wasted"])
+    return {"ok": True, "drive": letter, "floor_mb": DUP_FLOOR_MB,
+            "groups": groups}
+
+
+# ---- 下载目录整理建议（#35）----------------------------------------------
+# 下载目录是「装完就忘」的重灾区：安装包、镜像、压缩包堆成山。这里按
+# 知识库把顶层文件归类聚合，给出可执行的整理建议（不自动删 —— 建议卡
+# 只负责说清楚「什么能删、什么该转移」，动作留给用户）。
+def _downloads_dir() -> str:
+    """真实下载目录：先查注册表（用户可能改过位置），回落 ~/Downloads。"""
+    if IS_WINDOWS:
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer"
+                r"\User Shell Folders") as k:
+                val, _t = winreg.QueryValueEx(k, "{374DE290-123F-4565-9164-39C4925E467B}")
+            val = os.path.expandvars(str(val))
+            if os.path.isdir(val):
+                return val
+        except OSError:
+            pass
+    return os.path.join(os.path.expanduser("~"), "Downloads")
+
+
+# 建议文案按分类给：只挑下载目录里真实常见、且建议明确的几类，
+# 其余分类有数据但不强行给建议（宁缺毋滥）。
+_DOWNLOAD_HINTS = {
+    "安装包": "装完即可删 —— 重装随时能再下载",
+    "镜像": "确认不再挂载/刻录后可删",
+    "压缩包": "确认解压完整后可删，或转移到存储盘",
+    "文档": "建议归档到文档目录",
+    "视频": "大视频建议转移到存储盘",
+}
+
+
+def downloads_advice(limit_names: int = 3) -> dict:
+    """扫描下载目录顶层，按知识库分类聚合，产出整理建议卡数据。"""
+    root = _downloads_dir()
+    if not os.path.isdir(root):
+        return {"error": f"下载目录不存在：{root}", "path": root}
+    agg: dict[str, dict] = {}
+    total_files = 0
+    total_size = 0
+    try:
+        entries = list(os.scandir(root))
+    except OSError as e:
+        return {"error": f"无法读取下载目录：{e}", "path": root}
+    for e in entries:
+        try:
+            if e.is_dir():
+                # 子目录只统计体积（可能是解压产物，单独一组提示）
+                sz = _dir_size(e.path, shallow=True)
+                slot = agg.setdefault("子文件夹", {
+                    "category": "子文件夹", "count": 0, "size": 0,
+                    "cleanable": False, "names": []})
+                slot["count"] += 1
+                slot["size"] += sz
+                continue
+            sz = e.stat().st_size
+        except OSError:
+            continue
+        total_files += 1
+        total_size += sz
+        info = identify(e.name, e.path, "file")
+        cat = info.get("category") or "未识别"
+        slot = agg.setdefault(cat, {
+            "category": cat, "count": 0, "size": 0,
+            "cleanable": bool(info.get("cleanable")), "names": []})
+        slot["count"] += 1
+        slot["size"] += sz
+        if info.get("cleanable"):
+            slot["cleanable"] = True
+        if len(slot["names"]) < limit_names:
+            slot["names"].append(e.name)
+    groups = sorted(agg.values(), key=lambda g: -g["size"])
+    for g in groups:
+        g["size_h"] = human(g["size"])
+        if g["category"] in _DOWNLOAD_HINTS:
+            g["hint"] = _DOWNLOAD_HINTS[g["category"]]
+    # 建议卡头部的一句话总结：最有行动价值的那一条
+    headline = ""
+    for g in groups:
+        if g["category"] in _DOWNLOAD_HINTS and g["size"] > 0:
+            headline = (f"{g['category']} {g['count']} 个共 {g['size_h']}，"
+                        + _DOWNLOAD_HINTS[g["category"]])
+            break
+    return {"ok": True, "path": root,
+            "total_files": total_files, "total_size": total_size,
+            "total_size_h": human(total_size),
+            "headline": headline, "groups": groups}
+
+
+def _dir_size(path: str, shallow: bool = True, budget: list | None = None) -> int:
+    """目录体积；shallow=True 时只算一层（下载目录子目录够用了）。"""
+    total = 0
+    try:
+        with os.scandir(path) as it:
+            for e in it:
+                try:
+                    if e.is_file():
+                        total += e.stat().st_size
+                    elif not shallow and e.is_dir():
+                        total += _dir_size(e.path, shallow=False)
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return total
+
+
 def ai_chat(messages: list[dict], timeout: int | None = None) -> tuple[bool, str]:
     """调用用户自己的 Chat Completions 接口。返回 (成功, 文本或错误)。"""
     cfg = load_ai_config()
@@ -6801,6 +7441,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(data if isinstance(data, list) else [])
         if route == "/__oc__/stats":
             return self._json(history_stats())
+        if route == "/__oc__/downloads-advice":
+            # 下载目录整理建议（#35）：只读顶层，不递归不改文件
+            return self._json(downloads_advice())
         if route == "/__oc__/overrides":
             return self._json(load_overrides())
         if route == "/__oc__/bundle/export":
@@ -7179,6 +7822,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(big_files(str(body.get("drive") or ""),
                                         limit=limit_n))
 
+        if route == "/__oc__/dupfiles":
+            # 重复大文件（#34）：基于扫描明细缓存，同体积分组 + 采样哈希。
+            # 只读不删，检测本身也没有写操作，不需要像 bigfiles 那样独占锁。
+            return self._json(dupfiles_scan(str(body.get("drive") or "")))
+
         # ---- 一键清空「所选项」的回收站 ----
         # 按原始路径精确匹配回收站条目，只删配对的 $I/$R 文件，不动回收站
         # 里的其它内容（用户自己删的文件原样保留）。请求里的路径只用于
@@ -7425,6 +8073,8 @@ class Handler(BaseHTTPRequestHandler):
                     entry[f] = v.strip()
             if isinstance(body.get("cleanable"), bool):
                 entry["cleanable"] = body["cleanable"]
+            if isinstance(body.get("excluded"), bool):
+                entry["excluded"] = body["excluded"]   # 整目录永久排除（#36）
             if isinstance(body.get("pin"), bool):
                 entry["pin"] = body["pin"]
             if body.get("label_kind") in ("clean", "unk", "keep"):

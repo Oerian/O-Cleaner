@@ -871,6 +871,19 @@ class CDP {
   })()`);
   await sleep(600);
 
+  // ---- 重复大文件（#34）：全盘扫描后缓存已就位，端点必须能出结果 ----
+  try {
+    const dup = await (await fetch(URL_ + "/__oc__/dupfiles", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ drive: scanDrive }),
+    })).json();
+    checkScan("重复大文件：扫描缓存已就位时端点不报错",
+          !dup.error && Array.isArray(dup.groups),
+          dup.error || `${(dup.groups || []).length} 组`);
+  } catch (e) {
+    skip("重复大文件端点", "请求失败：" + e.message);
+  }
+
   // ---- 逐层下钻：这是「大清理项可点击查看子项」的核心 ----
   console.log("\n  --- 逐层下钻 ---");
   const beforeDrill = await evaluate(`(() => {
@@ -1952,6 +1965,87 @@ class CDP {
   })()`);
   check("清理结果弹窗提供一键清空回收站入口（两段式确认第一段）",
         ebc.ok && ebc.armed, JSON.stringify(ebc));
+
+  // ---------- 清理成果趋势页（#33）：30 天按日柱状图 ----------  console.log("\n  --- 清理成果趋势页 ---");
+  try {
+    const trend = await evaluate(`(async () => {
+      const r = await fetch(location.origin + '/__oc__/stats');
+      const s = await r.json();
+      const days = s.by_day || [];
+      // UI：展开「累计」面板的明细，找 30 天图（仅在有清理记录的日子时渲染）
+      const det = document.querySelector('#cumulative details.sub');
+      if (det) { det.open = true; await new Promise(res => setTimeout(res, 250)); }
+      const chart = document.querySelector('#cumulative .chart.day');
+      return {
+        n: days.length,
+        hasFreed: days.some(d => d.freed > 0),
+        firstDay: days[0] ? days[0].day : "",
+        lastDay: days.length ? days[days.length - 1].day : "",
+        fieldsOk: days.every(d => "freed" in d && "runs" in d && "freed_h" in d),
+        chartBars: chart ? chart.querySelectorAll('.bar').length : 0,
+      };
+    })()`);
+    check("趋势接口：by_day 恒为 30 天且字段齐全",
+          trend.n === 30 && trend.fieldsOk, `n=${trend.n}`);
+    check("趋势接口：日期轴连续（首尾差 29 天）",
+          trend.firstDay && trend.lastDay &&
+          (new Date(trend.lastDay) - new Date(trend.firstDay)) / 86400000 === 29,
+          `${trend.firstDay} → ${trend.lastDay}`);
+    if (trend.hasFreed) {
+      check("趋势 UI：有清理记录时 30 天图渲染 30 根柱",
+            trend.chartBars === 30, `bars=${trend.chartBars}`);
+    } else {
+      skip("趋势 UI 柱数", "本机近 30 天无清理记录（灰柱图不渲染属预期）");
+    }
+  } catch (e) {
+    skip("清理成果趋势页", "评估失败：" + e.message);
+  }
+
+  // ---------- 键盘导航（#38）：↑↓ 焦点 / 空格勾选 / Enter 下钻 ----------
+  console.log("\n  --- 键盘导航 ---");
+  try {
+    const kb = await evaluate(`(() => {
+      const rows = [...document.querySelectorAll('#fsChart .vrow')]
+        .filter(r => r.getBoundingClientRect().height > 0);
+      if (!rows.length) return { none: true };
+      const mk = k => document.dispatchEvent(new KeyboardEvent('keydown',
+        { key: k, bubbles: true, cancelable: true }));
+      mk('ArrowDown'); mk('ArrowDown');
+      const focused = document.querySelector('#fsChart .vrow.kbd');
+      const idx2 = [...document.querySelectorAll('#fsChart .vrow.kbd')].length;
+      const cbBefore = focused ? focused.classList.contains('kbd') : false;
+      // 空格勾选焦点行
+      let checkedDelta = null;
+      const cb = focused ? focused.querySelector('.rowsel') : null;
+      if (cb) {
+        const before = cb.checked;
+        mk(' ');
+        checkedDelta = { before, after: cb.checked };
+      }
+      mk('ArrowUp');
+      return {
+        n: rows.length,
+        hasFocus: !!focused,
+        cb: checkedDelta,
+        upWorked: document.querySelectorAll('#fsChart .vrow.kbd').length === 1,
+      };
+    })()`);
+    if (kb.none) {
+      skip("键盘导航", "排行无可见行");
+    } else {
+      check("键盘导航：↓ 移出焦点描边", kb.hasFocus && kb.upWorked,
+            `rows=${kb.n}`);
+      if (kb.cb) {
+        check("键盘导航：空格切换焦点行勾选",
+              kb.cb.before !== kb.cb.after,
+              `${kb.cb.before} → ${kb.cb.after}`);
+      } else {
+        skip("键盘导航空格", "焦点行无可勾选框（合成行/已排除）");
+      }
+    }
+  } catch (e) {
+    skip("键盘导航", "评估失败：" + e.message);
+  }
 
   // ---------- 小视口响应式 ----------
   // 浏览器窗口缩到 ~800×600 后界面必须仍完整可用：不允许出现横向滚动条，

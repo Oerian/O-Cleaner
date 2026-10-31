@@ -1474,6 +1474,38 @@ SECURITY 该处表述未动。
 
 **④ 环境备注**：本机 8770-8772 被三个提权僵尸实例占着（提权测试遗留，CommandLine 读不到），端口顺延逻辑会跳到更后面；起测试实例用 `--port 8797 --no-browser` 显式指定最稳。
 
+### 50. 功能+UI 十连发：自研 MFT 引擎 + 九项体验升级（2026-10-31）
+
+用户「继续给出功能和ui优化方向」→ 5 功能 + 5 UI 方向 → 「全做，考虑自研MFT，在缺乏wiztree的情况下加快扫描速度」。任务 #32–#43 全部完成。**未发版**（版本号仍 2.10）。
+
+**① 自研 MFT 扫描引擎（#32，本批最大件）**：无 WizTree（或 WizTree 不可用）时用 NTFS MFT 直读代替 PowerShell 全盘遍历。引擎链 **WizTree → 自研 MFT → PS walk**，失败静默回落。产出与 `_wiztree_parse` 同形 table（`{dirs, files, rows}`），直接复用 `_wiztree_raw_nodes` 消费链路；`_scan_overview_impl` 各处门（游戏注入/pins/can_drill/subdir_ready）与 payload（engine_label/note/rows/secs）三引擎分支齐全。
+- **实现要点**（app.py `_mft_build_table` 一族）：`\\.\C:` 卷句柄（ctypes 必须 `_mft_k32()` 一次性配全 argtypes/restype，64 位 HANDLE 不设会被截断）→ `FSCTL_GET_NTFS_VOLUME_DATA` → 读记录 0 的 $DATA runlist → 分块（32MB）流式读全部记录 → `array('q')` 稠密数组存 parent/size（8 字节/条）→ 文件沿 parent 链向上聚目录体积 → BFS 从 frn 5 拼路径。
+- **两个真 bug（提权探针实测抓出）**：
+  1. `NTFS_VOLUME_DATA_BUFFER` 实际 **96 字节**（曾给 80 → DeviceIoControl 直接失败）；字段偏移一并修正（BytesPerCluster@44、FRS@48、CPF@52、VDL@56、MftStartLcn@64）。
+  2. `ClustersPerFileRecordSegment == 0` 表示**未打包**，必须用 `BytesPerFileRecordSegment`（1024）；曾把 0 当打包处理算出 4096 → **每 4 条真实记录只解析出 1 条**，目录树断裂（D 盘 15.5 万「记录」实际只覆盖 62 万条中的 1/4）。
+- **真实卷验证**（提权探针 `%TEMP%\oc_mft_probe_out.json`）：D 盘 620,800 条 / **2.32 秒**（steam 367.69GB、GoPro-Exports 33.87GB 分布正确）、C 盘 1,164,288 条 / **8.89 秒**（Users 58.33GB / Windows 29.24GB）——对比 WizTree 导出+解析数十秒，无依赖且快一个量级。
+- 解析器合成记录单测进 selftest 4 项（runlist 回环、文件记录 fixup+$DATA、目录记录 $INDEX_ROOT、垃圾记录返回 None）。**教训**：调试时 settrace 指向的「fixup 边界误判」是测试脚本自己的错（名字长度声明 4 字符但只写 2 字符内容），解析器本身没问题——先怀疑测试再怀疑实现。
+
+**② 清理成果趋势页（#33）**：`history_stats()` 新增 `by_day`（近 30 天按日聚合，**日期轴均匀补零**——没清理的日子也是柱，全空柱=这段时间没跑，比柱子挤在一起诚实）；累计面板明细里新增每日趋势图（`.chart.day` 绿色渐变区分按次图，今天一柱描边）。CDP 断言：by_day 恒 30 + 日期轴连续（注意 **stats 端点是 `/__oc__/stats`**，`/__oc__/history` 是原始记录列表）。
+
+**③ 重复大文件检测（#34）**：`/__oc__/dupfiles` 端点 + 工具栏「重复大文件」模态。基于**全盘扫描明细缓存**（`_WIZ_DIRS`）不重复读盘：≥100MB 同体积分组 → 首尾各 1MB 采样哈希证实（1GB 文件也是 2MB IO）→ **只报哈希一致的组**（同体积内容不同不算，杜绝误导删除），按可回收体积（大小×(份数−1)）降序，组数/组内文件数上限 30/50。真实冒烟：D 盘 4 组约 4.6GB 可回收。selftest 用 3 个 1MB 真实文件（a/b 内容一致、c 同体积不同内容）走全链路。
+
+**④ 下载目录整理建议（#35）**：`/__oc__/downloads-advice` + 工具栏「下载整理」模态。下载目录定位先查注册表 User Shell Folders（用户可能改过位置）回落 ~/Downloads；顶层文件按知识库 identify 归类聚合，子目录单列一组；建议文案按分类（安装包「装完即可删」、压缩包「确认解压后清理」等），头部给最有行动价值的一句话总结。只读不动文件。
+
+**⑤ 整目录永久排除（#36）**：右键覆盖弹窗新增「永久排除」开关（overrides 新字段 `excluded`，`/overrides/set` 接受、`load_overrides` 认）。生效点双保险：`build_targets` 末尾剔除（**键两种形态都认**——base_id 键与归一化路径键，树行右键写的是路径键）；树行 `mk()` 打 `excluded` 标记（排行仍显示但「已排除」徽章 + 禁勾选 + cleanable 压 False）——自动发现每次扫描都会重新提出目录，不拦就等于没排除。
+
+**⑥ 定时任务执行摘要横幅（#37）**：`schedule_state()` 从清理历史找最近一次 trigger 以「定时」开头的条目组成 `last_summary`（后台跑完用户无感知，下次打开界面必须能看到它干了什么）；前端 `renderSchSummary()` 在页顶渲染可关闭横幅，localStorage 记录已展示的时间戳同一次不重复弹。**注意**：新增渲染函数必须加进 `setLang` 的重画列表（selftest 有硬断言抓漏网）。
+
+**⑦ 键盘导航（#38）**：占用排行 ↑↓ 移动焦点（`.vrow.kbd` 描边 + scrollIntoView）、空格切换焦点行勾选（复用 `.rowsel` change 事件）、Enter 等价点击（下钻/详情分流全在点击处理器里，不重复实现）。只在扫描概览视图且焦点不在输入框/弹窗时生效，不抢表单的键。
+
+**⑧ 行密度两档（#39）**：工具栏「紧凑模式/舒适模式」切换，body.dense 类 + localStorage 记忆（`oc-dense`）；紧凑档压缩行距、隐藏 `.vdesc` 说明行、清行距 margin。**selftest 教训**：`_css = html.replace(" ", "")` 是去空格形式，CSS 断言要写 `body.dense.vrow{padding` 而不是带空格的源码形式。
+
+**⑨ 清理成果卡（#40）**：结果弹窗顶部升级为成果卡（30px 大号释放量 + 项数/秒/失败三统计格 + 贡献前三行），表格/警告/回收站逻辑不动。
+
+**⑩ 磁盘概览直连扫描（#41）+ 小视口头部收敛（#42）**：磁盘概览卡右上角新增「🔍 全盘扫描」按钮（`btnDiskFull` → `startFullScan()`，概览页一步直达不用回工具栏）；`@media(max-height:700px/560px)` 两档压缩吸顶头（padding 收半、隐藏副标题、字号降、hrow 不换行改横滚）。
+
+**回归**：selftest **534-0-6**（本批 +29：MFT 4、趋势 5、重复文件 4、下载整理 5、永久排除 3、定时摘要 3、键盘 1、密度 1、成果卡 1、直连 1、头部 1）；audit_dead 干净（CSS 未引用 0、i18n/CSS 变量双向 0）；CDP +8（趋势 2、dupfiles 1、键盘 2-3，见 `tools/cdp_check.js` 对应段）。Home 豁免修复顺带解决一处**通用误判**：`_looks_like_installed_program` 的祖先链检查把用户 Home 也当候选，主目录下有两个含年份的文件夹（数据库备份、照片 2024……）就能把用户 Temp 判成「程序自带目录」——Home 本质是混杂地，永不该参与该判定。
+
 ---
 
 ## 七、文件资产与代码清单

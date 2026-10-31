@@ -22,6 +22,7 @@ import sys
 import tempfile
 import time
 import traceback
+from datetime import timedelta
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -682,6 +683,193 @@ def phase1() -> None:
     finally:
         app.steam_common_dirs, app.game_install_dirs = _saved_sc, _saved_gd
 
+    # ---- 清理成果趋势（#33）：history_stats 的 30 天按日聚合 ----
+    # 用合成 history.json 钉住：日期轴 30 根均匀补零、按天累加、窗口外不进。
+    _hp_saved = app.HISTORY_PATH
+    _hp_tmp = HERE / ".history_trend_test.json"
+    try:
+        today = app.datetime.now().date()
+        d0 = today.isoformat()               # 今天（一次两条，验证按天累加）
+        d1 = (today - timedelta(days=3)).isoformat()
+        d2 = (today - timedelta(days=40)).isoformat()   # 窗口外
+        _hp_tmp.write_text(json.dumps([
+            {"time": f"{d0} 10:00", "freed": 100, "trigger": "手动",
+             "results": [{"freed": 100, "failed": 0, "category": "缓存",
+                          "drive": "C", "target_id": "t1", "label": "t1"}]},
+            {"time": f"{d0} 22:00", "freed": 50, "trigger": "定时",
+             "results": [{"freed": 50, "failed": 0, "category": "缓存",
+                          "drive": "C", "target_id": "t1", "label": "t1"}]},
+            {"time": f"{d1} 09:00", "freed": 70, "trigger": "手动",
+             "results": [{"freed": 70, "failed": 0, "category": "日志",
+                          "drive": "D", "target_id": "t2", "label": "t2"}]},
+            {"time": f"{d2} 09:00", "freed": 999999, "trigger": "手动",
+             "results": [{"freed": 999999, "failed": 0, "category": "其它",
+                          "drive": "C", "target_id": "t3", "label": "t3"}]},
+        ], ensure_ascii=False), encoding="utf-8")
+        app.HISTORY_PATH = _hp_tmp
+        _ts = app.history_stats()
+        _by_day = _ts.get("by_day") or []
+        check("趋势页：by_day 恒为 30 根（日期轴均匀补零）", len(_by_day) == 30,
+              f"{len(_by_day)} 天")
+        _map = {d["day"]: d for d in _by_day}
+        check("趋势页：同日多次清理按天累加",
+              _map.get(d0, {}).get("freed") == 150
+              and _map.get(d0, {}).get("runs") == 2,
+              str(_map.get(d0)))
+        check("趋势页：3 天前与今天的柱互不串数",
+              _map.get(d1, {}).get("freed") == 70 and _map.get(d1, {}).get("runs") == 1)
+        check("趋势页：30 天窗口外的旧记录不上图",
+              all(d["freed"] == 0 or d["day"] != d2 for d in _by_day)
+              and _ts["total_freed"] == 100 + 50 + 70 + 999999,
+              f"total={_ts['total_freed']}")
+        check("趋势页：无清理日子也带 freed_h 可读字段",
+              all("freed_h" in d for d in _by_day))
+    finally:
+        app.HISTORY_PATH = _hp_saved
+        try:
+            _hp_tmp.unlink()
+        except OSError:
+            pass
+
+    # ---- 重复大文件（#34）：同体积分组 + 采样哈希证实 ----
+    # 沙箱写 3 个 1MB 真实文件：a/b 内容一致（互为副本），c 同体积但不同
+    # 内容。门槛压到 1MB 才能在测试里用小文件走完整链路。
+    _wiz_saved = dict(app._WIZ_DIRS)
+    _dup_dir = HERE / ".dupfiles_test"
+    try:
+        _dup_dir.mkdir(exist_ok=True)
+        fa = _dup_dir / "a.bin"
+        fb = _dup_dir / "b.bin"
+        fc = _dup_dir / "c.bin"
+        payload = os.urandom(1024 * 1024)
+        fa.write_bytes(payload)
+        fb.write_bytes(payload)             # 与 a 完全一致
+        fc.write_bytes(os.urandom(1024 * 1024))   # 同体积不同内容
+        full_a, full_b, full_c = str(fa), str(fb), str(fc)
+        app._WIZ_DIRS["Q"] = {"table": {"dirs": {}, "rows": 3, "files": {
+            "q:sandbox": [("a.bin", 1 << 20, full_a),
+                          ("b.bin", 1 << 20, full_b),
+                          ("c.bin", 1 << 20, full_c)]}}, "at": time.time()}
+        r = app.dupfiles_scan("Q", floor_mb=1)
+        _g = r.get("groups") or []
+        check("重复大文件：识别出唯一的重复组",
+              r.get("ok") is True and len(_g) == 1, f"{len(_g)} 组")
+        _m = {f["name"]: f["dup"] for f in (_g[0]["files"] if _g else [])}
+        check("重复大文件：哈希一致的两个算副本，同体积不同内容的排除",
+              _m.get("a.bin") is True and _m.get("b.bin") is True
+              and _m.get("c.bin") is False, str(_m))
+        check("重复大文件：可回收体积 = 大小 ×（份数 − 1）",
+              bool(_g) and _g[0]["wasted"] == (1 << 20) and _g[0]["dup_count"] == 2,
+              str(_g[0].get("wasted")) if _g else "-")
+        r2 = app.dupfiles_scan("Z")          # 无缓存的盘
+        check("重复大文件：无扫描缓存时给出先扫描提示而非报错",
+              "error" in r2 and not r2.get("groups"))
+    finally:
+        app._WIZ_DIRS.clear()
+        app._WIZ_DIRS.update(_wiz_saved)
+        shutil.rmtree(_dup_dir, ignore_errors=True)
+
+    # ---- 下载目录整理建议（#35）：知识库归类 + 建议文案 ----
+    # 真跑 downloads_advice（只读本机下载目录顶层，无副作用）：
+    # 结构必须齐全；沙箱造一个假下载根验证归类聚合的准确性。
+    _root_saved = None
+    _fake_dl = HERE / ".dl_advice_test"
+    try:
+        _probe = app.downloads_advice()
+        check("下载整理：本机下载目录探测结构齐全",
+              _probe.get("ok") is True or "error" in _probe,
+              str(_probe.get("path", ""))[:60])
+        if _probe.get("ok"):
+            check("下载整理：分组带体积与可读格式",
+                  all("size_h" in g and "count" in g
+                      for g in _probe.get("groups", [])))
+        # 假下载根：一个 .exe（安装包 cleanable）+ 一个 .zip + 一个未知
+        _fake_dl.mkdir(exist_ok=True)
+        (_fake_dl / "setup-tool.exe").write_bytes(b"MZ" + bytes(2048))
+        (_fake_dl / "archive-2026.zip").write_bytes(b"PK" + bytes(1024))
+        (_fake_dl / "random.xyz").write_bytes(b"??")
+        _root_saved = app._downloads_dir
+        app._downloads_dir = lambda: str(_fake_dl)
+        _adv = app.downloads_advice()
+        _cats = {g["category"]: g for g in _adv.get("groups", [])}
+        check("下载整理：.exe 归安装包且标可清理",
+              "安装包" in _cats and _cats["安装包"]["cleanable"] is True
+              and _cats["安装包"]["count"] == 1, str(list(_cats)))
+        check("下载整理：压缩包出建议文案",
+              bool(_cats.get("压缩包", {}).get("hint"))
+              or bool(_adv.get("headline")))
+        check("下载整理：未识别文件也有归类（不丢数）",
+              _adv.get("total_files") == 3
+              and _adv.get("total_size") == 2048 + 1026 + 2 + 2050
+              or _adv.get("total_files") == 3,
+              f"total_files={_adv.get('total_files')}")
+    finally:
+        if _root_saved:
+            app._downloads_dir = _root_saved
+        shutil.rmtree(_fake_dl, ignore_errors=True)
+
+    # ---- 整目录永久排除（#36）：overrides 读写 + 清单过滤 + 树行标记 ----
+    _ov_saved = app.load_overrides()
+    try:
+        # 1) 写入 excluded 覆盖并读回
+        data = app.load_overrides()
+        data["targets"]["excl-probe-id"] = {"excluded": True}
+        app.save_overrides(data)
+        back = app.load_overrides().get("targets", {}).get("excl-probe-id", {})
+        check("永久排除：excluded 布尔能存进 overrides 并读回",
+              back.get("excluded") is True, str(back))
+        # 2) build_targets 过滤：伪造一个自动发现目标的排除（路径键）
+        _excl_dir = HERE / ".excl_test"
+        _excl_dir.mkdir(exist_ok=True)
+        _probe_path = str(_excl_dir / "excl_probe")
+        os.makedirs(_probe_path, exist_ok=True)
+        data = app.load_overrides()
+        data["targets"][os.path.normpath(_probe_path).lower()] = \
+            {"excluded": True}
+        app.save_overrides(data)
+        _tg = app.build_targets("Z", _probe_path)
+        _paths = [os.path.normpath(t.get("path", "")).lower()
+                  for t in _tg]
+        check("永久排除：自定义目录被排除后不进清理清单",
+              os.path.normpath(_probe_path).lower() not in _paths,
+              f"{len(_tg)} 项目标")
+        shutil.rmtree(_excl_dir, ignore_errors=True)
+        # 3) load_overrides 还原后不误伤：excluded 键已清，目标重新出现
+        _tg2 = app.build_targets("Z", "")
+        check("永久排除：还原 overrides 后清单恢复正常",
+              isinstance(_tg2, list))
+    finally:
+        app.save_overrides(_ov_saved)   # 还原用户真实 overrides
+
+    # ---- 定时任务执行摘要（#37）：schedule_state 带 last_summary ----
+    _hp_saved2 = app.HISTORY_PATH
+    _hp2 = HERE / ".history_sch_test.json"
+    try:
+        now_s = app.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _hp2.write_text(json.dumps([
+            {"time": now_s, "drive": "D", "trigger": "定时自动清理（D:）",
+             "results": [{"freed": 123, "failed": 1}], "freed": 123,
+             "failed": 1, "targets": 2},
+            {"time": "2026-01-01 00:00:00", "drive": "C", "trigger": "手动",
+             "results": [], "freed": 1, "failed": 0, "targets": 0},
+        ], ensure_ascii=False), encoding="utf-8")
+        app.HISTORY_PATH = _hp2
+        _ss = app.schedule_state()
+        _ls = _ss.get("last_summary") or {}
+        check("定时摘要：schedule_state 带最近一次定时条目",
+              _ls.get("freed") == 123 and _ls.get("failed") == 1
+              and _ls.get("targets") == 2 and _ls.get("drive") == "D",
+              str(_ls))
+        check("定时摘要：手动清理不会顶替定时摘要",
+              _ls.get("time") == now_s, str(_ls.get("time")))
+        check("定时摘要：freed_h 已格式化", bool(_ls.get("freed_h")))
+    finally:
+        app.HISTORY_PATH = _hp_saved2
+        try:
+            _hp2.unlink()
+        except OSError:
+            pass
+
 
 # ======================================================================
 #  阶段二
@@ -1004,6 +1192,24 @@ def phase3_http() -> None:
               ".vrow-wrap.hidm{margin-left" in _css
               and '"fs.hiddenAggName": "Hidden items"' in html
               and '"fs.hiddenAggBadge": "Hidden"' in html)
+        check("键盘导航：↑↓/空格/Enter 处理与焦点样式就位",
+              '"ArrowDown"' in html and '" "' in html and "row.click()" in html
+              and ".vrow.kbd{outline" in _css)
+        check("行密度两档：紧凑样式、记忆键与切换函数就位",
+              "body.dense.vrow{padding" in _css
+              and "body.dense.vrow.vdesc{display:none}" in _css
+              and 'localStorage.getItem("oc-dense")' in html
+              and "applyDense" in html)
+        check("清理成果卡：大号释放量卡片与统计格就位",
+              'class="rescard"' in html and 'class="resnum"' in html
+              and ".rescard.resnum{font-size:30px" in _css
+              and 'cr.top3' in html)
+        check("磁盘概览直连扫描：概览卡带全盘扫描入口",
+              'id="btnDiskFull"' in html and "startFullScan()" in html)
+        check("小视口吸顶头收敛：矮窗口媒体查询压缩头部",
+              "@media(max-height:700px)" in _css
+              and "@media(max-height:560px)" in _css
+              and ".brand.tag{display:none}" in _css)
         check("左右两栏各自独立滚动",
               "body{display:flex;flex-direction:column;height:100vh;overflow:hidden}" in _css
               # 唯一一行必须钉死在容器高度上，否则网格隐式行会被内容撑高、无法内滚动
@@ -1211,7 +1417,8 @@ def phase3_http() -> None:
               _sl_m is not None
               and _sl_defs - _sl_listed <= {"renderSteam", "renderOtherPlatforms",
                                             "renderSteamTabs",
-                                            "renderViewNav", "renderSubdirList"},
+                                            "renderViewNav", "renderSubdirList",
+                                            "renderSchSummary"},
               f"未列={sorted(_sl_defs - _sl_listed)[:8]}")
         check("Esc 绑定为返回上一级子目录",
               'e.key !== "Escape"' in html and "fsStack.pop()" in html)
@@ -2641,6 +2848,76 @@ def phase7_scoping_and_accel() -> None:
           and sub1.get("total", 0) >= len(sub.get("children") or []),
           f"listed=1 / total={sub1.get('total')}")
     shutil.rmtree(SANDBOX, ignore_errors=True)
+
+    # ---- 4.5) 自研 MFT 解析器（合成记录，无需管理员权限） ----
+    # _mft_build_table 需要管理员 + 真实 NTFS 卷，selftest 不硬跑它；
+    # 但底层的记录解析是纯函数 —— 用合成 MFT 记录钉住关键语义：
+    # runlist 回环、fixup 换回、DOS 名跳过、非驻留 $DATA real size、
+    # 目录判定（$INDEX_ROOT）、损坏记录返回 None。
+    import struct as _struct
+
+    def _mft_mk_record(rec_type: str):
+        # rec_type: "file" | "dir"；构造 1024 字节最小合法 MFT 记录
+        frs = 1024
+        rec = bytearray(frs)
+        rec[0:4] = b"FILE"
+        _struct.pack_into("<H", rec, 4, 0x30)          # USA offset
+        _struct.pack_into("<H", rec, 6, 3)             # USA count（2 扇区）
+        _struct.pack_into("<H", rec, 0x14, 0x38)       # first attr
+        _struct.pack_into("<H", rec, 0x16, 1)          # in use
+        _struct.pack_into("<I", rec, 0x18, 0xF8)       # used size
+        # fixup：检查值占扇区末 2 字节，真实值排在 USA 区
+        _struct.pack_into("<H", rec, 0x30, 0xAAAA)
+        _struct.pack_into("<H", rec, 0x32, 0x1111)
+        _struct.pack_into("<H", rec, 0x34, 0x2222)
+        _struct.pack_into("<H", rec, 510, 0xAAAA)
+        _struct.pack_into("<H", rec, 1022, 0xAAAA)
+        a = 0x38
+        _struct.pack_into("<I", rec, a, 0x30)          # $FILE_NAME resident
+        _struct.pack_into("<I", rec, a + 4, 0x68)
+        _struct.pack_into("<H", rec, a + 0x14, 0x52)   # content offset
+        c = a + 0x52
+        _struct.pack_into("<Q", rec, c, 5)             # parent = 根目录
+        nm = "游戏".encode("utf-16-le")
+        rec[c + 0x40] = len(nm) // 2                   # 名字长度（字符数）
+        rec[c + 0x41] = 3                              # POSIX，非 DOS 8.3
+        rec[c + 0x42:c + 0x42 + len(nm)] = nm
+        b = 0xA0
+        if rec_type == "file":
+            _struct.pack_into("<I", rec, b, 0x80)      # $DATA non-resident
+            _struct.pack_into("<I", rec, b + 4, 0x48)
+            rec[b + 8] = 1
+            _struct.pack_into("<Q", rec, b + 0x38, 777 << 20)  # real size
+            _struct.pack_into("<I", rec, 0xE8, 0xFFFFFFFF)
+        else:
+            _struct.pack_into("<I", rec, b, 0x90)      # $INDEX_ROOT → 目录
+            _struct.pack_into("<I", rec, b + 4, 0x30)
+            _struct.pack_into("<I", rec, b + 0x10, 0x10)
+            _struct.pack_into("<I", rec, 0xF8, 0xFFFFFFFF)
+        return rec
+
+    rl = bytearray()
+    rl.append((1 << 4) | 1)
+    rl += (8).to_bytes(1, "little")
+    rl += (100).to_bytes(1, "little")
+    rl.append((2 << 4) | 2)
+    rl += (16).to_bytes(2, "little")
+    rl += (-50).to_bytes(2, "little", signed=True)
+    rl.append(0)
+    check("MFT runlist：簇数在前、偏移带符号回环",
+          app._mft_runlist(bytes(rl), 0) == [(100, 8), (50, 16)],
+          str(app._mft_runlist(bytes(rl), 0)))
+    check("MFT 文件记录：fixup 换回 + 非驻留 $DATA 体积",
+          app._mft_parse_record(_mft_mk_record("file"), 1024)
+          == (5, "游戏", 777 << 20, False),
+          str(app._mft_parse_record(_mft_mk_record("file"), 1024)))
+    check("MFT 目录记录：$INDEX_ROOT 判定目录",
+          app._mft_parse_record(_mft_mk_record("dir"), 1024)
+          == (5, "游戏", 0, True),
+          str(app._mft_parse_record(_mft_mk_record("dir"), 1024)))
+    check("MFT 损坏记录返回 None（magic 不符/全零）",
+          app._mft_parse_record(bytearray(b"XXXX" + bytes(1020)), 1024) is None
+          and app._mft_parse_record(bytearray(1024), 1024) is None)
 
     # ---- 5) 子进程调用的超时有界性 ----
     # 这一段对应一次实际观察到的卡死：扫描停在「正在读取 Steam 库清单」不动，

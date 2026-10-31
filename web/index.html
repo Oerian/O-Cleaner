@@ -92,6 +92,19 @@
   .fspanel.slide-l{animation:vin-l .18s ease-out}
   .fspanel.slide-r{animation:vin-r .18s ease-out}
   @media (prefers-reduced-motion:reduce){.fspanel.slide-l,.fspanel.slide-r{animation:none}}
+  /* 小视口吸顶头收敛（#42）：矮窗口里头部压到一行、去副标题与毛玻璃重绘，
+     省下的每一像素都还给内容区（800×600 下头部原来占两行）。 */
+  @media(max-height:700px){
+    header{padding:5px 14px}
+    header .hrow{gap:10px;flex-wrap:nowrap;overflow-x:auto}
+    .brand .tag{display:none}
+    .brand h1{font-size:15px}
+  }
+  @media(max-height:560px){
+    header{padding:3px 10px}
+    .brand h1{font-size:13.5px}
+    header .hrow{gap:8px}
+  }
   .themeseg{display:flex;gap:2px;margin-left:6px}
   .themeseg button{padding:4px 10px;font-size:12px}
   .themeseg button.on{background:var(--accent);color:#fff;font-weight:600}
@@ -286,6 +299,24 @@
   .chart .bar:hover{background:linear-gradient(180deg,#60a5fa,#2563eb)}
   .chart .bar.zero{background:var(--track)}
   .chart-x{display:flex;justify-content:space-between;color:var(--dim2);font-size:10.5px}
+  /* 近 30 天趋势（#33）：柱多更密，有清理的日子用第二色与按次图区分 */
+  .chart.day{gap:1px;height:56px}
+  .chart.day .bar{background:linear-gradient(180deg,#34d399,#059669)}
+  .chart.day .bar:hover{background:linear-gradient(180deg,#6ee7b7,#10b981)}
+  .chart.day .bar.zero{background:var(--track)}
+  .chart.day .bar.today{outline:1px solid var(--accent);outline-offset:1px}
+  /* 键盘导航焦点（#38）：细描边不挪布局 */
+  .vrow.kbd{outline:2px solid var(--accent);outline-offset:-2px;border-radius:8px}
+  /* 清理成果卡（#40）：大号释放量 + 统计格 */
+  .rescard{background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+           padding:14px 16px;margin-bottom:12px;text-align:center}
+  .rescard .resnum{font-size:30px;font-weight:700;color:var(--ok);
+                   font-variant-numeric:tabular-nums;line-height:1.2}
+  .rescard .ressub{color:var(--dim2);font-size:12px;margin-top:2px}
+  .rescard .resgrid{display:flex;justify-content:center;gap:26px;margin-top:10px}
+  .rescard .resgrid div{display:flex;flex-direction:column}
+  .rescard .resgrid b{font-size:16px;font-variant-numeric:tabular-nums}
+  .rescard .resgrid span{color:var(--dim2);font-size:11px}
 
   .brow{margin:8px 0}
   .brow .bl{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;margin-bottom:3px}
@@ -389,6 +420,11 @@
   .vchart{display:flex;flex-direction:column;gap:8px;margin-top:4px}
   .vrow{cursor:pointer;border-radius:8px;padding:6px 8px;transition:.13s;
         border:1px solid transparent}
+  /* 行密度两档（#39）：紧凑档压缩行距与说明行，一屏多看约一倍行数。
+     .dense 挂在 body 上（全局记忆），只影响排行行自己的留白。 */
+  body.dense .vrow{padding:2px 8px}
+  body.dense .vrow .vdesc{display:none}
+  body.dense .vrow-wrap{margin:0}
   .vrow:hover{background:var(--panel2);border-color:var(--line2)}
   /* 行内勾选框（可清理行）：与下钻点击互斥 —— change 只改选择集 */
   #fsChart .rowsel{width:16px;height:16px;flex:0 0 auto;margin-top:2px;
@@ -715,6 +751,10 @@
   </div>
 </header>
 
+<div id="schBanner" style="display:none;align-items:center;gap:10px;margin:8px 14px 0;
+     padding:9px 14px;background:var(--panel);border:1px solid var(--line);
+     border-radius:12px;font-size:12.5px"></div>
+
 <main>
   <div id="leftcol">
   <div class="toolbar">
@@ -731,6 +771,9 @@
     </select>
     <button id="btnSteam" data-i18n="btn.steam">游戏占用概览</button>
     <button id="btnBigFiles" data-i18n="btn.bigFiles">大文件排行</button>
+    <button id="btnDupFiles" data-i18n="btn.dupFiles">重复大文件</button>
+    <button id="btnDlAdvice" data-i18n="btn.dlAdvice">下载整理</button>
+    <button id="btnDense" data-i18n="btn.dense">紧凑模式</button>
     <button id="btnAll" data-i18n="btn.all">全选</button>
     <button id="btnNone" data-i18n="btn.none">全不选</button>
     <span style="color:var(--dim2);font-size:12px" data-i18n="scope.label">清理范围</span>
@@ -1163,6 +1206,35 @@ async function loadState() {
   renderDrives(); renderDisk(); renderPresets(); renderCumulative();
   renderUnits(); renderRules(); renderSchedule(); renderHistory();
   renderGuide(); renderPacks(); renderAI();
+  renderSchSummary();
+}
+
+/* 定时任务执行摘要横幅（#37）：后台定时清理用户无感知，打开界面时把
+   最近一次的成果讲清楚。localStorage 记录已展示的时间戳，同一次不重复弹。 */
+function renderSchSummary() {
+  const s = STATE.schedule?.last_summary;
+  const el = $("schBanner");
+  if (!el) return;
+  if (!s || !s.time) { el.style.display = "none"; return; }
+  let seen = "";
+  try { seen = localStorage.getItem("oc-sch-seen") || ""; } catch (e) {}
+  if (seen === s.time) { el.style.display = "none"; return; }
+  el.style.display = "block";
+  const failPart = s.failed > 0
+    ? ` · <span style="color:var(--warn)">${t("sch.sumFailed","{n} 项失败").replace("{n}", s.failed)}</span>` : "";
+  el.innerHTML = `
+    <span style="flex:1">⏰ ${t("sch.sumHead","定时清理已在后台完成")
+      }${s.drive ? `（${esc(s.drive)}:）` : ""} — ${
+      t("sch.sumBody","{time}，清理 {n} 项，释放 {v}{fail}")
+        .replace("{time}", esc(s.time))
+        .replace("{n}", s.targets)
+        .replace("{v}", esc(s.freed_h))
+        .replace("{fail}", "")}${failPart}</span>
+    <button class="tiny ghost" id="schSumOk">${t("sch.sumOk","知道了")}</button>`;
+  $("schSumOk").addEventListener("click", () => {
+    el.style.display = "none";
+    try { localStorage.setItem("oc-sch-seen", s.time); } catch (e) {}
+  });
 }
 async function scan() {
   const b = $("btnScan");
@@ -1584,9 +1656,16 @@ function renderDisk(d) {
   const color = usedRatio > 85 ? "linear-gradient(90deg,var(--warn),var(--danger))"
                                : "linear-gradient(90deg,var(--accent),var(--accent2))";
   $("diskInfo").innerHTML = `
-    <div class="stat"><span>${t("disk.total","总容量")}</span><b>${d.total_h}</b></div>
-    <div class="stat"><span>${t("disk.used","已使用")}</span><b>${d.used_h}（${d.percent}%）</b></div>
-    <div class="stat"><span>${t("disk.free","可用")}</span><b class="freed">${d.free_h}</b></div>
+    <div style="display:flex;align-items:flex-start;gap:8px">
+      <div style="flex:1">
+        <div class="stat"><span>${t("disk.total","总容量")}</span><b>${d.total_h}</b></div>
+        <div class="stat"><span>${t("disk.used","已使用")}</span><b>${d.used_h}（${d.percent}%）</b></div>
+        <div class="stat"><span>${t("disk.free","可用")}</span><b class="freed">${d.free_h}</b></div>
+      </div>
+      <button id="btnDiskFull" class="tiny ghost" style="flex:none;margin-top:2px"
+              title="${t("disk.fullTitle","全盘扫描 {d}: 盘，看占用大头在哪").replace("{d}", esc(STATE.current_drive || drive))}">
+        🔍 ${t("disk.fullBtn","全盘扫描")}</button>
+    </div>
     <div style="margin-top:9px">
       <div style="height:6px;border-radius:3px;background:var(--track);overflow:hidden">
         <i style="display:block;height:100%;width:${usedRatio.toFixed(1)}%;background:${color}"></i>
@@ -1594,6 +1673,9 @@ function renderDisk(d) {
     </div>
     <canvas id="trendCv" style="width:100%;height:64px;margin-top:8px;display:block"></canvas>
     <div id="trendLbl" style="color:var(--dim2);font-size:11.5px;margin-top:3px"></div>`;
+  // 磁盘概览直连扫描（#41）：概览卡上一步直达全盘扫描，不用回工具栏找按钮
+  const bf = $("btnDiskFull");
+  if (bf) bf.addEventListener("click", () => startFullScan());
   drawDiskTrend();
 }
 
@@ -2036,6 +2118,17 @@ function renderCumulative() {
     : `<div class="empty" style="margin:0">${t("stat.tooSmall","当前累计量对这些单位来说都太小了（不足 0.01 个单位）。")}</div>`;
 
   // 可视化明细
+  // 近 30 天按日趋势（#33）：日期轴均匀补零，全空柱=没跑；今天一柱描边。
+  const days = s.by_day || [];
+  const dayMax = Math.max(...days.map(d => d.freed), 1);
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const dayBars = days.map(d => {
+    const h = d.freed > 0 ? Math.max(3, Math.round(d.freed / dayMax * 52)) : 2;
+    const label = t("stat.dayTitle","{day}  释放 {v}（{n} 次）")
+      .replace("{day}", d.day).replace("{v}", d.freed_h).replace("{n}", d.runs);
+    return `<div class="bar${d.freed > 0 ? "" : " zero"}${d.day === todayKey ? " today" : ""}"
+                 style="height:${h}px" title="${esc(label)}"></div>`;
+  }).join("");
   const tl = (s.timeline || []).slice(0, 24).reverse();
   const max = Math.max(...tl.map(x => x.freed), 1);
   const bars = tl.map(x => {
@@ -2069,6 +2162,12 @@ function renderCumulative() {
     <details class="sub"${CUM_SUB_OPEN ? " open" : ""}>
       <summary>${t("stat.detail","查看明细图表（趋势 / 分类 / 各盘 / 项目）")}</summary>
       <div style="margin-top:12px">
+        ${days.some(d => d.freed > 0) ? `<div style="color:var(--dim2);font-size:11.5px">
+          ${t("stat.dayTrend","近 30 天每日释放（灰柱为未清理）")}</div>
+          <div class="chart day">${dayBars}</div>
+          <div class="chart-x">
+            <span>${esc((days[0]?.day || "").slice(5))}</span>
+            <span>${esc((days[days.length - 1]?.day || "").slice(5))}</span></div>` : ""}
         ${drvRows.length ? `<div style="color:var(--dim2);font-size:11.5px">${t("stat.byDrive","各盘分布")}</div>
           ${drvRows.map(d => `<div class="brow drv">
             <div class="bl"><span class="n">${esc(d.drive)}: ${t("st.driveSuffix","盘")}</span>
@@ -3133,13 +3232,28 @@ function showCleanResult(e, stats, t0, title) {
   const pbar = $("pbar");
   if (pbar) pbar.querySelector("i").style.width = "100%";
   const trashPaths = [...new Set(e.results.flatMap(r => r.trash_paths || []).filter(Boolean))];
+  // 成果卡头部（#40）：释放量大字居中，三个统计格一眼看完本次概况；
+  // 再给「贡献前三」—— 空间回收大头通常就是一两项，不必扫全表。
+  const secs = ((Date.now() - t0) / 1000).toFixed(1);
+  const top3 = [...e.results].sort((a, b) => b.freed - a.freed)
+    .filter(r => r.freed > 0).slice(0, 3);
+  const top3Html = top3.length ? `<div style="margin:10px 0 4px;font-size:12px;color:var(--dim2)">
+    ${t("cr.top3", "贡献前三")}:${top3.map(r =>
+      ` <span style="color:var(--fg)">${esc(r.label)}</span>` +
+      ` <b class="res-ok">${fmt(r.freed)}</b>`).join(" ·")}</div>` : "";
+  const nFail = e.results.reduce((s, r) => s + (r.failed || 0), 0);
   $("modal").innerHTML = `
     <h2>${esc(title)}</h2>
     <div class="mbody">
-      <div style="font-size:15px;margin-bottom:12px">
-        ${t("cr.freed","本次释放")} <b class="res-ok" style="font-size:19px">${esc(e.freed_h)}</b>
-        <span style="color:var(--dim2);font-size:12.5px">
-          · ${e.results.length} ${t("part.items","项")} · ${t("cr.took","耗时 {n} 秒").replace("{n}", ((Date.now() - t0) / 1000).toFixed(1))}</span>
+      <div class="rescard">
+        <div class="resnum">${esc(e.freed_h)}</div>
+        <div class="ressub">${t("cr.freed","本次释放")}</div>
+        <div class="resgrid">
+          <div><b>${e.results.length}</b><span>${t("part.items","项")}</span></div>
+          <div><b>${secs}</b><span>${t("cr.secsShort","秒")}</span></div>
+          <div><b class="${nFail ? "res-warn" : ""}">${nFail}</b><span>${t("cr.failedShort","跳过/失败")}</span></div>
+        </div>
+        ${top3Html}
       </div>
       ${e.results.some(r => r.trashed > 0) ? `<div style="color:var(--dim2);font-size:12.5px;margin:-6px 0 10px">
         ${t("cr.trashedNote","部分高风险项已移入回收站（可恢复）：这部分空间会在清空回收站后释放，未计入上面的数字。")}</div>` : ""}
@@ -3643,7 +3757,8 @@ function renderOverview() {
     t("fs.tagline","{drive}: 盘 · {nodes} 个节点 · 已识别 {explained} 个 · {depth} 层{engine}")
       .replace("{drive}", FS.drive).replace("{nodes}", FS.node_count)
       .replace("{explained}", FS.explained).replace("{depth}", FS.max_depth)
-      .replace("{engine}", FS.engine === "wiztree" ? t("fs.mftFast"," · WizTree MFT 加速") : "");
+      .replace("{engine}", FS.engine === "wiztree" ? t("fs.mftFast"," · WizTree MFT 加速")
+        : FS.engine === "mft" ? t("fs.mftOwnFast"," · MFT 直读加速") : "");
 
   // 磁盘概览面板已吸收本块（原「扫描概览」小板块）：总容量/已使用/可用
   // 由 renderDisk() 的 #diskInfo 独家呈现，这里只补「本次扫到」这个
@@ -3657,15 +3772,21 @@ function renderOverview() {
         <div class="stat"><span>${t("fs.scannedNow","本次扫到")}</span><b>${FS.scanned_total_h} · ${FS.node_count} ${t("fs.nodesSuffix","个节点")}</b></div>
       </div>
     </div>
-    ${FS.engine ? `<div class="enginebar ${FS.engine === "wiztree" ? "fast" : ""}">
-      <b>${FS.engine === "wiztree" ? t("fs.mftFast2","WizTree MFT 加速") : t("fs.psWalk","PowerShell 递归扫描")}</b>
+    ${FS.engine ? `<div class="enginebar ${FS.engine === "wiztree" || FS.engine === "mft" ? "fast" : ""}">
+      <b>${FS.engine === "wiztree" ? t("fs.mftFast2","WizTree MFT 加速")
+          : FS.engine === "mft" ? t("fs.mftOwn2","MFT 直读加速（自研）")
+          : t("fs.psWalk","PowerShell 递归扫描")}</b>
       <span>${FS.engine_rows != null
-        ? t("fs.mftStat","WizTree 导出 {n} 行，解析 {s} 秒")
+        ? (FS.engine === "mft"
+            ? t("fs.mftOwnStat","MFT 直读 {n} 条记录，解析 {s} 秒")
+            : t("fs.mftStat","WizTree 导出 {n} 行，解析 {s} 秒"))
             .replace("{n}", Number(FS.engine_rows).toLocaleString())
             .replace("{s}", String(FS.engine_secs))
         : esc(FS.engine_note || "")}</span>
       ${FS.engine === "wiztree"
         ? t("fs.wiztreeNote","<span>借本机已装的 WizTree 读 MFT，比逐目录递归快；不安装、不修改它。</span>")
+        : FS.engine === "mft"
+        ? t("fs.mftOwnNote","<span>自研 MFT 直读引擎：无需安装 WizTree，管理员权限下直接解析 NTFS 主文件表。</span>")
         : t("fs.wiztreeHint","<span>装入 WizTree 可显著缩短全盘扫描耗时（本工具只调用，不捆绑）。</span>")}
     </div>` : ""}
     <div style="margin-top:15px;padding-top:13px;border-top:1px solid var(--line)">
@@ -3936,12 +4057,15 @@ function renderChart() {
       : ""}>${esc(badgeText)}</span>`;
     const pinBadge = it.pinned
       ? `<span class="vbadge clean" title="${t("fs.pinnedTitle","已提级：固定显示在排行顶层，右键可取消")}">${t("fs.pinned","已提级")}</span>` : "";
+    // 整目录永久排除（#36）：仍占行显示（用户要看它占多少），但徽章换掉、禁勾选
+    const exBadge = it.excluded
+      ? `<span class="vbadge keep" title="${t("fs.excludedTitle","已永久排除：不进清理清单。右键 → 自定义释义可取消。")}">${t("fs.excluded","已排除")}</span>` : "";
     const w = Math.max(2, (it.size / maxSize * 100)).toFixed(1);
     const drillable = !!it.can_drill;
     // 2026-10-13：**所有行都可勾选** —— 「建议保留 / 未识别」不再是勾选禁区。
     // 用户看过内容、明确要删的目录不该被工具拦死；对应的安全约束转移到
     // 确认弹窗（明确提示包含非推荐项）与服务端（系统目录保护、占用预检照常）。
-    const canCheck = !it.hidden_group && !it.hidden_agg;   // 纯前端合成项，勾选它没有服务端对应物
+    const canCheck = !it.hidden_group && !it.hidden_agg && !it.excluded;   // 纯前端合成项与已排除项，勾选没有服务端对应物
     const rowChecked = canCheck &&
       (it.target_id ? selected.has(it.target_id) : selPaths.has(it.path));
     // 全盘视图里必须显示它在哪里，否则只看到一个名字不知道归属
@@ -3969,7 +4093,7 @@ function renderChart() {
         <div class="vtop">
           ${canCheck ? `<input type="checkbox" class="rowsel" data-path="${esc(it.path)}"${it.target_id ? ` data-tid="${esc(it.target_id)}"` : ""}${rowChecked ? " checked" : ""} title="${t("fs.tickTitle","勾选这项参与清理")}">` : ""}
           ${drillable && !it.hidden_group && !it.hidden_agg ? `<button class="tiny ghost expinline" data-tree="${idx}" title="${t("sub.expandTitle","就地展开查看子目录")}">${t("sub.expand","展开 ▾")}</button>` : ""}
-          <span class="fname">${esc(it.name)}${it.hidden_agg ? t("fs.hiddenAggCount","（{n} 项）").replace("{n}", it.agg_count) : ""}${badge}${pinBadge}${
+          <span class="fname">${esc(it.name)}${it.hidden_agg ? t("fs.hiddenAggCount","（{n} 项）").replace("{n}", it.agg_count) : ""}${badge}${pinBadge}${exBadge}${
             it.hidden_agg ? `<span class="vagg">${hiddenAggOpen ? t("sub.collapse","收起 ▴") : t("sub.expand","展开 ▾")}</span>`
             : drillable ? `<span class="vgo">${t("fs.drillHint","点开看子项 ›")}</span>` : ""}</span>
           ${!it.hidden_group && !it.hidden_agg ? `<button class="tiny ghost rowgrp" data-grp="${idx}" title="${t("fs.grpTitle","把这项归进自定义聚合组")}">${t("fs.grp","归档")}</button>` : ""}
@@ -3978,7 +4102,7 @@ function renderChart() {
           <span class="fsize">${fmt(it.size)}</span>
         </div>
         <div class="vtrack"><i class="vfill" style="width:${w}%${it.custom_color ? `;background:${esc(it.custom_color)}` : ""}"></i></div>
-        <div class="vtop" style="margin:5px 0 0">
+        <div class="vtop vdesc" style="margin:5px 0 0">
           <span class="vcat">${it.hidden_agg ? esc(t("fs.hiddenAggDesc","资源管理器默认不显示的项，点击展开逐项查看"))
             : `${midName ? esc(midName) + " · " : ""}${it.category ? esc(catLabel(it.category)) : ""}${
             it.steam_game ? ` · ${t("sf.steamGame","Steam 游戏")}` : ""}${
@@ -4469,6 +4593,13 @@ async function editOverride(node) {
           <option value="true" ${cl === "true" ? "selected" : ""}>${t("ov2.cleanable","可清理")}</option>
           <option value="false" ${cl === "false" ? "selected" : ""}>${t("ov2.notCleanable","不可清理（建议保留）")}</option>
         </select></div>
+      <div class="field" style="align-items:center">
+        <label style="width:64px">${t("ov2.exclude","永久排除")}</label>
+        <label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer">
+          <input type="checkbox" id="ovExclude" class="switch"
+                 ${cur.excluded === true ? "checked" : ""}>
+          <span style="font-size:12.5px;color:var(--dim)">${t("ov2.excludeHint","从清理清单里移除此目录（占用排行里仍可见，带「已排除」标记）。随时可回到这里取消。")}</span>
+        </label></div>
       <div class="dconf" style="margin-top:8px">
         ${t("ov2.riskNote","注意：把高风险项改成「可清理」不会降低它的风险等级，清理时仍按高风险处理（默认删进回收站）。")}
       </div>
@@ -4490,6 +4621,7 @@ async function editOverride(node) {
       keep_if: $("ovKeep").value.trim(),
       cleanable: $("ovClean").value === "default"
         ? null : $("ovClean").value === "true",
+      excluded: $("ovExclude").checked === true,
     };
     try {
       const r = await apiJSON(`${API}/__oc__/overrides/set`, {
@@ -5011,6 +5143,121 @@ async function openBigFiles() {
 }
 $("btnBigFiles").addEventListener("click", openBigFiles);
 
+/* 重复大文件（#34）：基于全盘扫描明细缓存，同体积分组 + 首尾 1MB 采样
+   哈希证实。只报哈希一致的组（同体积内容不同不算），杜绝误导删除。
+   只读不删 —— 删哪个由用户拿着路径自己决定。 */
+async function openDupFiles() {
+  $("modal").innerHTML = `<h2>${t("dup.title", "重复大文件")}</h2>
+    <div class="mbody"><div class="empty"><span class="spin"></span>
+      ${t("dup.loading", "正在核对采样哈希（基于扫描缓存，很快）…")}</div></div>`;
+  $("mask").classList.add("on");
+  let r;
+  try {
+    r = await apiJSON(`${API}/__oc__/dupfiles`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ drive }),
+    });
+  } catch (e) {
+    r = { error: String(e) };
+  }
+  if (!r || r.error) {
+    $("modal").innerHTML = `<h2>${t("dup.title", "重复大文件")}</h2>
+      <div class="mbody"><div class="empty">${esc((r && r.error) || t("up.fail", "检查失败"))}</div>
+      <div style="text-align:right;padding-top:10px">
+        <button class="tiny" id="dupClose">${t("cc.close", "关闭")}</button></div></div>`;
+    $("dupClose").addEventListener("click", closeModal);
+    return;
+  }
+  const g2 = (r.groups || []);
+  $("modal").innerHTML = `<h2>${t("dup.title", "重复大文件")}
+      <span class="hint">${t("dup.n", "{n} 组 · 门槛 {v}")
+        .replace("{n}", g2.length)
+        .replace("{v}", fmt((r.floor_mb || 100) * 1024 * 1024))}</span></h2>
+    <div class="mbody">${g2.length ? g2.map((g, i) => `
+      <div class="logrow">
+        <div class="t"><b>${i + 1}</b>. <span>${t("dup.sameSize", "{n} 个互为副本，每个 {v}")
+          .replace("{n}", g.dup_count).replace("{v}", g.size_h)}</span>
+          <span class="freed">${t("dup.wasted", "可回收 {v}").replace("{v}", g.wasted_h)}</span></div>
+        ${g.files.filter(f => f.dup).map(f => `
+        <div class="d" style="word-break:break-all">· ${esc(f.path)}
+          <a href="javascript:void(0)" class="rcpt" data-p="${esc(f.path)}"
+             style="margin-left:6px">${t("bf.reveal", "在资源管理器中打开位置")}</a></div>`).join("")}
+      </div>`).join("")
+      : `<div class="empty">${t("dup.empty", "没有发现互为副本的大文件（≥ {v} 且内容一致）")
+          .replace("{v}", fmt((r.floor_mb || 100) * 1024 * 1024))}</div>`}
+    <div style="text-align:right;padding-top:10px">
+      <button class="tiny" id="dupClose">${t("cc.close", "关闭")}</button></div></div>`;
+  $("dupClose").addEventListener("click", closeModal);
+  [...document.querySelectorAll("#modal .rcpt")].forEach(a =>
+    a.addEventListener("click", () => {
+      apiJSON(`${API}/__oc__/reveal`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: a.dataset.p, select: true }),
+      });
+    }));
+}
+$("btnDupFiles").addEventListener("click", openDupFiles);
+
+/* 下载目录整理建议（#35）：按知识库归类顶层文件，给可执行建议。
+   只读不动文件 —— 删/转移由用户自己决定。 */
+async function openDownloadsAdvice() {
+  $("modal").innerHTML = `<h2>${t("dl.title", "下载目录整理建议")}</h2>
+    <div class="mbody"><div class="empty"><span class="spin"></span>
+      ${t("dl.loading", "正在归类下载目录…")}</div></div>`;
+  $("mask").classList.add("on");
+  let r;
+  try {
+    r = await apiJSON(`${API}/__oc__/downloads-advice`);
+  } catch (e) {
+    r = { error: String(e) };
+  }
+  if (!r || r.error) {
+    $("modal").innerHTML = `<h2>${t("dl.title", "下载目录整理建议")}</h2>
+      <div class="mbody"><div class="empty">${esc((r && r.error) || t("up.fail", "检查失败"))}</div>
+      <div style="text-align:right;padding-top:10px">
+        <button class="tiny" id="dlClose">${t("cc.close", "关闭")}</button></div></div>`;
+    $("dlClose").addEventListener("click", closeModal);
+    return;
+  }
+  $("modal").innerHTML = `<h2>${t("dl.title", "下载目录整理建议")}
+      <span class="hint">${t("dl.n", "{n} 个文件 · 共 {v}")
+        .replace("{n}", r.total_files).replace("{v}", r.total_size_h)}</span></h2>
+    <div class="mbody">
+      ${r.headline ? `<div class="empty" style="margin:0 0 10px;text-align:left">
+        💡 ${esc(r.headline)}</div>` : ""}
+      ${(r.groups || []).map(g => `
+      <div class="logrow">
+        <div class="t"><b>${g.category}</b>
+          <span style="color:var(--dim2)">× ${g.count}</span>
+          <span class="freed">${esc(g.size_h)}</span></div>
+        ${g.hint ? `<div class="d" style="color:var(--ok)">${esc(g.hint)}</div>` : ""}
+        ${g.names && g.names.length ? `<div class="d" style="word-break:break-all">
+          ${g.names.map(n => esc(n)).join(" · ")}</div>` : ""}
+      </div>`).join("") || `<div class="empty">${t("dl.empty", "下载目录是空的")}</div>`}
+    <div style="text-align:right;padding-top:10px">
+      <button class="tiny" id="dlClose">${t("cc.close", "关闭")}</button></div></div>`;
+  $("dlClose").addEventListener("click", closeModal);
+}
+$("btnDlAdvice").addEventListener("click", openDownloadsAdvice);
+
+/* 行密度两档（#39）：紧凑/舒适，localStorage 记忆。 */
+function applyDense() {
+  let on = false;
+  try { on = localStorage.getItem("oc-dense") === "1"; } catch (e) {}
+  document.body.classList.toggle("dense", on);
+  const b = $("btnDense");
+  if (b) {
+    b.textContent = on ? t("btn.denseOff", "舒适模式")
+                       : t("btn.dense", "紧凑模式");
+    b.classList.toggle("on", on);
+  }
+}
+$("btnDense").addEventListener("click", () => {
+  const on = !document.body.classList.contains("dense");
+  try { localStorage.setItem("oc-dense", on ? "1" : "0"); } catch (e) {}
+  applyDense();
+});
+
 $("btnSteam").addEventListener("click", () => {
   if (view === "steam") { switchView("full"); return; }
   switchView("steam");
@@ -5223,6 +5470,51 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (view === "steam") { switchView("full"); toast(t("toast.backFull","已返回扫描概览")); }
+});
+
+/* 键盘导航（#38）：占用排行里 ↑↓ 移动焦点、空格勾选/取消、Enter 下钻。
+   只在「扫描概览」视图且焦点不在任何输入框/弹窗里时生效 —— 不抢表单
+   与弹窗的键。焦点样式走 .vrow.kbd（细描边），鼠标照常可用，两不耽误。 */
+let kbdRow = -1;   // 当前焦点行在 #fsChart 可见行中的序号
+function kbdRows() {
+  return [...document.querySelectorAll("#fsChart .vrow")]
+    .filter(r => r.getBoundingClientRect().height > 0);
+}
+function kbdFocus(rows, i) {
+  if (!rows.length) return;
+  kbdRow = (i + rows.length) % rows.length;
+  rows.forEach(r => r.classList.remove("kbd"));
+  const el = rows[kbdRow];
+  el.classList.add("kbd");
+  el.scrollIntoView({ block: "nearest" });
+}
+document.addEventListener("keydown", e => {
+  if (view !== "full" || $("mask").classList.contains("on")) return;
+  const tag = (document.activeElement?.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return;
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp"
+      && e.key !== " " && e.key !== "Enter") return;
+  if ($("fsScanning")) return;
+  const rows = kbdRows();
+  if (!rows.length) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    kbdFocus(rows, kbdRow < 0 ? 0 : kbdRow + (e.key === "ArrowDown" ? 1 : -1));
+    return;
+  }
+  if (kbdRow < 0 || kbdRow >= rows.length) return;
+  const row = rows[kbdRow];
+  if (e.key === " ") {
+    e.preventDefault();
+    const cb = row.querySelector(".rowsel");
+    if (cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event("change")); }
+    return;
+  }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    // 行为与点击完全一致（下钻/展开/详情的分流都在点击处理器里）
+    row.click();
+  }
 });
 
 $("btnCustom").addEventListener("click", async () => {
@@ -5801,6 +6093,9 @@ const I18N_EN = {
   "fs.noWiztreeOnTheFly": "WizTree acceleration is off; scanning this folder on the fly (may take seconds)…",
   "fs.tagline": "{drive}: drive · {nodes} nodes · {explained} identified · {depth} level(s){engine}",
   "fs.mftFast": " · WizTree MFT accelerated", "fs.mftFast2": "WizTree MFT acceleration",
+  "fs.mftOwnFast": " · Direct MFT read", "fs.mftOwn2": "Direct MFT read (built-in)",
+  "fs.mftOwnStat": "MFT read: {n} records, parsed in {s}s",
+  "fs.mftOwnNote": "<span>Built-in MFT engine: reads the NTFS Master File Table directly with admin rights — no WizTree needed.</span>",
   "fs.psWalk": "PowerShell recursive scan",
   "fs.wiztreeNote": "<span>Reads the MFT via the WizTree installed on this machine — faster than per-folder recursion; it is never installed or modified.</span>",
   "fs.wiztreeHint": "<span>Installing WizTree shortens full-disk scans a lot (this tool only calls it, never bundles it).</span>",
@@ -5925,6 +6220,35 @@ const I18N_EN = {
   "stat.since": "since {v}",
   "stat.detail": "Detailed charts (trend / categories / drives / items)",
   "stat.byDrive": "By drive", "stat.timeline": "Per-run release (oldest left, {n} runs)",
+  "stat.dayTrend": "Daily release, last 30 days (grey = no cleanup)",
+  "stat.dayTitle": "{day}  released {v} ({n} runs)",
+  "btn.dupFiles": "Duplicate large files",
+  "btn.dlAdvice": "Downloads tidy-up",
+  "btn.dense": "Compact rows",
+  "btn.denseOff": "Cozy rows",
+  "dup.title": "Duplicate large files",
+  "dup.loading": "Verifying sample hashes (based on scan cache, quick)…",
+  "dup.n": "{n} groups · floor {v}",
+  "dup.sameSize": "{n} identical copies, {v} each",
+  "dup.wasted": "reclaimable {v}",
+  "dup.empty": "No duplicate large files found (≥ {v} with identical content)",
+  "dl.title": "Downloads tidy-up",
+  "dl.loading": "Categorising your Downloads folder…",
+  "dl.n": "{n} files · {v} total",
+  "dl.empty": "Downloads folder is empty",
+  "ov2.exclude": "Exclude forever",
+  "ov2.excludeHint": "Remove this folder from the cleanup list (still visible in usage ranking with an \"Excluded\" badge). Uncheck here anytime to restore.",
+  "fs.excluded": "Excluded",
+  "fs.excludedTitle": "Excluded permanently: not in the cleanup list. Right-click → Customize to undo.",
+  "sch.sumHead": "Scheduled cleanup finished in the background",
+  "sch.sumBody": "{time}, cleaned {n} targets, freed {v}{fail}",
+  "sch.sumFailed": "{n} failed",
+  "sch.sumOk": "Got it",
+  "cr.top3": "Top contributors",
+  "cr.secsShort": "sec",
+  "cr.failedShort": "skipped/failed",
+  "disk.fullBtn": "Full scan",
+  "disk.fullTitle": "Full-scan {d}: to see where the space goes",
   "stat.byCat": "By category", "stat.topItems": "Top contributing items",
   "stat.all": "Show all",
   "unit.basis": "(basis)", "unit.expr": "Formula: ", "unit.del": "Del",
@@ -6141,6 +6465,7 @@ function applyI18n() {
 function setLang(l) {
   try { localStorage.setItem("oc-lang", l); } catch (e) {}
   applyI18n();
+  applyDense();     // 密度按钮文案随语言切换
   initPanelNav();   // 侧栏目录条取的是面板标题文本，翻译切换后重建一次
   // 动态渲染的文案（徽章、提示、磁盘概览、统计）按新语言重画；
   // 各渲染器只碰自己的 DOM，失败静默忽略不影响其余部分。
@@ -6151,7 +6476,7 @@ function setLang(l) {
    "renderRules", "renderPresets", "renderPacks", "renderSteamPage",
    "renderGuide", "drawDiskTrend", "drawGameTrend", "renderDrives",
    "renderConvToggle", "renderSchedule", "renderHistory", "renderOverview",
-   "renderAI", "renderCustomLibs"].forEach(fn => {
+   "renderAI", "renderCustomLibs", "renderSchSummary"].forEach(fn => {
     try { if (typeof window[fn] === "function") window[fn](); } catch (e) {}
   });
   // 后端返回的长文本（释义/建议）随请求的 lang 走：清掉旧语言的缓存
@@ -6167,6 +6492,7 @@ function initLang() {
   if (seg) seg.querySelectorAll("button").forEach(b =>
     b.addEventListener("click", () => setLang(b.dataset.l)));
   applyI18n();
+  applyDense();   // 恢复上次的行密度偏好（#39）
 }
 
 /* ==================== 启动 ==================== */
