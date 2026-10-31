@@ -1020,12 +1020,18 @@ def _wiztree_parse(csv_path: str, on_progress=None) -> dict:
     **盘根例外**：盘根的直接子目录与直接文件一律保留（数量只有几十个），
     否则 `AMTAG.BIN`、`DumpStack.log.tmp` 这类几 KB 的默认隐藏项连门都进不来。
 
+    另外顺手聚合**全量文件**的扩展名分布（`ext`: {后缀: [字节, 个数]}）——
+    「这盘的空间都被什么类型吃了」是概览页最直观的问题之一，CSV 每行
+    反正要过一遍，聚合只多一次后缀切分；门槛裁剪在这里不适用（小文件
+    也是类型分布的一部分）。
+
     on_progress(frac) 是可选回调，按读到的字节数报进度（0~1）。
     这一步在 C 盘上会读上百 MB，是整条链路里最长的纯 CPU 阶段，
     不报进度的话界面只能一直显示「解析中」。
     """
     dirs: dict[str, int] = {}
     files: dict[str, list] = {}
+    exts: dict[str, list] = {}
     floor = max(0, int(DISK_TREE_MIN_CHILD_MB)) * 1024 * 1024
     n = 0
     try:
@@ -1066,22 +1072,103 @@ def _wiztree_parse(csv_path: str, on_progress=None) -> dict:
                 # 深层子目录仍按体积门槛裁剪，内存不受影响。
                 if size >= floor or low.count("\\") <= 1:
                     dirs[low] = size
-            elif size >= floor or low.count("\\") <= 1:
-                # 盘根下的文件同样无条件保留：门槛只是省内存的手段，而盘根
-                # 一共就几十个文件，留下几个 KB 的完全无所谓。不这么做的话，
-                # AMTAG.BIN / DumpStack.log.tmp 这类**很小但默认隐藏**的文件
-                # 在解析阶段就被丢掉，下游 _is_hidden_sys 的属性判定根本
-                # 拿不到它们 —— 「隐藏项」页签因此比资源管理器少几项。
-                # 深层文件仍按门槛裁剪，内存不受影响。
-                parent = os.path.dirname(low)
-                files.setdefault(parent, []).append(
-                    (path.rstrip("\\").split("\\")[-1], size, path))
+            else:
+                # 扩展名分布统计**全量文件**（含被门槛裁掉的），见 docstring
+                _ext_bump(exts, path, size)
+                if size >= floor or low.count("\\") <= 1:
+                    # 盘根下的文件同样无条件保留：门槛只是省内存的手段，而盘根
+                    # 一共就几十个文件，留下几个 KB 的完全无所谓。不这么做的话，
+                    # AMTAG.BIN / DumpStack.log.tmp 这类**很小但默认隐藏**的文件
+                    # 在解析阶段就被丢掉，下游 _is_hidden_sys 的属性判定根本
+                    # 拿不到它们 —— 「隐藏项」页签因此比资源管理器少几项。
+                    # 深层文件仍按门槛裁剪，内存不受影响。
+                    parent = os.path.dirname(low)
+                    files.setdefault(parent, []).append(
+                        (path.rstrip("\\").split("\\")[-1], size, path))
     if on_progress:
         try:
             on_progress(1.0)
         except Exception:
             pass
-    return {"dirs": dirs, "files": files, "rows": n}
+    return {"dirs": dirs, "files": files, "rows": n, "ext": exts}
+
+
+def _ext_of(path: str) -> str:
+    """路径 → 小写扩展名（不含点，≤16 字符；无扩展名返回空串）。
+
+    类型分布关心的是「大块头都是什么类型」：.mp4/.iso/.zip 这类主干类型，
+    不追求覆盖怪异命名。双扩展名（.tar.gz）按最后一段算。
+    """
+    name = path.rstrip("\\").rsplit("\\", 1)[-1]
+    if "." not in name:
+        return ""
+    ext = name.rsplit(".", 1)[-1].lower()
+    return ext[:16]
+
+
+def _ext_bump(exts: dict, path: str, size: int) -> None:
+    """把一个文件按扩展名累计进分布表（[字节, 个数]）。"""
+    e = _ext_of(path)
+    st = exts.get(e)
+    if st is None:
+        exts[e] = [size, 1]
+    else:
+        st[0] += size
+        st[1] += 1
+
+
+def _ext_top(exts: dict, top: int = 12) -> list:
+    """分布表 → 前 top 类型列表（体积降序），其余并入 other。
+
+    输出条目 {"ext", "size", "count"}；空串键表示「无扩展名」。
+    """
+    if not exts:
+        return []
+    items = sorted(exts.items(), key=lambda kv: -kv[1][0])
+    out = [{"ext": k, "size": v[0], "count": v[1]} for k, v in items[:top]]
+    rest = items[top:]
+    if rest:
+        out.append({"ext": "__other__",
+                    "size": sum(v[0] for _k, v in rest),
+                    "count": sum(v[1] for _k, v in rest)})
+    return out
+
+
+def _ext_of_raw(raw) -> str:
+    """UTF-16LE 原始名 → 小写扩展名（不做全名解码，省百万次 decode）。
+
+    UTF-16LE 的 ASCII 区里 '.' 就是 b'.\\x00'，从最后一个往后截一小段
+    解码即可 —— 热路径上只为扩展名解码几个字符。
+    """
+    i = raw.rfind(b".\x00")
+    if i < 0:
+        return ""
+    return raw[i + 2:].decode("utf-16-le", "replace").lower()[:16]
+
+
+def _ext_bump_raw(exts: dict, raw, size: int) -> None:
+    """按 UTF-16LE 原始名把文件累计进扩展名分布表。"""
+    e = _ext_of_raw(raw)
+    st = exts.get(e)
+    if st is None:
+        exts[e] = [size, 1]
+    else:
+        st[0] += size
+        st[1] += 1
+
+
+_FT_EPOCH_DIFF = 116444736000000000   # FILETIME(1601) → Unix 纪元的 100ns 差
+
+
+def _ft_to_iso(ft: int) -> str:
+    """NTFS FILETIME → 本地时区 'YYYY-MM-DD HH:MM'；0 或异常返回空串。"""
+    if not ft or ft <= 0:
+        return ""
+    try:
+        ts = (ft - _FT_EPOCH_DIFF) / 10_000_000
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+    except (OSError, OverflowError, ValueError):
+        return ""
 
 
 # 默认隐藏的系统项：资源管理器勾着「隐藏受保护的操作系统文件」时不显示，
@@ -1173,70 +1260,92 @@ def _mft_runlist(buf: bytes, off: int) -> list[tuple[int, int]]:
     return runs
 
 
-def _mft_parse_record(rec: bytearray, frs_size: int):
-    """解析单条 MFT 文件记录（rec 会被 fixup 原地修改）。
+def _mft_parse_at(buf: bytearray, off: int, frs_size: int,
+                  with_mtime: bool = False):
+    """解析 buf[off:off+frs_size] 处的单条 MFT 文件记录（原地 fixup）。
 
-    返回 (parent_frn, name, real_size, is_dir)；记录无效/损坏返回 None。
-    名字取第一条非 DOS(8.3) 的 $FILE_NAME；体积以 $DATA 为准（非驻留读
-    header 的 real size，驻留读 content 长度）；目录以 $INDEX_ROOT 判定。
+    返回 (parent_frn, name_raw, real_size, is_dir, mtime)；记录无效/损坏
+    返回 None。name_raw 是 $FILE_NAME 的 UTF-16LE 原始字节（None 表示无
+    可用名字）——**解码推迟给调用方**：记录循环里九成以上是达不到门槛的
+    小文件，树构建不需要它们的名字（profile 实测 UTF-16 解码占解析时长
+    约两成）；扩展名统计可从原始字节里廉价抽取（UTF-16LE 的 ASCII 区
+    b".\\x00" 定界）。mtime 仅 with_mtime=True 时解析（$STANDARD_
+    INFORMATION 修改时间，FILETIME 整数），目录树路径不付这笔开销。
     """
-    if len(rec) < 0x40 or rec[:4] != b"FILE":
+    end = off + frs_size
+    if off + 0x40 > end or buf[off:off + 4] != b"FILE":
         return None
-    usa_off = rec[4] | (rec[5] << 8)
-    usa_cnt = rec[6] | (rec[7] << 8)
+    usa_off = buf[off + 4] | (buf[off + 5] << 8)
+    usa_cnt = buf[off + 6] | (buf[off + 7] << 8)
     # 更新序列修正：每 512 字节扇区末 2 字节被检查值占用，须换回真实数据，
     # 否则跨扇区边界的属性字段会读到脏字节（体积算错、名字乱码）。
-    if 0 < usa_off and usa_cnt > 1 and usa_off + usa_cnt * 2 <= len(rec):
+    if 0 < usa_off and usa_cnt > 1 and usa_off + usa_cnt * 2 <= frs_size:
         for i in range(1, usa_cnt):
-            end = i * 512 - 2
-            if end + 2 > len(rec):
+            o = off + i * 512 - 2
+            if o + 2 > end:
                 return None
-            rec[end] = rec[usa_off + i * 2]
-            rec[end + 1] = rec[usa_off + i * 2 + 1]
+            buf[o] = buf[off + usa_off + i * 2]
+            buf[o + 1] = buf[off + usa_off + i * 2 + 1]
     parent = -1
-    name = None
+    name_raw = None
     size = 0
     is_dir = False
+    mtime = 0
     # 热点路径全用 struct.unpack_from 直接内联（up 局部别名省一次属性查
     # 找）：记录解析每盘跑百万次，切片 + int.from_bytes 的每次小拷贝和
-    # lambda 间接调用都是主要 CPU 成本（基准：内联比切片快约 60%）。
+    # lambda 间接调用都是主要 CPU 成本。type+len 合并为一次 u64 读，
+    # 每条属性省一次 unpack_from 调用（基准合计：内联版比切片版快约六成）。
     up = struct.unpack_from
-    used = up("<I", rec, 0x18)[0] or frs_size
-    off = up("<H", rec, 0x14)[0]
+    used = up("<I", buf, off + 0x18)[0] or frs_size
+    a = off + up("<H", buf, off + 0x14)[0]
     # 行走边界用「记录已用大小」：最后一条属性之后到记录尾部是零填充，
     # 读到 a_len==0 就当属性区结束（不能当损坏 —— 真实 MFT 大多如此）。
-    while 0 < off <= frs_size - 16 and off < used:
-        a_type = up("<I", rec, off)[0]
+    while off + 0x10 <= a <= end - 16 and a - off < used:
+        tl = up("<Q", buf, a)[0]
+        a_type = tl & 0xFFFFFFFF
+        a_len = tl >> 32
         if a_type == 0xFFFFFFFF:
             break
-        a_len = up("<I", rec, off + 4)[0]
         if a_len == 0:
             break
-        if a_len < 24 or off + a_len > frs_size or a_len % 8:
+        if a_len < 24 or a + a_len > end or a_len % 8:
             return None                      # 属性越界/未对齐：记录视为损坏
-        nonres = rec[off + 8]
+        nonres = buf[a + 8]
         if a_type == 0x30 and nonres == 0:   # $FILE_NAME（驻留）
-            if name is None:
-                c = off + up("<H", rec, off + 0x14)[0]
-                if 0x42 <= c <= frs_size - 0x42:
-                    parent = up("<Q", rec, c)[0] & 0xFFFFFFFFFFFF
-                    nl = rec[c + 0x40]
-                    ns = rec[c + 0x41]
+            if name_raw is None:
+                c = a + up("<H", buf, a + 0x14)[0]
+                if 0x42 <= c - off <= frs_size - 0x42:
+                    parent = up("<Q", buf, c)[0] & 0xFFFFFFFFFFFF
+                    nl = buf[c + 0x40]
+                    ns = buf[c + 0x41]
                     if ns != 2 and 0 < nl <= 255:   # ns==2 是 DOS 8.3 短名
-                        name = rec[c + 0x42:c + 0x42 + nl * 2].decode(
-                            "utf-16-le", "replace")
+                        name_raw = buf[c + 0x42:c + 0x42 + nl * 2]
         elif a_type == 0x80:                 # $DATA
             if nonres:
                 if not size:
-                    size = up("<Q", rec, off + 0x38)[0]
+                    size = up("<Q", buf, a + 0x38)[0]
             else:
-                size = up("<I", rec, off + 0x10)[0]
+                size = up("<I", buf, a + 0x10)[0]
         elif a_type == 0x90:                 # $INDEX_ROOT → 目录
             is_dir = True
-        off += a_len
+        elif a_type == 0x10 and with_mtime and not mtime and nonres == 0:
+            c = a + up("<H", buf, a + 0x14)[0]
+            if off + 0x18 <= c <= end - 0x18:  # 修改时间在 STD_INFO 内容 +8
+                mtime = up("<Q", buf, c + 8)[0]
+        a += a_len
     if parent < 0:
         return None
-    return parent, name, size, is_dir
+    return parent, name_raw, size, is_dir, mtime
+
+
+def _mft_parse_record(rec: bytearray, frs_size: int):
+    """兼容入口：解析独立缓冲里的单条记录（selftest 与外部调用）。"""
+    return _mft_parse_at(rec, 0, frs_size, False)
+
+
+def _mft_name_decode(raw) -> str:
+    """$FILE_NAME 原始字节 → 字符串（惰性解码的唯一入口）。"""
+    return raw.decode("utf-16-le", "replace") if raw else ""
 
 
 _MFT_K32_READY = False
@@ -1301,7 +1410,8 @@ def _mft_read_at(h, offset: int, size: int, buf) -> int:
 
 
 def _mft_build_table(letter: str, root: str, on_progress=None,
-                     file_floor_mb: int | None = None):
+                     file_floor_mb: int | None = None,
+                     ext_stats: bool = False, with_mtime: bool = False):
     """直读 $MFT 产出与 _wiztree_parse 同形的 table。
 
     返回 (table|None, info)；info 为 {"secs", "records"} 或失败原因字符串。
@@ -1310,6 +1420,11 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
     file_floor_mb：文件名字保留门槛（MB）。默认与目录体积门槛一致
     （DISK_TREE_MIN_CHILD_MB）；大文件排行调用时传更低的值 —— 排行要
     10 MB 级的文件，目录树只关心 ≥50 MB 的（见 big_files 的 MFT 路径）。
+    ext_stats：聚合全量文件扩展名分布（table["ext"]，与 _wiztree_parse
+    同形）——「空间被什么类型吃了」这类概览问题直接查表。
+    with_mtime：解析 $STANDARD_INFORMATION 修改时间（仅达标文件，
+    table["mtimes"] = {完整路径: 'YYYY-MM-DD HH:MM'}，供大文件排行按
+    时间过滤）。两条开关都会增加少量每记录开销，目录树路径不付。
     """
     if os.name != "nt" or not is_admin():
         return None, "需要管理员权限"
@@ -1353,7 +1468,6 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
             return None, "$MFT 记录解析失败"
         # $MFT 的 $DATA runlist：非驻留属性从内容偏移处开始
         runs: list[tuple[int, int]] = []
-        _p, _n, _s, _d = head_info
         off = head[0x14] | (head[0x15] << 8)
         while 0 < off <= frs_size - 16:
             a_type = int.from_bytes(head[off:off + 4], "little")
@@ -1381,13 +1495,21 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
         arr_flags = bytearray()            # bit0: 目录
         dir_names: dict[int, str] = {}     # frn -> 目录名
         file_keep: dict[int, tuple[str, int, int]] = {}  # frn -> (名, 体积, 父)
+        file_mtime: dict[int, int] = {}    # frn -> FILETIME（仅 with_mtime）
+        exts: dict[str, list] = {}         # 扩展名 -> [字节, 个数]（仅 ext_stats）
         records = 0
 
         def read_chunks():
-            """按 runlist 顺序吐出整条记录对齐的字节块（32MB 一读）。"""
-            carry = bytearray()
+            """按 runlist 顺序吐出 (缓冲, 可用字节数)。
+
+            常驻缓冲原地解析：记录不再逐条切片拷贝（百万级 1KB 分配），
+            块间零头（跨 run 边界不足一条记录的尾巴）留在缓冲头部，仅做
+            每块一次 ≤1KB 的小搬运 —— 旧版每 32MB 块要整块 memcpy 两次。
+            """
             CH = max(frs_size * 1024, 1_048_576) - \
                 (max(frs_size * 1024, 1_048_576) % frs_size)
+            buf = bytearray(CH + frs_size)     # 尾部留一条记录给零头拼接
+            held = 0                           # 头部已持有的上块零头字节数
             for lcn, clusters in runs:
                 pos = lcn * bpc
                 left = clusters * bpc
@@ -1396,42 +1518,49 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                     want -= want % frs_size
                     if want <= 0:
                         break
-                    buf = bytearray(want)
-                    got = _mft_read_at(h, pos, want, buf)
+                    got = _mft_read_at(h, pos, want,
+                                       memoryview(buf)[held:held + want])
                     if got <= 0:
                         return
-                    data = carry + buf[:got]
-                    usable = len(data) - (len(data) % frs_size)
-                    carry = data[usable:]
-                    yield data[:usable]
+                    held += got
+                    usable = held - held % frs_size
+                    yield buf, usable
+                    held -= usable             # ≤ frs_size 的零头挪回头部
+                    if held:
+                        buf[:held] = buf[usable:usable + held]
                     pos += got
                     left -= got
             # 尾块不足一条记录：丢弃（截断的卷尾）
 
-        for chunk in read_chunks():
-            total = len(chunk)
-            for off in range(0, total, frs_size):
-                rec = chunk[off:off + frs_size]
+        for chunk, usable in read_chunks():
+            for roff in range(0, usable, frs_size):
                 idx = records
                 records += 1
-                in_use = len(rec) >= 0x18 and (rec[0x16] & 0x01)
-                info = _mft_parse_record(rec, frs_size) if in_use else None
+                in_use = roff + 0x18 <= usable and (chunk[roff + 0x16] & 0x01)
+                info = _mft_parse_at(chunk, roff, frs_size,
+                                     with_mtime) if in_use else None
                 if info is None:
                     arr_parent.append(0)
                     arr_size.append(0)
                     arr_flags.append(0)
                     continue
-                p, name, size, is_dir = info
+                p, name_raw, size, is_dir, mtime = info
                 arr_parent.append(p if 0 <= p < (1 << 47) else 0)
                 arr_size.append(size)
                 arr_flags.append(1 if is_dir else 0)
-                if is_dir and name and idx != 5:
-                    dir_names[idx] = name
-                elif not is_dir and name and (size >= f_floor or p == 5):
-                    # 与 _wiztree_parse 同一门槛：达标文件 + 盘根全保留
-                    # （AMTAG.BIN 这类小体积隐藏文件必须进「隐藏项」页签）
-                    # 文件门槛可用 file_floor_mb 单独调低（大文件排行路径）
-                    file_keep[idx] = (name, size, p)
+                if is_dir:
+                    if name_raw and idx != 5:
+                        dir_names[idx] = _mft_name_decode(name_raw)
+                elif name_raw:
+                    if ext_stats:
+                        _ext_bump_raw(exts, name_raw, size)
+                    if size >= f_floor or p == 5:
+                        # 与 _wiztree_parse 同一门槛：达标文件 + 盘根全保留
+                        # （AMTAG.BIN 这类小体积隐藏文件必须进「隐藏项」页签）
+                        # 文件门槛可用 file_floor_mb 单独调低（大文件排行路径）
+                        file_keep[idx] = (_mft_name_decode(name_raw), size, p)
+                        if with_mtime and mtime:
+                            file_mtime[idx] = mtime
             if on_progress and records % 65536 < frs_size // 1024 + 1:
                 try:
                     on_progress(min(1.0, records / est_records))
@@ -1481,15 +1610,21 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
             elif sz >= floor or path.count("\\") <= 1:
                 dirs_out[path] = sz
         files_out: dict[str, list] = {}
+        mtimes: dict[str, str] = {}
         for frn, (name, size, p) in file_keep.items():
             ppath = dir_path.get(p)
             if ppath is None:
                 continue                    # 父目录不在树里（孤儿记录）
-            files_out.setdefault(ppath, []).append(
-                (name, size, ppath.rstrip("\\") + "\\" + name))
+            full = ppath.rstrip("\\") + "\\" + name
+            files_out.setdefault(ppath, []).append((name, size, full))
+            if with_mtime and frn in file_mtime:
+                mtimes[full] = _ft_to_iso(file_mtime[frn])
+        table_out = {"dirs": dirs_out, "files": files_out, "rows": records,
+                     "ext": exts}
+        if with_mtime:
+            table_out["mtimes"] = mtimes
         secs = round(time.time() - t0, 2)
-        return {"dirs": dirs_out, "files": files_out, "rows": records}, \
-            {"secs": secs, "records": records}
+        return table_out, {"secs": secs, "records": records}
     except Exception as e:                  # noqa: BLE001 —— 加速路径绝不挂掉扫描
         return None, f"MFT 直读异常：{type(e).__name__}: {e}"
     finally:
@@ -1763,7 +1898,7 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
                     DISK_TREE_MAX_PER_DIR, DISK_TREE_MAX_NODES,
                     DISK_TREE_MAX_DESCENTS)
                 r = {"root": root.lower(), "nodes": roots, "rootfiles": rootfiles,
-                     "total": total}
+                     "total": total, "by_ext": _ext_top(table.get("ext") or {})}
                 engine = "wiztree"
                 # 表留在内存里，供「逐层拆子项」与后续下钻直接查
                 with _lock:
@@ -1790,7 +1925,7 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
         # 加速 —— 管理员 + NTFS 时直读 $MFT 产出同形表；失败静默再回落
         # PowerShell。引擎间关系：WizTree（外部工具）> MFT（自研）> PS 递归。
         mft_tbl, mft_info = _mft_build_table(
-            letter, root,
+            letter, root, ext_stats=True,
             on_progress=lambda frac: prog_set(
                 "mft", f"正在直读 {letter}: 盘的 MFT（自研引擎，"
                        f"{int(frac * 100)}%）", 8 + 62 * frac))
@@ -1804,7 +1939,7 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
                     DISK_TREE_MAX_PER_DIR, DISK_TREE_MAX_NODES,
                     DISK_TREE_MAX_DESCENTS)
                 r = {"root": root.lower(), "nodes": roots, "rootfiles": rootfiles,
-                     "total": total}
+                     "total": total, "by_ext": _ext_top(mft_tbl.get("ext") or {})}
                 engine = "mft"
                 table = mft_tbl
                 with _lock:
@@ -2189,6 +2324,10 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
         "engine_rows": (table["rows"] if engine in ("wiztree", "mft") else None),
         "engine_secs": (_WIZ_DIRS.get(letter, {}).get("parse_s")
                         if engine in ("wiztree", "mft") else None),
+        # 扩展名分布（Top 12 + 其他）：仅 WizTree/MFT 两条加速路径有 ——
+        # 都是把全量文件扫进内存表后顺手聚合的；PS 递归路径拿不到全量
+        # 文件清单，前端按缺省隐藏该区块。
+        "by_ext": (r.get("by_ext") or [] if engine in ("wiztree", "mft") else []),
         "subdir_ready": bool(engine in ("wiztree", "mft")),
     }
 
@@ -6713,12 +6852,28 @@ BIG_FILES_LIMIT = 30
 _BIGFILES_LOCK = threading.Lock()
 
 
+def _wiz_mtime_norm(s: str) -> str:
+    """WizTree CSV 修改时间 → 'YYYY-MM-DD HH:MM'；认不出返回空串。
+
+    实测格式 '2026/11/01 01:58:55'（第 4 列，不带引号）；分隔符可能随
+    系统区域变化（'-' 或 '/'），按可容错的方式手动切。
+    """
+    try:
+        date, tm = s.strip().split(" ", 1)
+        y, m, d = date.replace("-", "/").split("/")
+        return f"{int(y):04d}-{int(m):02d}-{int(d):02d} {tm[:5]}"
+    except (ValueError, AttributeError):
+        return ""
+
+
 def _wiztree_big_files(csv_path: str, floor: int) -> list:
     """从 WizTree 导出的 CSV 里抽取文件行（目录行以 \\ 结尾，直接跳过）。
 
     只保留达到地板的行——C 盘 77 万行里超过 512 KB 的通常只有几千行，
     全量留内存没有压力。切分方式与 _wiztree_parse 相同：路径必被双引号
     包住，按「第一个引号闭合」切，避免路径内逗号把行切坏。
+    返回 (路径, 体积, 修改时间) 三元组 —— 修改时间取第 4 列（归一化为
+    'YYYY-MM-DD HH:MM'），供前端「只看近期新增的大文件」过滤。
     """
     rows: list = []
     with open(csv_path, "r", encoding="utf-8-sig", errors="replace") as fh:
@@ -6733,23 +6888,28 @@ def _wiztree_big_files(csv_path: str, floor: int) -> list:
             path = line[1:end]
             if path.endswith("\\"):    # 目录行
                 continue
-            parts = line[end + 1:].lstrip(",").split(",", 1)
+            parts = line[end + 1:].lstrip(",").split(",")
             try:
                 size = int(parts[0].strip().strip('"'))
             except (ValueError, IndexError):
                 continue
-            if size >= floor:
-                rows.append((path, size))
+            if size < floor:
+                continue
+            rows.append((path, size,
+                         _wiz_mtime_norm(parts[2]) if len(parts) > 2 else ""))
     return rows
 
 
 def _mft_big_files(tbl: dict, floor: int) -> list:
-    """从 MFT 明细缓存抽取达标文件行（path, size)，按体积降序。
+    """从 MFT 明细缓存抽取达标文件行 (path, size, mtime)，按体积降序。
 
     与 _wiztree_big_files 同一输出形态 —— big_files 的三条引擎路径
     （wiztree / mft / powershell）在 rows 之后共用同一套 identify 流程。
+    mtime 仅在 build_table 以 with_mtime=True 生成时有值（大文件排行
+    路径会传），否则为空串。
     """
-    rows = [(full, sz)
+    mtimes = tbl.get("mtimes") or {}
+    rows = [(full, sz, mtimes.get(full, ""))
             for _parent, items in (tbl.get("files") or {}).items()
             for _name, sz, full in items if sz >= floor]
     rows.sort(key=lambda x: -x[1])
@@ -6792,7 +6952,7 @@ def big_files(drive: str, limit: int = BIG_FILES_LIMIT) -> dict:
                 prog_set("mft", f"内置 MFT 引擎正在读取 {letter}: 盘的文件明细",
                          10, indeterminate=True)
                 tbl, info = _mft_build_table(letter, root,
-                                             file_floor_mb=10)
+                                             file_floor_mb=10, with_mtime=True)
                 if tbl is not None:
                     engine = "mft"
                     rows = _mft_big_files(tbl, BIG_FILES_FLOOR_PS)
@@ -6830,16 +6990,19 @@ def big_files(drive: str, limit: int = BIG_FILES_LIMIT) -> dict:
             if isinstance(r, dict) and "error" in r:
                 return {"error": r["error"], "files": []}
             items = r if isinstance(r, list) else ([] if not r else [r])
-            rows = [(str(x.get("p") or ""), int(x.get("s") or 0))
+            rows = [(str(x.get("p") or ""), int(x.get("s") or 0),
+                     str(x.get("m") or ""))
                     for x in items if isinstance(x, dict)]
         rows.sort(key=lambda x: -x[1])
         files = []
-        for path, size in rows[:max(1, min(int(limit or BIG_FILES_LIMIT), 100))]:
+        for path, size, mtime in rows[:max(1, min(int(limit or BIG_FILES_LIMIT),
+                                                  100))]:
             name = os.path.basename(path)
             info = identify(name, path, "file")
             info.pop("match_score", None)
             files.append({"path": path, "name": name,
                           "dir": os.path.dirname(path), "size": size,
+                          "mtime": mtime,
                           "title": info.get("title") or "",
                           "cleanable": bool(info.get("cleanable")),
                           "what": info.get("what") or "",

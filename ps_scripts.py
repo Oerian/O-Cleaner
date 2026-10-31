@@ -236,7 +236,9 @@ $out = New-Object System.Collections.Generic.List[object]
 Get-ChildItem -LiteralPath $root -Recurse -Force -File -ErrorAction SilentlyContinue |
   ForEach-Object {
     if ($_.Length -gt $floor) {
-      $out.Add([pscustomobject]@{ p = $_.FullName; s = [int64]$_.Length })
+      $mtime = ''
+      try { $mtime = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm') } catch {}
+      $out.Add([pscustomobject]@{ p = $_.FullName; s = [int64]$_.Length; m = $mtime })
       $script:found++
       if ($progFile -and ($script:found % 200 -eq 0)) {
         try { [IO.File]::WriteAllText($progFile, [string]$script:found) } catch {}
