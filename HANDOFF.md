@@ -1516,6 +1516,14 @@ SECURITY 该处表述未动。
 - **知识产权确认（#47）：非逆向产物**。引擎在本仓库会话内逐行实现，git 历史完整可溯；仅参考公开的 Win32 API 语义（`FSCTL_GET_NTFS_VOLUME_DATA`、`NTFS_VOLUME_DATA_BUFFER` 官方文档）；两个关键 bug（VDB 须 96 字节、`ClustersPerFileRecordSegment==0` 的 unpacked 语义）均为本机实测发现的实证结论，非反编译他人代码所得；未复制任何第三方源码。
 - **开源评估（#48）：不单独开源，留在 O-Cleaner 公开仓库**。调研同类：pyofiles（Python，`mft=True` 即可 MFT 直读 disk_usage/walk——**最接近的竞品，已占据「Python MFT 快速磁盘用量」生态位**）、dfir_ntfs（取证 dump 解析）、Pythonic_RawCopy（取证恢复）、DiskAnalyzer（取证提取）、Koakuma（Rust CLI）、DiskMap（C# GUI）——全部面向取证/恢复或通用 UI，无一专做「实时卷目录体积聚合表」引擎，但 pyofiles 已使独立库的差异化价值有限。O-Cleaner 本身已开源（Oerian/O-Cleaner），引擎代码随之公开、可被复用；单独拆库的维护成本 > 收益。若未来 pyofiles 停更或出现明确需求再评估。
 
+**④补（2026-11-01）：WizTree 对比、原地解析二段优化、类型分布 + 大文件时间过滤（用户睡前进度批）**——
+- **WizTree vs 自研 MFT 对比（#50）**：非管理员 WizTree 4.28 导出 D:（19.4 万行 CSV，27.8 MB）约 2 秒 + 解析 0.16s；MFT 引擎 D: 2.32s（含读+解析+建表）——**速度同量级**。**数据互证**：steam 342.45 GiB（=367.69 GB）、GoPro-Exports 31.55 GiB（=33.87 GB）与 MFT 提权探针历史值换算后**逐位一致**。WizTree 优势：非管理员可用（可能走非 MFT 回退，CSV 无 $MFT 等元文件行）；MFT 优势：零外部依赖、无临时 CSV、进程内查表。注意 CLI 陷阱：`/export="带引号路径"` 会让 WizTree 掉进 GUI 模式等待输入（进程假活、CPU 空闲），必须 `/export=裸路径`。
+- **解析二段优化（#51）**：`_mft_parse_at` 原地解析（缓冲+offset，`_mft_parse_record` 保留为兼容包装）+ type/len 合并单次 u64 读 + **名字惰性解码**（返回 UTF-16LE 原始字节，树构建只解码目录与达标文件——九成小文件不再付 UTF-16 解码）+ read_chunks 常驻缓冲（消除每记录 1KB 拷贝 ×百万、每块 32MB×2 memcpy）。公平基准（旧版按 6301c64 原样复刻）：1.41s → 1.28s（**+10%，358K → 390K rec/s**），内存翻腾大幅下降。教训：**基准的旧版必须按历史原样用函数调用复刻**——内联进循环的"旧版"会因省掉 50 万次函数调用而虚高 30%（cProfile 显示真实提升 ~35%，墙钟 ~10%）。
+- **新功能：类型分布（概览页）**——`_wiztree_parse`/`_mft_build_table(ext_stats=True)` 顺手聚合**全量文件**（含被门槛裁掉的）扩展名 → `{"ext": {后缀: [字节, 个数]}}`，`_ext_top` 取 Top 12 + `__other__`；`/overview` payload 加 `by_ext`；前端概览面板新增占比条区块（`.extrow` 三段式：名称 | 条 | 体积·个数），PS 递归路径无全量清单则隐藏。MFT 侧扩展名从 UTF-16LE 原始字节廉价抽取（`_ext_of_raw`，rfind `b".\x00"`），不做全名解码。
+- **新功能：大文件时间过滤（排行页）**——三条引擎统一带回 mtime：WizTree CSV 第 4 列（`_wiz_mtime_norm` 容错解析 `2026/11/01 01:58:55`）、MFT `$STANDARD_INFORMATION` 修改时间（`with_mtime=True` 才解析，table["mtimes"]={路径: 'YYYY-MM-DD HH:MM'}，`_ft_to_iso` 换算）、PS 脚本 LastWriteTime。前端「全部/近 7/30/90 天」下拉**纯前端过滤**（切换不重扫），行内显示修改时间。
+- **回归**：selftest **549-0-6**（+13：类型分布 6、大文件 mtime 4、MFT mtime 2、前端结构 1；`_mft_parse_record` 返回改 5 元组/name 变原始字节，§4.5 断言同步）；CDP **140-0-5**（+2：类型分布 13 行真实渲染、大文件 30 行切近 30 天剩 7 行——mtime 全链路真数据验证）；pyflakes/lint_rules --strict/_lint_selftest/audit_dead/fix-encoding 全绿。
+- **注意**：`_mft_parse_record` 现返回 5 元组 `(parent, name_raw, size, is_dir, mtime)`，name_raw 是 UTF-16LE 字节（bytearray 切片）——外部调用方解码用 `_mft_name_decode`。`_wiztree_parse` 返回值新增 `"ext"` 键。
+
 ---
 
 ## 七、文件资产与代码清单
