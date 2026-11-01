@@ -3052,6 +3052,44 @@ def phase7_scoping_and_accel() -> None:
     check("MFT mtime：默认不解析（目录树路径不付这笔开销）",
           app._mft_parse_record(_si, 1024)[4] == 0)
 
+    # 目录聚合两段式（#56）：直接父累加 + BFS 定序反向聚合，
+    # 纯函数直测 —— 含「旧版 hops<128 截断丢深层文件贡献」的回归
+    _ap, _as, _af = __import__("array").array("q"), \
+        __import__("array").array("q"), bytearray()
+    _dn = {}
+
+    def _agg_add(p, sz, is_dir, name=""):
+        idx = len(_ap)
+        _ap.append(p)
+        _as.append(sz)
+        _af.append(1 if is_dir else 0)
+        if is_dir and idx != 5 and name:
+            _dn[idx] = name
+        return idx
+
+    for _ in range(5):
+        _agg_add(0, 0, False)                  # frn0-4 占位
+    _agg_add(0, 0, True)                       # frn5 = 根
+    _d1 = _agg_add(5, 0, True, "games")
+    _d2 = _agg_add(_d1, 0, True, "steam")
+    _agg_add(_d2, 300, False)                  # games\steam 里 300
+    _agg_add(5, 70, False)                     # 根下 70
+    _cur = 5
+    for _i in range(150):                      # 150 层深链（旧版 128 截断）
+        _cur = _agg_add(_cur, 0, True, f"deep{_i}")
+    _agg_add(_cur, 900, False)                 # 链底 900
+    _orphan = _agg_add(999999, 0, True, "orphan")
+    _agg_add(_orphan, 555, False)              # 孤儿目录下的文件（不输出）
+    _agg_total, _agg_path = app._mft_agg_paths(
+        _ap, _as, _af, _dn, "q:\\")
+    check("目录聚合：根合计 = 全部文件之和（含 150 层深链，不再被截断）",
+          _agg_total[5] == 300 + 70 + 900, str(_agg_total.get(5)))
+    check("目录聚合：路径拼接格式与父子层级一致",
+          _agg_path.get(_d2) == "q:\\games\\steam"
+          and list(_agg_path)[0] == 5 and _agg_path[5] == "q:\\")
+    check("目录聚合：孤儿目录与其文件不进结果",
+          _orphan not in _agg_path and _orphan not in _agg_total)
+
     # ---- 5) 子进程调用的超时有界性 ----
     # 这一段对应一次实际观察到的卡死：扫描停在「正在读取 Steam 库清单」不动，
     # 进度条（当时还是按时长估算的假进度）继续往上爬，看起来像在正常工作。
