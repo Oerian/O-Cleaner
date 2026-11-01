@@ -1524,6 +1524,12 @@ SECURITY 该处表述未动。
 - **回归**：selftest **549-0-6**（+13：类型分布 6、大文件 mtime 4、MFT mtime 2、前端结构 1；`_mft_parse_record` 返回改 5 元组/name 变原始字节，§4.5 断言同步）；CDP **140-0-5**（+2：类型分布 13 行真实渲染、大文件 30 行切近 30 天剩 7 行——mtime 全链路真数据验证）；pyflakes/lint_rules --strict/_lint_selftest/audit_dead/fix-encoding 全绿。
 - **注意**：`_mft_parse_record` 现返回 5 元组 `(parent, name_raw, size, is_dir, mtime)`，name_raw 是 UTF-16LE 字节（bytearray 切片）——外部调用方解码用 `_mft_name_decode`。`_wiztree_parse` 返回值新增 `"ext"` 键。
 
+**⑤补（2026-11-01 下午）：管理员端到端复测 + 目录聚合两段式重写（O(文件×深度)→O(记录数)）**——
+- **端到端复测（用户确认 UAC）**：概览配置 D: 墙钟 **1.96s**（历史 2.32s，二段解析优化生效）；C: 10.14s（1,164,288 条，含新增 ext_stats 的每文件后缀抽取——与历史 8.89s 不可直接比，当时无 ext_stats）；大文件配置（file_floor_mb=10 + with_mtime）D: 2.05s，**mtime 全链路真数据验证**（pagefile.sys 34GB 2026-10-28、Witcher3 texture.cache 31GB 等，时间戳合理）。
+- **目录聚合重写**：抽出纯函数 `_mft_agg_paths`。旧实现沿 parent 链逐跳累加（O(文件×深度)，百万文件×十来层=千万级 dict 操作，合成基准 595ms）；新实现①每文件只记到直接父目录（1 次 dict 操作/文件）②一次 BFS 定序（父先于子）后反向聚合 `total[d] = direct[d] + Σ total[child]`（基准 **105ms，5.7×**）。**顺带修复旧版 hops<128 截断**：超过 128 层的目录链会丢文件贡献（合成深链 150 层实测旧版根合计少 3,000），新版无此限、根合计精确等于文件总和。孤儿目录两版均不输出（旧版记进 dir_total 但不进 dir_path，输出等价）。
+- **实现教训**：下推式 `total[child] = total[parent] + direct[child]` 是**根路径和**不是子树和——首次实现即犯此错（合成数据上 BFS 结果比真实小 464 倍），正确形态是「BFS 定序 + 反向遍历聚合」。手算子树校验（抽 kids[5][0] 暴力重算）是抓住这类错误的最快手段。
+- **回归**：selftest **552-0-6**（+3：根合计含深链、路径格式、孤儿排除）；CDP **140-0-5**（D: 全盘扫描端到端 2 秒，树渲染无回归）。
+
 ---
 
 ## 七、文件资产与代码清单
