@@ -1530,6 +1530,12 @@ SECURITY 该处表述未动。
 - **实现教训**：下推式 `total[child] = total[parent] + direct[child]` 是**根路径和**不是子树和——首次实现即犯此错（合成数据上 BFS 结果比真实小 464 倍），正确形态是「BFS 定序 + 反向遍历聚合」。手算子树校验（抽 kids[5][0] 暴力重算）是抓住这类错误的最快手段。
 - **回归**：selftest **552-0-6**（+3：根合计含深链、路径格式、孤儿排除）；CDP **140-0-5**（D: 全盘扫描端到端 2 秒，树渲染无回归）。
 
+**⑥补（2026-11-01 傍晚）：$DATA 提前收工 + 引擎链翻转（自研 MFT 升为首选）**——
+- **$DATA 提前收工**：NTFS 属性按类型码排序（0x10 < 0x30 < 0x80），`$DATA` 之后只剩 DOS 短名/ADS 等解析用不上的尾巴 —— 主数据流已到且父引用已定时立即 break。真实形态记录（STD_INFO + Win32 名 + DOS 名 + DATA，5 属性）每条省 2/5 属性行走：微基准 275K → **300K rec/s（+9%）**。异常记录（$DATA 前置于 $FILE_NAME）parent 仍为 -1，不 break，按旧路径走全 —— 语义不变。曾评估把解析整体内联进循环：仅 +6%，不值双份解析器维护成本，否决（$DATA 提前收工后函数调用版反超内联版）。
+- **引擎链翻转（REQ-14 语义升级）**：`_scan_overview_impl` 与 `big_files` 的引擎链从 **WizTree → MFT → PS** 翻转为 **MFT（管理员 + NTFS）→ WizTree → PS**。依据：端到端 MFT 更快（D: 1.96s vs WizTree 导出+解析 ~2.4s；C: 10.1s vs 历史导出 29s）、零外部依赖、零临时 CSV（导一份 D: 明细 28MB——清理工具自己不制造垃圾）、数据已逐位互证。非管理员或非 NTFS 时 WizTree 仍是加速手段（它非管理员也能扫，只是没有元文件行）。UI 文案同步（mftOwnNote 标「首选」、wiztreeHint 改为「非管理员时自动改用」、bf.loading 更新）。
+- **真实验证（用户确认 UAC）**：本机 **装着 WizTree** 的管理员环境跑 `_scan_overview_impl("D")` → `engine="mft"`、`engine_label="MFT 直读加速（自研）"`、全程 2.63s、by_ext 13 条——翻转生效且装没装 WizTree 不再影响管理员路径。
+- **回归**：selftest **554-0-6**（+2：行为级——monkeypatch 全引擎证明管理员+NTFS 下 big_files 直走 MFT 且不碰 WizTree、mtime 回填；源码级——MFT 首选分支先于 WizTree 分支）；CDP **140-0-5**（本机非管理员走 WizTree 路径，行为与翻转前一致）。
+
 ---
 
 ## 七、文件资产与代码清单
