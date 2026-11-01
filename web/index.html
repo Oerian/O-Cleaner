@@ -3795,8 +3795,8 @@ function renderOverview() {
       ${FS.engine === "wiztree"
         ? t("fs.wiztreeNote","<span>借本机已装的 WizTree 读 MFT，比逐目录递归快；不安装、不修改它。</span>")
         : FS.engine === "mft"
-        ? t("fs.mftOwnNote","<span>自研 MFT 直读引擎：无需安装 WizTree，管理员权限下直接解析 NTFS 主文件表。</span>")
-        : t("fs.wiztreeHint","<span>装入 WizTree 可显著缩短全盘扫描耗时（本工具只调用，不捆绑）。</span>")}
+        ? t("fs.mftOwnNote","<span>自研 MFT 直读引擎（首选）：管理员权限下直接解析 NTFS 主文件表，无需外部工具、无临时文件。</span>")
+        : t("fs.wiztreeHint","<span>非管理员时自动改用 WizTree 加速（本工具只调用，不捆绑）；管理员 + NTFS 走内置 MFT 引擎。</span>")}
     </div>` : ""}
     <div style="margin-top:15px;padding-top:13px;border-top:1px solid var(--line)">
       <div style="color:var(--dim2);font-size:11.5px;margin-bottom:3px">
@@ -5155,7 +5155,7 @@ function renderBfRows() {
 async function openBigFiles() {
   $("modal").innerHTML = `<h2>${t("bf.title", "全盘大文件排行")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
-      ${t("bf.loading", "正在全盘遍历大文件（装了 WizTree 会快很多）…")}</div></div>`;
+      ${t("bf.loading", "正在全盘遍历大文件（管理员 + NTFS 时由自研 MFT 引擎秒级完成）…")}</div></div>`;
   $("mask").classList.add("on");
   let r;
   try {
@@ -6155,10 +6155,10 @@ const I18N_EN = {
   "fs.mftFast": " · WizTree MFT accelerated", "fs.mftFast2": "WizTree MFT acceleration",
   "fs.mftOwnFast": " · Direct MFT read", "fs.mftOwn2": "Direct MFT read (built-in)",
   "fs.mftOwnStat": "MFT read: {n} records, parsed in {s}s",
-  "fs.mftOwnNote": "<span>Built-in MFT engine: reads the NTFS Master File Table directly with admin rights — no WizTree needed.</span>",
+  "fs.mftOwnNote": "<span>Built-in MFT engine (first choice): reads the NTFS Master File Table directly with admin rights — no external tool, no temp files.</span>",
   "fs.psWalk": "PowerShell recursive scan",
   "fs.wiztreeNote": "<span>Reads the MFT via the WizTree installed on this machine — faster than per-folder recursion; it is never installed or modified.</span>",
-  "fs.wiztreeHint": "<span>Installing WizTree shortens full-disk scans a lot (this tool only calls it, never bundles it).</span>",
+  "fs.wiztreeHint": "<span>Without admin rights WizTree takes over the acceleration (called, never bundled); with admin + NTFS the built-in MFT engine runs.</span>",
   "fs.scannedNow": "Scanned this run", "fs.nodesSuffix": "nodes",
   "fs.extHead": "What types are eating the space (by extension, top 12)",
   "fs.extOther": "Other types", "fs.extNone": "no extension",
@@ -6432,7 +6432,7 @@ const I18N_EN = {
   "up.newer": "new version available — open the release page",
   "up.fail": "Check failed",
   "bf.title": "Largest files on this drive",
-  "bf.loading": "Scanning the whole drive for the biggest files (much faster with WizTree)…",
+  "bf.loading": "Scanning the whole drive for the biggest files (instant via the built-in MFT engine with admin rights)…",
   "bf.n": "top {n}",
   "bf.empty": "No files above the size floor",
   "bf.age.all": "All time", "bf.age.7": "Last 7 days",

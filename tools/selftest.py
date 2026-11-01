@@ -842,6 +842,39 @@ def phase1() -> None:
                   "error" in r3 or "files" in r3, str(r3)[:80])
         finally:
             app._mft_build_table = _mft_saved
+
+        # ---- 引擎链翻转（#59）：自研 MFT 升为首选 ----
+        # 管理员 + NTFS 时 big_files 必须直走 MFT，装了 WizTree 也不碰它
+        _sv = {k: getattr(app, k) for k in
+               ("is_admin", "_mft_volume_ntfs", "_mft_build_table",
+                "_mft_big_files", "_wiz_ok", "_wiztree_export")}
+        try:
+            app.is_admin = lambda: True
+            app._mft_volume_ntfs = lambda root: True
+            app._wiz_ok = lambda: True
+            _wiz_calls = []
+
+            def _wiz_should_not_run(drive, timeout=300):
+                _wiz_calls.append(drive)
+                return None, "WizTree 不应被调用"
+
+            app._wiztree_export = _wiz_should_not_run
+            app._mft_build_table = lambda *a, **k: (
+                {"files": {"q:s": [("big.bin", 20 << 20, "Q:\\big.bin")]},
+                 "mtimes": {"Q:\\big.bin": "2026-11-01 12:00"}},
+                 {"secs": 0, "records": 0})
+            app._mft_big_files = lambda tbl, floor: [
+                (full, sz, (tbl.get("mtimes") or {}).get(full, ""))
+                for _p, items in (tbl.get("files") or {}).items()
+                for _n, sz, full in items if sz >= floor]
+            r4 = app.big_files("C")    # C 盘存在；引擎全被 monkeypatch
+            check("引擎链翻转：big_files 管理员+NTFS 直走 MFT 不碰 WizTree",
+                  r4.get("engine") == "mft" and not _wiz_calls
+                  and r4["files"] and r4["files"][0]["mtime"] == "2026-11-01 12:00",
+                  str(r4)[:120])
+        finally:
+            for k, v in _sv.items():
+                setattr(app, k, v)
     finally:
         app._WIZ_DIRS.clear()
         app._WIZ_DIRS.update(_wiz_saved)
@@ -1486,6 +1519,9 @@ def phase3_http() -> None:
         check("快速扫描注入游戏本体（不受扫描深度限制）",
               "补齐游戏本体节点" in app_src
               and "_is_game_body_path" in app_src)
+        check("引擎链翻转：概览扫描 MFT 首选分支先于 WizTree 分支",
+              0 < app_src.find("自研 MFT 升为首选")
+              < app_src.find("正在用 WizTree 读取"))
         check("自检面板含数据目录可写项（后端实测写探针，前端三词条）",
               "def data_dir_writable" in app_src
               and "gd.dataWrite" in html and "gd.dataWriteOk" in html
