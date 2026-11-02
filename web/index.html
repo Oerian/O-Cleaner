@@ -3798,25 +3798,27 @@ function fsUniqueNodes() {
   return ns.filter(n => !hasAncestorNode(normKey(n.path)));
 }
 
-/** 类型分布（扩展名）区块（2026-11-02）：收起 = 一行小按钮；
-    展开 = 竖向柱状图（每列一个类型，柱高 ∝ 体积，放在环形图右侧空白区）。
-    原 13 行横条常驻把概览面板撑得过长、挤压主要功能，用户要求改掉。 */
+/** 类型分布（扩展名）区块（2026-11-02 二次精简）：收起 = 一个「类型分布 ▸」
+    小按钮；展开 = 竖向柱状图（每列一个类型，柱高 ∝ 体积，放在环形图右侧
+    空白区）。不再渲染长标题行 —— 用户反馈"显得繁杂"，柱状图自身即说明，
+    完整说明放悬停提示；点小按钮（▴）或整块收起。 */
 function extBoxHTML() {
   const list = FS.by_ext || [];
   if (!list.length) return "";
   const maxv = Math.max(1, ...list.map(e => e.size || 0));
-  const head = `${t("fs.extHead","空间都被什么类型吃了（按扩展名，Top 12）")}`;
+  const chip = t("fs.extChip","类型分布");
+  const tip = t("fs.extHead","空间都被什么类型吃了（按扩展名，Top 12）");
   if (!extOpen)
-    return `<button class="exttoggle" id="extToggle">${head} ▸ ${t("fs.extExpand","点击展开")}</button>`;
+    return `<button class="exttoggle" id="extToggle" title="${tip}">${chip} ▸</button>`;
   return `
-    <button class="exttoggle" id="extToggle">${head} ▴ ${t("fs.extCollapse","收起")}</button>
+    <button class="exttoggle" id="extToggle" title="${tip}">${chip} ▴</button>
     <div class="extv">
       ${list.map(e => {
         const h = Math.max(3, Math.round((e.size || 0) / maxv * 100));
         const label = e.ext === "__other__" ? t("fs.extOther","其他类型")
           : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
-        const tip = `${label} · ${fmt(e.size || 0)} · ${Number(e.count || 0).toLocaleString()} ${t("fs.extFilesShort","个")}`;
-        return `<div class="extcol" title="${tip}">
+        const tipc = `${label} · ${fmt(e.size || 0)} · ${Number(e.count || 0).toLocaleString()} ${t("fs.extFilesShort","个")}`;
+        return `<div class="extcol" title="${tipc}">
           <span class="extvval">${fmt(e.size || 0)}</span>
           <i style="height:${h}%"></i>
           <span class="extvlab">${label}</span></div>`;
@@ -3855,7 +3857,7 @@ function renderOverview() {
         <div class="rt"><div class="p">${usedPct}%</div><div class="l">${t("disk.used","已使用")}</div></div>
       </div>
       <div class="ovstats">
-        <div class="stat"><span>${t("fs.scannedNow","本次扫到")}</span><b>${FS.scanned_total_h} · ${FS.node_count} ${t("fs.nodesSuffix","个节点")}</b></div>
+        <div class="stat"><span>${t("fs.scannedNow","本次扫到")}</span><b>${FS.scanned_total_h}</b></div>
       </div>
       ${(FS.by_ext && FS.by_ext.length) ? `<div class="extbox" id="extBox">${extBoxHTML()}</div>` : ""}
     </div>
@@ -6247,8 +6249,7 @@ const I18N_EN = {
   "fs.psHint": "<span>Currently scanning with PowerShell (slowest): WizTree is not installed and the process is not elevated. Click “Elevate & restart” (top right) to use the built-in MFT engine (fastest), or install WizTree to speed things up.</span>",
   "fs.scannedNow": "Scanned this run", "fs.nodesSuffix": "nodes",
   "fs.extHead": "What types are eating the space (by extension, top 12)",
-  "fs.extExpand": "Click to expand", "fs.extCollapse": "Collapse",
-  "fs.extFilesShort": "files",
+  "fs.extChip": "Type breakdown", "fs.extFilesShort": "files",
   "fs.extOther": "Other types", "fs.extNone": "no extension",
   "fs.mixHead": "Of what was scanned, how much is cleanable vs. keep",
   "fs.upLevel": "Up one level", "fs.curDir": "Current folder: ",

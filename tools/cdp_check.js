@@ -1998,17 +1998,20 @@ class CDP {
       check("再点合并行：成员收起",
             await evaluate(`document.querySelectorAll('#fsChart .vrow-wrap.hidm').length === 0`));
       const bg = await evaluate(`(() => {
-        const seg = [...document.querySelectorAll('#fsModes .seg')].find(s => s.dataset.m === 'biggest');
-        if (!seg) return null;
-        seg.click();
+        const segs = [...document.querySelectorAll('#fsModes .seg')];
+        const seg = segs.find(s => s.dataset.m === 'biggest');
+        if (seg) seg.click();
+        // 2026-11-02 页签合并：全盘最大与顶层重合时页签不存在，当前渲染
+        // 就是顶层 —— 断言照常成立（无单独隐藏行 + 合并行在）。
         const names = new Set(FS.nodes.filter(n => n.hidden_sys).map(n => n.name.toLowerCase()));
         const rowNames = [...document.querySelectorAll('#fsChart .vrow .fname')]
           .map(e => ((e.firstChild || {}).textContent || '').trim().toLowerCase());
         return { leaked: rowNames.filter(n => names.has(n)).length,
-                 agg: !!document.querySelector('#fsChart .vrow-wrap.hagg') };
+                 agg: !!document.querySelector('#fsChart .vrow-wrap.hagg'),
+                 merged: !seg };
       })()`);
       await sleep(300);
-      check("全盘最大项目：无单独隐藏项行且合并行在",
+      check("全盘最大项目：无单独隐藏项行且合并行在（页签合并时按顶层断言）",
             bg && bg.leaked === 0 && bg.agg, JSON.stringify(bg || {}));
     } else if (hv) {
       skip2(`隐藏项合并展示（本盘未扫到隐藏项：hidN=${hv.hidN}）`);
