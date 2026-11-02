@@ -63,3 +63,6 @@ config/.filetypes.linttest.bak
 # 两者都随 --data-dir 落在数据目录；默认数据目录就是仓库根，必须忽略。
 pending-deletes.json
 .oc-*.lock
+
+# 引擎实测速度缓存（「谁快用谁」，本机耗时数据）
+config/engine_speed.json
