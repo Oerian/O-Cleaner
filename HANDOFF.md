@@ -1543,6 +1543,19 @@ SECURITY 该处表述未动。
 - **教训**：stub 引擎表要补 `rows`/`secs` 键——`_scan_overview_impl` 组装 `engine_note` 直接 `table['rows']`，stub 缺键会让阶段一异常中断、后续检查静默丢失（首跑 548-1 即此因，表象是"阶段一 未抛异常"而不是 KeyError 指向测试本身）。
 - **回归**：selftest **561-0-6**；本地 7 道门禁（selfcheck.ps1）全过；CDP **140-0-5**；CI 41371927400 三作业绿（d0d05a7，HEAD 带 `[ci]`）。
 
+**⑧补（2026-11-02 凌晨）：UI 批量打磨九项（#62–#68）+ 云端同步（Gist 双向）**——用户 5 张截图批注 9 条 UI 意见 + 追加「数据在线存储、双向同步」，全部落实（提交 fed9bee / 820d3be / 924a606 / d0cc30d / 9379468，均推送 main）：
+- **概览瘦身**：类型分布改为**点击展开**（`extBoxHTML()`：折叠=「类型分布 ▸」小按钮，展开=竖向柱状图 `.extv/.extcol`，高度∝size/max、tooltip 含名称·体积·个数），去掉「49 个节点」节点数后缀与冗长表头（用户嫌繁杂）；**柱宽 bug 修复**：`maxSize = rows[0].size` 在按名排序时首个是最小行 → 全部大行被裁成等长，改为 `Math.max(1, ...rows.map(r=>r.size||0))`（用户报的"柱状图长度相同"即此因）。
+- **顶层/全盘最大合并**：根层（fsStack 空）时把"全盘最大项目"与"占用排行"做 size-sorted top-30 签名比对（`normKey+":"+size`，目录 depth≥1、剔除 BIG_CONTAINERS/游戏体内/隐藏行），一致 → 隐藏 biggest 页签且 `fsMode==="biggest"` 回落 `"dirs"`；下钻/深扫后列表分歧页签自动回归。
+- **游戏占用概览页签化**：不分 DE 盘堆叠，改 `steamTab` 页签（`gr:<DRIVE>`/`gr:rest`/epic/gog/secCustom），`applySteamTab()` 切换可见性；`body[data-view="steam"]` 时抑制盘卡高亮。
+- **引擎择快（"哪个快用哪个"）**：`config/engine_speed.json` 记录每盘 MFT/WizTree 实测秒数，`_eng_prefer_wiztree()` 仅当两者都有数且 `wiztree < mft×0.9`（迟滞带防抖）才首选 WizTree；后台校准线程 `_eng_calibrate_wiztree()` 每 14 天量一次 WizTree 导出+解析（否则 MFT 首选路径永远采不到 WizTree 时间）。
+- **文案更名**："自研 MFT"→"MFT"（engine_label/prog/note 全部去「自研」强调）；"隐藏项"→"系统隐藏项"（hiddenAggName/hiddenTab，EN 同步 "System hidden items"）。
+- **扫描卡死修复**：`startFullScan()` 成功路径从不恢复按钮文案 → 一直显示"扫描中"；finally 里统一还原 `btn.fullScan` 文案。
+- **默认折叠 + 导航去重**：手风琴存储键升 `oc.acc.v1`→`v2`（废掉旧的"多个全开"状态），仅"运行环境自检"默认展开；工具栏删除 `#btnSteam`（与右侧视图导航重复）。
+- **云端同步（Gist 双向）**：用户自己的私有 Gist 做在线存储。`config/sync.json`（gitignore）存 GitHub PAT + gist_id；`_gist_request()` 包装 401/403 友好报错；push 首次自动建 gist 并回存 id；pull 走抽取出的模块级 `_import_bundle()`（三类自定义逐项校验合并）再记 last_pull/device；**双向 = pull-merge → push 合并超集**（并集收敛，删除操作不传播——UI intro 已如实写明）。自定义规则面板新增 `#syncBox`（保存令牌/推送/拉取/双向 + 状态行）；接口 `/__oc__/sync/status|save|push|pull|merge`（status 永不回传 token）。
+- **教训**：①`_import_bundle` 从路由处理函数抽取为模块级时 **kind 校验必须随迁**（漏了会让"错误 kind 的数据包被拒绝"自测失败——抽取函数不是搬运注释，校验逻辑也是函数契约的一部分）；②selftest 往 `_sv2` try 块里插测试时注意缩进层级（8 空格位插 12 空格体，插错会把 try 提前闭合，表象是 SyntaxError 而非逻辑错）；③CDP/自测 UI 断言随行为门控：合并隐藏 biggest 页签后断言应转向当前视图（`merged: !seg`），无 Steam 环境页签数门槛降为 ≥1。
+- **回归**：selftest **573-0-6**（+12：同步行为 4（临时配置文件 + fake `_gist_request`，不真联网）、竖向类型分布/合并/页签/文案/手风琴等 UI 结构 8）；CDP **139-0-5**（+/-：extToggle 点击展开计数 13 列、页签切换 on===1、合并门控）；本地 7 道门禁全过；CI d0cc30d 与 9379468 两轮全绿（run 41453481410 / 41455618395）。
+- **CI 排障经验**：`[ci]` 必须在 HEAD（gitignore 等小提交跟在后面会跳过慢作业 → `gh workflow run CI --ref main` 兜底）；gh CLI 在本机偶发 TLS 握手超时，改用 `curl -H "Authorization: Bearer $(gh auth token)"` 直接打 API（含 check-run annotations、job log 下载）反而稳定；CI 上库分区页签/隐藏项断言需按"合并态/无 Steam"分支写，两轮失败均为此因。
+
 ---
 
 ## 七、文件资产与代码清单
