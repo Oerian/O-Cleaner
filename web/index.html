@@ -1044,6 +1044,34 @@
                   data-i18n="rules.saveBtn">保存当前勾选为规则</button>
         </div>
         <div id="ruleList"></div>
+        <details style="margin-top:12px" id="syncBox">
+          <summary style="cursor:pointer;color:var(--dim);font-size:12.5px"
+                   data-i18n="sync.head">云端同步（GitHub Gist · 双向）</summary>
+          <div style="margin-top:9px;color:var(--dim2);font-size:11.5px;line-height:1.7"
+               data-i18n-html="sync.intro">
+            把换算单位、释义覆盖与固定项规则存到<b>你自己的 GitHub 私密 Gist</b>，
+            多台设备互相同步。需要一个带 gist 权限的
+            <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">个人访问令牌</a>，
+            令牌只存本机 config/sync.json，不经过任何第三方。
+            双向同步 = 拉取合并（远端逐项并进本地，不覆盖你本地的已有项）→ 把合并后的全集推回；删除不传播。
+          </div>
+          <div class="field" style="margin-top:9px">
+            <label style="width:76px;flex:none" data-i18n="sync.token">访问令牌</label>
+            <input type="password" id="syncToken" placeholder="ghp_…（只存本机）"
+                   autocomplete="new-password" style="flex:1">
+            <button id="btnSyncSave" class="tiny" style="flex:none" data-i18n="sync.save">保存</button>
+          </div>
+          <div class="field">
+            <label style="width:76px;flex:none" data-i18n="sync.gistId">Gist ID</label>
+            <input type="text" id="syncGist" placeholder="留空 = 首次推送自动创建" style="flex:1">
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin:-3px 0 0 82px">
+            <button id="btnSyncPush" class="tiny" data-i18n="sync.push">推送到云端</button>
+            <button id="btnSyncPull" class="tiny" data-i18n="sync.pull">拉取合并</button>
+            <button id="btnSyncMerge" class="tiny primary" data-i18n="sync.merge">双向同步</button>
+          </div>
+          <div id="syncMsg" style="color:var(--dim2);font-size:11.5px;margin-top:9px;line-height:1.7"></div>
+        </details>
         <details style="margin-top:12px">
           <summary style="cursor:pointer;color:var(--dim);font-size:12px"
                    data-i18n="rules.bundleHead">导入 / 导出自定义数据（含换算单位与释义）</summary>
@@ -5758,6 +5786,68 @@ $("bundleFile").addEventListener("change", async e => {
 });
 $("ruleName").addEventListener("keydown", e => { if (e.key === "Enter") saveRule(); });
 
+/* ---- 云端同步（GitHub Gist 双向）：自定义数据在线存储 ----
+   令牌只经「保存」写入本机 config/sync.json；推送/拉取/双向三种动作，
+   结果统一汇报到 #syncMsg（成功给计数 + 时间，失败给原因）。 */
+function syncReport(label, r) {
+  const msg = $("syncMsg");
+  if (r.error) { msg.innerHTML = '<span class="res-err">' + esc(r.error) + "</span>"; return; }
+  const rep = r.pull || r;                     // 双向时 pull 在 r.pull 里
+  const parts = [];
+  if (rep.units_added) parts.push(t("io.unitsAdded","单位 +{n}").replace("{n}", rep.units_added));
+  if (rep.units_updated) parts.push(t("io.unitsUpdated","单位 ~{n}").replace("{n}", rep.units_updated));
+  if (rep.overrides_applied) parts.push(t("io.overrides","释义 {n} 条").replace("{n}", rep.overrides_applied));
+  if (rep.rules_added) parts.push(t("io.rulesAdded","规则 +{n}").replace("{n}", rep.rules_added));
+  if (rep.rules_updated) parts.push(t("io.rulesUpdated","规则 ~{n}").replace("{n}", rep.rules_updated));
+  const skipN = [].concat(rep.units_skipped, rep.overrides_skipped,
+                          rep.rules_skipped).filter(Boolean).length;
+  if (rep.empty) parts.push(t("sync.emptyRemote","云端暂无数据"));
+  if (r.push) parts.push(t("sync.pushed","已推回云端"));
+  if (rep.device) parts.push(t("sync.fromDevice","来自 {v}").replace("{v}", rep.device));
+  if (skipN) parts.push(t("io.skippedN","（跳过 {n} 项，详情见控制台）").replace("{n}", skipN));
+  msg.textContent = `${label}：${parts.join("，") || t("sync.noChange","没有变化")}`;
+}
+async function syncCall(action, label) {
+  $("syncMsg").textContent = t("sync.working","正在同步…");
+  try {
+    const r = await apiJSON(`${API}/__oc__/sync/${action}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: $("syncToken").value.trim() || undefined,
+                             gist_id: $("syncGist").value.trim() || undefined }) });
+    syncReport(label, r);
+    if (r.gist_id) $("syncGist").value = r.gist_id;      // 首推回填自动创建的 id
+    if (r.push && r.push.gist_id) $("syncGist").value = r.push.gist_id;
+  } catch (e) {
+    $("syncMsg").innerHTML = '<span class="res-err">'
+      + esc(t("sync.fail","同步失败：") + e.message) + "</span>";
+  }
+}
+$("btnSyncSave").addEventListener("click", async () => {
+  try {
+    const r = await apiJSON(`${API}/__oc__/sync/save`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: $("syncToken").value.trim() || undefined,
+                             gist_id: $("syncGist").value.trim() }) });
+    if (r.error) { $("syncMsg").innerHTML = '<span class="res-err">' + esc(r.error) + "</span>"; return; }
+    $("syncToken").value = "";               // 令牌已入库，不留在输入框
+    $("syncMsg").textContent = t("sync.saved","已保存（令牌只存本机 config/sync.json）");
+  } catch (e) { $("syncMsg").textContent = t("sync.fail","同步失败：") + e.message; }
+});
+$("btnSyncPush").addEventListener("click", () => syncCall("push", t("sync.push","推送到云端")));
+$("btnSyncPull").addEventListener("click", () => syncCall("pull", t("sync.pull","拉取合并")));
+$("btnSyncMerge").addEventListener("click", () => syncCall("merge", t("sync.merge","双向同步")));
+(async () => {   // 初始化：回填 gist id 与最近同步时间
+  try {
+    const s = await apiJSON(`${API}/__oc__/sync/status`);
+    if (s.gist_id) $("syncGist").value = s.gist_id;
+    const times = [s.last_push && (t("sync.lastPush","上次推送") + " " + s.last_push),
+                   s.last_pull && (t("sync.lastPull","上次拉取") + " " + s.last_pull)]
+                  .filter(Boolean);
+    if (times.length && $("syncMsg")) $("syncMsg").textContent = times.join(" · ")
+      + (s.token_set ? "" : " · " + t("sync.needToken","尚未配置令牌"));
+  } catch (_) {}
+})();
+
 $("btnSchSave").addEventListener("click", async () => {
   const s = await apiJSON(`${API}/__oc__/schedule`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -5994,6 +6084,15 @@ const I18N_EN = {
   "el.fail": "Elevation failed: ",
   "el.timeout": "Timed out waiting for the elevated instance. Please reopen O-Cleaner.",
   "btn.scan": "Rescan", "btn.fullScan": "Full-disk scan", "btn.steam": "Game Storage",
+  "sync.head": "Cloud sync (GitHub Gist · two-way)",
+  "sync.intro": "Store units, description overrides and fixed rules in <b>your own private GitHub Gist</b> and sync across devices. Requires a <a href=\"https://github.com/settings/tokens\" target=\"_blank\" rel=\"noopener\">personal access token</a> with gist scope; the token is stored only in local config/sync.json. Two-way sync = pull & merge (remote items are added into local, never overwriting your existing ones) → push the merged set back; deletions do not propagate.",
+  "sync.token": "Token", "sync.save": "Save", "sync.gistId": "Gist ID",
+  "sync.push": "Push", "sync.pull": "Pull & merge", "sync.merge": "Two-way sync",
+  "sync.working": "Syncing…", "sync.saved": "Saved (token stays in local config/sync.json)",
+  "sync.fail": "Sync failed: ", "sync.emptyRemote": "cloud is empty",
+  "sync.pushed": "pushed back to cloud", "sync.fromDevice": "from {v}",
+  "sync.noChange": "nothing to change", "sync.lastPush": "Last push",
+  "sync.lastPull": "Last pull", "sync.needToken": "no token configured yet",
   "btn.bigFiles": "Largest files",
   "btn.all": "Select all", "btn.none": "Select none", "btn.save": "Save",
   "scope.label": "Cleanup scope",

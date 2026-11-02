@@ -983,6 +983,76 @@ def phase1() -> None:
             check("谁快用谁：实测 MFT 更快时维持 MFT 在先不碰 WizTree",
                   r11.get("engine") == "mft" and not _wiz_calls,
                   str(r11)[:120])
+
+            # ---- 云端同步（2026-11-02 用户要求）：Gist 双向，外部 API 全 stub ----
+            # 不发真实网络请求、不碰真实 config/sync.json（指到临时文件）；
+            # 拉取合并的落盘动作 stub 掉 —— 它的合并语义已由 bundle 导入测试覆盖。
+            _sync_sv = {k: getattr(app, k) for k in
+                        ("_gist_request", "_export_bundle", "_import_bundle",
+                         "_SYNC_CFG_PATH")}
+            try:
+                import tempfile as _tmpmod
+                app._SYNC_CFG_PATH = Path(_tmpmod.gettempdir()) / \
+                    f"oc-selftest-sync-{os.getpid()}.json"
+                _gist_store: dict = {}
+
+                def _fake_gist(method, url, token, payload=None, timeout=30):
+                    if method == "POST":
+                        _gist_store["id"] = "gist123"
+                        return 201, {"id": "gist123", "html_url": "https://gist/x"}
+                    if method == "PATCH":
+                        return 200, {"id": _gist_store.get("id", "gist123"),
+                                     "html_url": ""}
+                    if method == "GET":
+                        return 200, {"files": {"oc-cleaner-sync.json": {
+                            "content": json.dumps(
+                                _gist_store.get("payload") or {},
+                                ensure_ascii=False)}}}
+                    raise RuntimeError(f"unexpected method {method}")
+
+                app._gist_request = _fake_gist
+                app._export_bundle = lambda: {
+                    "kind": "ocleaner-custom", "version": 1,
+                    "units": [], "overrides": {}, "rules": []}
+                _imported: list = []
+                app._import_bundle = lambda data: (
+                    _imported.append(data), {"units_added": 1})[1]
+
+                # 推送：自动创建 Gist 并把 gist_id 回存配置；载荷带本机 bundle
+                r12 = app._sync_push("tok")
+                check("云同步：首推自动创建 Gist 并回存 gist_id",
+                      r12.get("gist_id") == "gist123"
+                      and app._sync_cfg().get("gist_id") == "gist123")
+                # 拉取：远端 bundle 原样送进导入合并（复用逐项校验）
+                _gist_store["payload"] = {"device": "PC1", "data": {
+                    "kind": "ocleaner-custom", "units": [],
+                    "overrides": {}, "rules": []}}
+                r13 = app._sync_pull("tok", "gist123")
+                check("云同步：拉取把远端数据合并进本地（复用导入校验）",
+                      r13.get("units_added") == 1 and _imported
+                      and _imported[-1].get("kind") == "ocleaner-custom",
+                      str(r13)[:100])
+                # 双向 = 拉取合并 + 推回全集
+                _n0 = len(_imported)
+                r14 = app._sync_two_way("tok")
+                check("云同步：双向同步 = 拉取合并 + 推回全集",
+                      r14.get("pull") and r14.get("push")
+                      and len(_imported) == _n0 + 1, str(r14)[:100])
+                # 缺令牌：明确报错而非静默
+                try:
+                    app._sync_push("")
+                    _no_tok_ok = False
+                except RuntimeError:
+                    _no_tok_ok = True
+                check("云同步：缺令牌明确报错", _no_tok_ok)
+            finally:
+                _tmp_sync_cfg = app._SYNC_CFG_PATH   # 此刻指向测试临时文件
+                for k, v in _sync_sv.items():
+                    setattr(app, k, v)
+                try:                                 # 只删临时文件，绝不动真实配置
+                    Path(str(_tmp_sync_cfg)).unlink(missing_ok=True)
+                except Exception:
+                    pass
         finally:
             for k, v in _sv2.items():
                 setattr(app, k, v)
@@ -1658,6 +1728,18 @@ def phase3_http() -> None:
               and 'class="panel acc open" data-acc="rules"' not in html
               and 'class="panel acc open" data-acc="guide"' in html
               and 'oc.acc.v2' in html)
+        check("云端同步（2026-11-02）：Gist 双向同步 UI 与端点就位",
+              'id="syncBox"' in html and 'id="btnSyncMerge"' in html
+              and '"/__oc__/sync/push"' in app_src
+              and '"/__oc__/sync/pull"' in app_src
+              and '"/__oc__/sync/merge"' in app_src
+              and "_sync_two_way" in app_src
+              and "config/sync.json" in app_src
+              and '"sync.merge"' in html)
+        check("云同步安全（2026-11-02）：令牌输入框为密码型、状态接口只报是否已配置",
+              'type="password"' in html
+              and '"token_set": bool(' in app_src
+              and "sync/status" in app_src)
         check("PS 兜底文案专属：不再误称会用 WizTree，指引一键提权",
               html.count("fs.psHint") >= 2 and "fs.wiztreeHint" not in html)
         check("自检面板含数据目录可写项（后端实测写探针，前端三词条）",

@@ -46,6 +46,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError as _HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request as _UrlRequest, urlopen as _urlopen
 from ps_scripts import (PS_BIG_FILES, PS_DIR_KIND, PS_LOCK_HOLDERS,
@@ -3094,6 +3095,284 @@ def _export_bundle() -> dict:
         "overrides": load_overrides().get("targets", {}),
         "rules": load_custom_rules(),
     }
+
+
+def _import_bundle(body: dict) -> dict:
+    """自定义数据包导入的落盘逻辑（原 /bundle/import handler 内联逻辑原样
+    抽出，供路由与云同步共用）：逐项校验并**合并**进本地文件 —— 已有同名
+    单位/规则更新、其余新增，绝不先清空再写入，返回各项计数与跳过原因。
+    kind 不是 ocleaner-custom 时抛 ValueError（路由转 400）。"""
+    if str((body or {}).get("kind") or "") != "ocleaner-custom":
+        raise ValueError("这不是 O-Cleaner 自定义数据包"
+                         "（kind 应为 ocleaner-custom）")
+    rep = {"units_added": 0, "units_updated": 0, "units_skipped": [],
+           "overrides_applied": 0, "overrides_skipped": [],
+           "rules_added": 0, "rules_updated": 0, "rules_skipped": []}
+
+    # 1) 换算单位：按 id 更新、按 label 去重，其余新增
+    cfg = load_convert()
+    units = list(cfg.get("units", []))
+    by_id = {str(u.get("id") or ""): u for u in units}
+    by_label = {str(u.get("label") or ""): u for u in units}
+    for i, u in enumerate(body.get("units") or []):
+        if not isinstance(u, dict):
+            continue
+        label = str(u.get("label") or "").strip()
+        nbytes = _bundle_unit_bytes(u)
+        if not label:
+            rep["units_skipped"].append(f"units[{i}] 缺名称")
+            continue
+        if nbytes is None:
+            rep["units_skipped"].append(
+                f"「{label}」缺有效大小（bytes_per_unit 或 size.value/unit）")
+            continue
+        uid = str(u.get("id") or "").strip()
+        entry = {"label": label,
+                 "plural": str(u.get("plural") or label).strip() or label,
+                 "bytes_per_unit": nbytes,
+                 "note": str(u.get("note") or "").strip(),
+                 "category": str(u.get("category") or "自定义").strip()}
+        if uid and uid in by_id:
+            by_id[uid].update(entry)
+            rep["units_updated"] += 1
+        elif label in by_label:
+            rep["units_skipped"].append(f"「{label}」已有同名单位")
+        else:
+            uid = uid or f"u{int(time.time() * 1000) % 10 ** 10}{i}"
+            entry["id"] = uid
+            units.append(entry)
+            by_id[uid] = entry
+            by_label[label] = entry
+            rep["units_added"] += 1
+    cfg["units"] = units
+    _atomic_write(CONVERT_PATH, cfg)
+    _cache.pop(str(CONVERT_PATH), None)
+
+    # 2) 释义/结论覆盖：与 overrides/set 同一套校验
+    data = load_overrides()
+    for k, v in (body.get("overrides") or {}).items():
+        k = str(k).strip()
+        # 路径键（占用排行右键自定义 / 自定义提级用的归一化路径）
+        # 与目标键走同一套校验：形如盘符绝对路径且限长 500。
+        # 此前一刀切拒绝含反斜杠的键，导致导出的行级覆盖导不回来
+        # （2026-10-13 修复，随「自定义提级」一起走迁移数据）。
+        _is_path_key = bool(re.match(r"^[a-zA-Z]:\\", k)) and len(k) <= 500
+        if (not k or len(k) > (500 if _is_path_key else 200)
+                or "/" in k or ("\\" in k and not _is_path_key)):
+            rep["overrides_skipped"].append(f"「{k[:60]}」键不合法")
+            continue
+        entry = None
+        if isinstance(v, dict):
+            entry = {}
+            for f in ("what", "rebuild", "impact", "keep_if"):
+                t = v.get(f)
+                if isinstance(t, str) and t.strip():
+                    if len(t) > 2000:
+                        entry = None
+                        break
+                    entry[f] = t.strip()
+            for f in ("label", "note"):
+                t = v.get(f)
+                if isinstance(t, str) and t.strip() and len(t) <= 200:
+                    entry[f] = t.strip()
+            if isinstance(v.get("cleanable"), bool):
+                entry["cleanable"] = v["cleanable"]
+            if isinstance(v.get("pin"), bool):
+                entry["pin"] = v["pin"]
+            if v.get("label_kind") in ("clean", "unk", "keep"):
+                entry["label_kind"] = v["label_kind"]
+            if isinstance(v.get("color"), str) and re.fullmatch(r"#[0-9a-fA-F]{6}", v["color"]):
+                entry["color"] = v["color"].lower()
+            if not entry:
+                entry = None
+        if entry is None:
+            rep["overrides_skipped"].append(f"「{k}」没有可用的字段")
+            continue
+        data["targets"][k] = entry
+        rep["overrides_applied"] += 1
+    save_overrides(data)
+
+    # 3) 固定项规则：与 custom-rules/add 同一套校验（id 必须真实存在）
+    rules = load_custom_rules()
+    valid_cache: dict = {}
+    for i, r0 in enumerate(body.get("rules") or []):
+        if not isinstance(r0, dict):
+            continue
+        name = str(r0.get("name") or "").strip()
+        ids = [str(x).strip() for x in (r0.get("ids") or []) if str(x).strip()]
+        drive = (str(r0.get("drive") or "C")).rstrip(":").upper() or "C"
+        if not name:
+            rep["rules_skipped"].append(f"rules[{i}] 缺规则名")
+            continue
+        if not ids:
+            rep["rules_skipped"].append(f"「{name}」没有勾选任何清理项")
+            continue
+        if drive not in valid_cache:
+            valid_cache[drive] = {t["id"]
+                                  for t in build_targets(drive, None)}
+        bad = [x for x in ids if x not in valid_cache[drive]]
+        if bad:
+            rep["rules_skipped"].append(
+                f"「{name}」含 {len(bad)} 个当前不存在的清理项"
+                f"（如 {bad[0]}）")
+            continue
+        existing = next((r for r in rules if r["name"] == name), None)
+        if existing:
+            existing["ids"] = ids
+            existing["drive"] = drive
+            existing["auto"] = bool(r0.get("auto"))
+            rep["rules_updated"] += 1
+        else:
+            rules.append({
+                "id": f"rule-{int(time.time() * 1000) % 10 ** 10}{i}",
+                "name": name, "ids": ids, "drive": drive,
+                "auto": bool(r0.get("auto")),
+                "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+            rep["rules_added"] += 1
+    save_custom_rules(rules)
+    return rep
+
+
+# ======================================================================
+#  云端同步（2026-11-02 用户要求：数据在线存储、支持双向同步）
+# ======================================================================
+# 自定义数据（换算单位 / 释义覆盖 / 固定项规则，与手工导出包同一份数据）
+# 存到用户**自己**的 GitHub 私密 Gist：个人访问令牌（需 gist 权限）只存
+# 本机 config/sync.json，不进仓库、不经过任何第三方服务器。
+# 「双向同步」= 拉取合并（远端按 bundle/import 的逐项校验并进本地，
+# 不覆盖本地已有项）→ 把合并后的全集推回远端，两端收敛为并集；
+# 删除不传播（v1 语义，界面有说明）。Gist 首次推送自动创建并记住 id。
+_SYNC_CFG_PATH = CONFIG_DIR / "sync.json"
+_GIST_API = "https://api.github.com/gists"
+_GIST_FILE = "oc-cleaner-sync.json"
+
+
+def _sync_cfg() -> dict:
+    try:
+        d = json.loads(_SYNC_CFG_PATH.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sync_save_cfg(cfg: dict) -> None:
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _atomic_write(_SYNC_CFG_PATH, cfg)
+    except OSError:
+        pass
+
+
+def _sync_token(body: dict | None = None) -> str:
+    """令牌优先取请求体（前端本次输入），否则回落本机保存的配置。"""
+    t = str((body or {}).get("token") or "").strip()
+    return t or str(_sync_cfg().get("token") or "").strip()
+
+
+def _gist_request(method: str, url: str, token: str,
+                  payload: dict | None = None,
+                  timeout: int = 30) -> tuple[int, dict]:
+    """Gist API 薄封装，返回 (status, json)。HTTP 错误抛 RuntimeError
+    （带 GitHub 的 message），网络错误原样抛由调用方兜底。"""
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = _UrlRequest(url, data=data, method=method, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "O-Cleaner",
+        "Content-Type": "application/json"})
+    try:
+        with _urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except _HTTPError as e:
+        try:
+            detail = json.loads(e.read().decode("utf-8")).get("message", "")
+        except Exception:
+            detail = ""
+        if e.code == 401:
+            raise RuntimeError("令牌无效或已过期（GitHub 401）——"
+                               "请到 github.com/settings/tokens 重新生成一个带 gist 权限的令牌")
+        if e.code == 403 and "rate limit" in detail.lower():
+            raise RuntimeError("GitHub API 限流（403），稍后再试")
+        raise RuntimeError(f"GitHub API 错误 {e.code}：{detail or e.reason}")
+
+
+def _sync_push(token: str, gist_id: str = "") -> dict:
+    """把本机自定义数据全集推到私密 Gist；gist_id 为空时自动创建。"""
+    if not token:
+        raise RuntimeError("缺少访问令牌：先在下方填入 GitHub 个人访问令牌并保存")
+    bundle = _export_bundle()
+    payload = {"kind": "ocleaner-sync",
+               "device": socket.gethostname(),
+               "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+               "data": bundle}
+    body = {"description": "O-Cleaner 自定义数据同步（自动生成，请勿手工编辑）",
+            "public": False,
+            "files": {_GIST_FILE: {"content": json.dumps(
+                payload, ensure_ascii=False, indent=1)}}}
+    if gist_id:
+        st, r = _gist_request("PATCH", f"{_GIST_API}/{gist_id}", token, body)
+    else:
+        st, r = _gist_request("POST", _GIST_API, token, body)
+    if st not in (200, 201) or not r.get("id"):
+        raise RuntimeError(f"Gist 保存失败（{st}）")
+    gid = str(r["id"])
+    cfg = _sync_cfg()
+    if gid != gist_id:
+        cfg["gist_id"] = gid            # 首次推送：记住自动创建的 Gist
+    cfg["last_push"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _sync_save_cfg(cfg)
+    return {"gist_id": gid, "html_url": str(r.get("html_url") or "")}
+
+
+def _sync_fetch(token: str, gist_id: str) -> dict:
+    """取回 Gist 里的同步载荷；远端为空/未建返回 {}。"""
+    if not gist_id:
+        return {}
+    st, r = _gist_request("GET", f"{_GIST_API}/{gist_id}", token)
+    if st != 200:
+        raise RuntimeError(f"Gist 读取失败（{st}）")
+    f = (r.get("files") or {}).get(_GIST_FILE) or {}
+    content = str(f.get("content") or "")
+    if f.get("truncated") and f.get("raw_url"):
+        # Gist 单文件超过 1MB 会截断：走 raw_url 拿全文（纯文本响应）
+        req = _UrlRequest(f["raw_url"], headers={
+            "Authorization": f"Bearer {token}", "User-Agent": "O-Cleaner"})
+        with _urlopen(req, timeout=30) as resp:
+            content = resp.read().decode("utf-8")
+    if not content.strip():
+        return {}
+    try:
+        payload = json.loads(content)
+    except ValueError:
+        raise RuntimeError("远端内容不是有效 JSON —— Gist 可能被手工改坏，"
+                           "推一次「双向同步」即可用本机数据重建")
+    if not isinstance(payload, dict):
+        raise RuntimeError("远端内容格式不对（应为对象）")
+    return payload
+
+
+def _sync_pull(token: str, gist_id: str) -> dict:
+    """拉取远端并按 bundle/import 的逐项校验合并进本地（远端并集进本地）。"""
+    payload = _sync_fetch(token, gist_id)
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or not data:
+        return {"empty": True, "device": str(payload.get("device") or "")}
+    rep = _import_bundle(data)
+    cfg = _sync_cfg()
+    cfg["last_pull"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cfg["last_pull_device"] = str(payload.get("device") or "")
+    _sync_save_cfg(cfg)
+    return {"empty": False, "device": str(payload.get("device") or ""), **rep}
+
+
+def _sync_two_way(token: str) -> dict:
+    """双向同步：拉取合并进本地 → 把合并后的全集推回远端。
+    结果是两端并集；本地已有的项不会被远端覆盖，远端独有的项进本地。"""
+    cfg = _sync_cfg()
+    pull_rep = _sync_pull(token, str(cfg.get("gist_id") or ""))
+    push_rep = _sync_push(token, str(_sync_cfg().get("gist_id") or ""))
+    return {"pull": pull_rep, "push": push_rep}
 
 
 _UNIT_MULT = {"b": 1, "kb": 1024, "mb": 1024 ** 2,
@@ -7832,6 +8111,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(downloads_advice())
         if route == "/__oc__/overrides":
             return self._json(load_overrides())
+        if route == "/__oc__/sync/status":
+            # 云同步状态（不含令牌本体，只报是否已配置）
+            cfg = _sync_cfg()
+            return self._json({
+                "token_set": bool(str(cfg.get("token") or "").strip()),
+                "gist_id": str(cfg.get("gist_id") or ""),
+                "last_push": str(cfg.get("last_push") or ""),
+                "last_pull": str(cfg.get("last_pull") or ""),
+                "last_pull_device": str(cfg.get("last_pull_device") or ""),
+            })
         if route == "/__oc__/bundle/export":
             return self._json(_export_bundle())
         if route == "/__oc__/steam":
@@ -8485,137 +8774,42 @@ class Handler(BaseHTTPRequestHandler):
         # ---- 自定义数据包：换算单位 / 释义覆盖 / 固定项规则 一次导入导出 ----
         # 导入逐项校验并报告每一项的跳过原因，所以它同时是 AI 生成结果的
         # 验收器：生成 -> 导入 -> 按报告修正 -> 再导入，循环到全部收下。
+        # 落盘逻辑在模块级 _import_bundle（云同步 /sync/pull 复用同一套合并）。
         if route == "/__oc__/bundle/import":
-            if str(body.get("kind") or "") != "ocleaner-custom":
-                return self._json({"error": "这不是 O-Cleaner 自定义数据包"
-                                            "（kind 应为 ocleaner-custom）"}, 400)
-            rep = {"units_added": 0, "units_updated": 0, "units_skipped": [],
-                   "overrides_applied": 0, "overrides_skipped": [],
-                   "rules_added": 0, "rules_updated": 0, "rules_skipped": []}
-
-            # 1) 换算单位：按 id 更新、按 label 去重，其余新增
-            cfg = load_convert()
-            units = list(cfg.get("units", []))
-            by_id = {str(u.get("id") or ""): u for u in units}
-            by_label = {str(u.get("label") or ""): u for u in units}
-            for i, u in enumerate(body.get("units") or []):
-                if not isinstance(u, dict):
-                    continue
-                label = str(u.get("label") or "").strip()
-                nbytes = _bundle_unit_bytes(u)
-                if not label:
-                    rep["units_skipped"].append(f"units[{i}] 缺名称")
-                    continue
-                if nbytes is None:
-                    rep["units_skipped"].append(
-                        f"「{label}」缺有效大小（bytes_per_unit 或 size.value/unit）")
-                    continue
-                uid = str(u.get("id") or "").strip()
-                entry = {"label": label,
-                         "plural": str(u.get("plural") or label).strip() or label,
-                         "bytes_per_unit": nbytes,
-                         "note": str(u.get("note") or "").strip(),
-                         "category": str(u.get("category") or "自定义").strip()}
-                if uid and uid in by_id:
-                    by_id[uid].update(entry)
-                    rep["units_updated"] += 1
-                elif label in by_label:
-                    rep["units_skipped"].append(f"「{label}」已有同名单位")
-                else:
-                    uid = uid or f"u{int(time.time() * 1000) % 10 ** 10}{i}"
-                    entry["id"] = uid
-                    units.append(entry)
-                    by_id[uid] = entry
-                    by_label[label] = entry
-                    rep["units_added"] += 1
-            cfg["units"] = units
-            _atomic_write(CONVERT_PATH, cfg)
-            _cache.pop(str(CONVERT_PATH), None)
-
-            # 2) 释义/结论覆盖：与 overrides/set 同一套校验
-            data = load_overrides()
-            for k, v in (body.get("overrides") or {}).items():
-                k = str(k).strip()
-                # 路径键（占用排行右键自定义 / 自定义提级用的归一化路径）
-                # 与目标键走同一套校验：形如盘符绝对路径且限长 500。
-                # 此前一刀切拒绝含反斜杠的键，导致导出的行级覆盖导不回来
-                # （2026-10-13 修复，随「自定义提级」一起走迁移数据）。
-                _is_path_key = bool(re.match(r"^[a-zA-Z]:\\", k)) and len(k) <= 500
-                if (not k or len(k) > (500 if _is_path_key else 200)
-                        or "/" in k or ("\\" in k and not _is_path_key)):
-                    rep["overrides_skipped"].append(f"「{k[:60]}」键不合法")
-                    continue
-                entry = None
-                if isinstance(v, dict):
-                    entry = {}
-                    for f in ("what", "rebuild", "impact", "keep_if"):
-                        t = v.get(f)
-                        if isinstance(t, str) and t.strip():
-                            if len(t) > 2000:
-                                entry = None
-                                break
-                            entry[f] = t.strip()
-                    for f in ("label", "note"):
-                        t = v.get(f)
-                        if isinstance(t, str) and t.strip() and len(t) <= 200:
-                            entry[f] = t.strip()
-                    if isinstance(v.get("cleanable"), bool):
-                        entry["cleanable"] = v["cleanable"]
-                    if isinstance(v.get("pin"), bool):
-                        entry["pin"] = v["pin"]
-                    if v.get("label_kind") in ("clean", "unk", "keep"):
-                        entry["label_kind"] = v["label_kind"]
-                    if isinstance(v.get("color"), str) and re.fullmatch(r"#[0-9a-fA-F]{6}", v["color"]):
-                        entry["color"] = v["color"].lower()
-                    if not entry:
-                        entry = None
-                if entry is None:
-                    rep["overrides_skipped"].append(f"「{k}」没有可用的字段")
-                    continue
-                data["targets"][k] = entry
-                rep["overrides_applied"] += 1
-            save_overrides(data)
-
-            # 3) 固定项规则：与 custom-rules/add 同一套校验（id 必须真实存在）
-            rules = load_custom_rules()
-            valid_cache: dict = {}
-            for i, r0 in enumerate(body.get("rules") or []):
-                if not isinstance(r0, dict):
-                    continue
-                name = str(r0.get("name") or "").strip()
-                ids = [str(x).strip() for x in (r0.get("ids") or []) if str(x).strip()]
-                drive = (str(r0.get("drive") or "C")).rstrip(":").upper() or "C"
-                if not name:
-                    rep["rules_skipped"].append(f"rules[{i}] 缺规则名")
-                    continue
-                if not ids:
-                    rep["rules_skipped"].append(f"「{name}」没有勾选任何清理项")
-                    continue
-                if drive not in valid_cache:
-                    valid_cache[drive] = {t["id"]
-                                          for t in build_targets(drive, None)}
-                bad = [x for x in ids if x not in valid_cache[drive]]
-                if bad:
-                    rep["rules_skipped"].append(
-                        f"「{name}」含 {len(bad)} 个当前不存在的清理项"
-                        f"（如 {bad[0]}）")
-                    continue
-                existing = next((r for r in rules if r["name"] == name), None)
-                if existing:
-                    existing["ids"] = ids
-                    existing["drive"] = drive
-                    existing["auto"] = bool(r0.get("auto"))
-                    rep["rules_updated"] += 1
-                else:
-                    rules.append({
-                        "id": f"rule-{int(time.time() * 1000) % 10 ** 10}{i}",
-                        "name": name, "ids": ids, "drive": drive,
-                        "auto": bool(r0.get("auto")),
-                        "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    })
-                    rep["rules_added"] += 1
-            save_custom_rules(rules)
+            try:
+                rep = _import_bundle(body)
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
             return self._json({"ok": True, **rep})
+        # ---- 云端同步：自定义数据存用户自己的 GitHub 私密 Gist ----
+        if route == "/__oc__/sync/save":
+            cfg = _sync_cfg()
+            tok = str(body.get("token") or "").strip()
+            if tok:
+                cfg["token"] = tok          # 令牌是用户显式「保存」才落盘
+            if "gist_id" in body:
+                cfg["gist_id"] = str(body.get("gist_id") or "").strip()
+            _sync_save_cfg(cfg)
+            return self._json({"ok": True,
+                               "token_set": bool(str(cfg.get("token") or "").strip()),
+                               "gist_id": str(cfg.get("gist_id") or "")})
+        if route in ("/__oc__/sync/push", "/__oc__/sync/pull",
+                     "/__oc__/sync/merge"):
+            token = _sync_token(body)
+            gid = str(body.get("gist_id") or "").strip() \
+                or str(_sync_cfg().get("gist_id") or "")
+            try:
+                if route.endswith("push"):
+                    return self._json({"ok": True,
+                                       **_sync_push(token, gid)})
+                if route.endswith("pull"):
+                    return self._json({"ok": True,
+                                       **_sync_pull(token, gid)})
+                return self._json({"ok": True, **_sync_two_way(token)})
+            except RuntimeError as e:
+                return self._json({"error": str(e)}, 502)
+            except Exception as e:                     # noqa: BLE001
+                return self._json({"error": f"同步失败：{type(e).__name__}: {e}"}, 502)
 
         # ---- 自定义规则（勾选固定项 → 命名保存 → 可套用/自动清理）----
         if route == "/__oc__/custom-rules":
