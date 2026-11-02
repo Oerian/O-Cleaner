@@ -3796,7 +3796,7 @@ function renderOverview() {
         ? t("fs.wiztreeNote","<span>借本机已装的 WizTree 读 MFT，比逐目录递归快；不安装、不修改它。</span>")
         : FS.engine === "mft"
         ? t("fs.mftOwnNote","<span>自研 MFT 直读引擎（首选）：管理员权限下直接解析 NTFS 主文件表，无需外部工具、无临时文件。</span>")
-        : t("fs.wiztreeHint","<span>非管理员时自动改用 WizTree 加速（本工具只调用，不捆绑）；管理员 + NTFS 走内置 MFT 引擎。</span>")}
+        : t("fs.psHint","<span>当前用 PowerShell 递归扫描（最慢）：未安装 WizTree 且未提权。点右上「一键提权重启」后可用自研 MFT 引擎（最快），或安装 WizTree 加速。</span>")}
     </div>` : ""}
     <div style="margin-top:15px;padding-top:13px;border-top:1px solid var(--line)">
       <div style="color:var(--dim2);font-size:11.5px;margin-bottom:3px">
@@ -6158,7 +6158,7 @@ const I18N_EN = {
   "fs.mftOwnNote": "<span>Built-in MFT engine (first choice): reads the NTFS Master File Table directly with admin rights — no external tool, no temp files.</span>",
   "fs.psWalk": "PowerShell recursive scan",
   "fs.wiztreeNote": "<span>Reads the MFT via the WizTree installed on this machine — faster than per-folder recursion; it is never installed or modified.</span>",
-  "fs.wiztreeHint": "<span>Without admin rights WizTree takes over the acceleration (called, never bundled); with admin + NTFS the built-in MFT engine runs.</span>",
+  "fs.psHint": "<span>Currently scanning with PowerShell (slowest): WizTree is not installed and the process is not elevated. Click “Elevate & restart” (top right) to use the built-in MFT engine (fastest), or install WizTree to speed things up.</span>",
   "fs.scannedNow": "Scanned this run", "fs.nodesSuffix": "nodes",
   "fs.extHead": "What types are eating the space (by extension, top 12)",
   "fs.extOther": "Other types", "fs.extNone": "no extension",

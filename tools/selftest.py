@@ -875,6 +875,85 @@ def phase1() -> None:
         finally:
             for k, v in _sv.items():
                 setattr(app, k, v)
+
+        # ---- 非管理员自动回落链（#61）：落实「未提权时自动改用 WizTree」----
+        # 三条断言全部行为级：非管理员→WizTree；管理员但 MFT 失败→WizTree；
+        # 两者都不可用→PowerShell 兜底。外部依赖全部 stub，绝不真跑 WizTree/PS。
+        _sv2 = {k: getattr(app, k) for k in
+                ("is_admin", "_mft_volume_ntfs", "_mft_build_table",
+                 "_mft_big_files", "_wiz_ok", "_wiztree_export",
+                 "_wiztree_big_files", "_wiztree_cleanup", "_wiztree_parse",
+                 "_wiztree_raw_nodes", "run_ps")}
+        try:
+            _wiz_calls, _clean_calls = [], []
+
+            def _wiz_fake_export(drive, timeout=300):
+                _wiz_calls.append(drive)
+                return "FAKE.csv", ""
+
+            def _wiz_fake_cleanup(p):
+                _clean_calls.append(p)
+
+            # ① 非管理员 → WizTree 自动接管；CSV 用完必须即删（不留垃圾）
+            app.is_admin = lambda: False
+            app._wiz_ok = lambda: True
+            app._wiztree_export = _wiz_fake_export
+            app._wiztree_big_files = lambda csv, floor: [
+                ("C:\\film.avi", 700 << 20, "2026-10-30 21:00")]
+            app._wiztree_cleanup = _wiz_fake_cleanup
+            r5 = app.big_files("C")
+            check("非管理员自动改用：big_files 走 WizTree 且 CSV 已清理",
+                  r5.get("engine") == "wiztree" and _wiz_calls == ["C"]
+                  and _clean_calls == ["FAKE.csv"] and r5["files"]
+                  and r5["files"][0]["mtime"] == "2026-10-30 21:00",
+                  str(r5)[:120])
+
+            # ② 管理员 + NTFS 但 MFT 构表失败 → 同样回落 WizTree，不能停在 PS
+            app.is_admin = lambda: True
+            app._mft_volume_ntfs = lambda root: True
+            app._mft_build_table = lambda *a, **k: (None, "模拟构表失败")
+            _wiz_calls.clear()
+            r6 = app.big_files("C")
+            check("非管理员自动改用：MFT 失败回落 WizTree",
+                  r6.get("engine") == "wiztree" and _wiz_calls == ["C"],
+                  str(r6)[:120])
+
+            # ③ WizTree 也没有 → PowerShell 兜底（run_ps stub，不真跑递归）
+            app.is_admin = lambda: False
+            app._wiz_ok = lambda: False
+            app.run_ps = lambda script, timeout=600: [
+                {"p": "C:\\huge.iso", "s": 900 << 20, "m": "2026-10-01 08:00"}]
+            _wiz_calls.clear()
+            r7 = app.big_files("C")
+            check("全不可用兜底：big_files 走 PowerShell 且不碰 WizTree",
+                  r7.get("engine") == "powershell" and not _wiz_calls
+                  and r7["files"] and r7["files"][0]["path"] == "C:\\huge.iso",
+                  str(r7)[:120])
+
+            # ④ 概览同样生效：非管理员 → WizTree（即使 NTFS 也不走 MFT）
+            app.is_admin = lambda: False
+            app._wiz_ok = lambda: True
+            app._wiztree_export = _wiz_fake_export
+            app._wiztree_parse = lambda csv, on_progress=None: (
+                {"rows": 0, "secs": 0, "dirs": {}, "files": {}, "ext": {}})
+            app._wiztree_raw_nodes = lambda *a, **k: ([], [], 0)
+            _wiz_calls.clear(); _clean_calls.clear()
+            r8 = app._scan_overview_impl("C", max_depth=1)
+            check("非管理员自动改用：概览扫描走 WizTree 不碰 MFT",
+                  r8.get("engine") == "wiztree" and _wiz_calls == ["C"]
+                  and _clean_calls == ["FAKE.csv"], str(r8)[:120])
+
+            # ⑤ 概览同样生效：MFT 构表失败 → 回落 WizTree
+            app.is_admin = lambda: True
+            app._mft_volume_ntfs = lambda root: True
+            _wiz_calls.clear()
+            r9 = app._scan_overview_impl("C", max_depth=1)
+            check("非管理员自动改用：概览扫描 MFT 失败回落 WizTree",
+                  r9.get("engine") == "wiztree" and _wiz_calls == ["C"],
+                  str(r9)[:120])
+        finally:
+            for k, v in _sv2.items():
+                setattr(app, k, v)
     finally:
         app._WIZ_DIRS.clear()
         app._WIZ_DIRS.update(_wiz_saved)
@@ -1522,6 +1601,8 @@ def phase3_http() -> None:
         check("引擎链翻转：概览扫描 MFT 首选分支先于 WizTree 分支",
               0 < app_src.find("自研 MFT 升为首选")
               < app_src.find("正在用 WizTree 读取"))
+        check("PS 兜底文案专属：不再误称会用 WizTree，指引一键提权",
+              html.count("fs.psHint") >= 2 and "fs.wiztreeHint" not in html)
         check("自检面板含数据目录可写项（后端实测写探针，前端三词条）",
               "def data_dir_writable" in app_src
               and "gd.dataWrite" in html and "gd.dataWriteOk" in html
