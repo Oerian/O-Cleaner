@@ -1536,6 +1536,13 @@ SECURITY 该处表述未动。
 - **真实验证（用户确认 UAC）**：本机 **装着 WizTree** 的管理员环境跑 `_scan_overview_impl("D")` → `engine="mft"`、`engine_label="MFT 直读加速（自研）"`、全程 2.63s、by_ext 13 条——翻转生效且装没装 WizTree 不再影响管理员路径。
 - **回归**：selftest **554-0-6**（+2：行为级——monkeypatch 全引擎证明管理员+NTFS 下 big_files 直走 MFT 且不碰 WizTree、mtime 回填；源码级——MFT 首选分支先于 WizTree 分支）；CDP **140-0-5**（本机非管理员走 WizTree 路径，行为与翻转前一致）。
 
+**⑦补（2026-11-01 晚）：非管理员回落链落实（#61）**——把⑥补里"非管理员自动改用 WizTree"从口头承诺变成被测试钉死的事实：
+- **行为级自测 ×5**（stub 全部外部依赖，绝不真跑 WizTree/PS）：①非管理员 big_files 走 WizTree 且导出 CSV 用完即删（`_wiztree_cleanup` 被调）②管理员但 MFT 构表失败同样回落 WizTree ③全不可用兜底 PowerShell（run_ps stub）④概览扫描非管理员走 WizTree 不碰 MFT（即使盘是 NTFS）⑤概览 MFT 失败回落 WizTree。下钻/重分类读 `_WIZ_DIRS` 缓存表，与引擎无关，天然两链通用。
+- **PS 兜底文案纠偏**：引擎条第三分支原来复用 `wiztreeHint`（"非管理员时自动改用 WizTree"）——可那一刻恰恰是没装 WizTree 才落到 PS，文案失实且没给出路。新词条 `fs.psHint`（中英）如实说明并指引"一键提权重启（右上）→ 自研 MFT 引擎 / 装 WizTree"；`wiztreeHint` 词条删除。自测 UI 检查钉住（`fs.psHint` 出现 ≥2 处且 `wiztreeHint` 不存在）。
+- **提权闭环确认**：非管理员 + 无 WizTree 的最慢场景，出口就在引擎条文案里——`elevate_relaunch()`（UAC 重启自身、`--wait-free` 让端口、pythonw 无窗）+ `#btnElevate` 按钮早已存在，文案只负责指路。
+- **教训**：stub 引擎表要补 `rows`/`secs` 键——`_scan_overview_impl` 组装 `engine_note` 直接 `table['rows']`，stub 缺键会让阶段一异常中断、后续检查静默丢失（首跑 548-1 即此因，表象是"阶段一 未抛异常"而不是 KeyError 指向测试本身）。
+- **回归**：selftest **561-0-6**；本地 7 道门禁（selfcheck.ps1）全过；CDP **140-0-5**；CI 41371927400 三作业绿（d0d05a7，HEAD 带 `[ci]`）。
+
 ---
 
 ## 七、文件资产与代码清单
