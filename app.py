@@ -1831,14 +1831,99 @@ def scan_disk_overview(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dict
     return _scan_overview_reported(drive, max_depth)
 
 
+# ======================================================================
+#  引擎实测速度缓存（2026-11-02 起「谁快用谁」）
+# ======================================================================
+# 每个盘记录 MFT / WizTree 两引擎最近一次端到端耗时；两边都有实测值且
+# WizTree 快 10% 以上时，概览与大文件排行先走 WizTree（失败仍回落 MFT）。
+# 耗时在扫描成功时顺带记录；WizTree 的耗时由后台校准线程补测 —— 否则
+# MFT 恒先跑、WizTree 永远攒不到实测值，机制就成了摆设。缓存落盘
+# config/engine_speed.json 跨会话保留；缺省（无实测值）维持 MFT 在先。
+_ENGINE_SPEEDS: dict = {}
+_ENGINE_SPEED_FILE = CONFIG_DIR / "engine_speed.json"
+_ENG_CALIB_LOCK = threading.Lock()
+
+
+def _eng_speeds_load() -> None:
+    global _ENGINE_SPEEDS
+    try:
+        _ENGINE_SPEEDS = json.loads(
+            _ENGINE_SPEED_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        _ENGINE_SPEEDS = {}
+
+
+def _eng_speed_record(letter: str, engine: str, secs: float) -> None:
+    """记录一次实测耗时并落盘。异常静默（缓存坏了不影响扫描本身）。"""
+    try:
+        secs = float(secs)
+    except (TypeError, ValueError):
+        return
+    if not letter or engine not in ("mft", "wiztree") or secs <= 0:
+        return
+    m = _ENGINE_SPEEDS.setdefault(letter, {})
+    m[engine] = round(secs, 2)
+    m["at"] = time.time()
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _ENGINE_SPEED_FILE.write_text(
+            json.dumps(_ENGINE_SPEEDS, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _eng_prefer_wiztree(letter: str) -> bool:
+    """两引擎都有近期实测且 WizTree 明显更快（>10%，留滞后带防抖动）时
+    返回 True。没有实测值时一律 False（维持 MFT 在先）。"""
+    m = _ENGINE_SPEEDS.get(letter) or {}
+    mft_s, wiz_s = m.get("mft"), m.get("wiztree")
+    if not mft_s or not wiz_s:
+        return False
+    try:
+        return float(wiz_s) < float(mft_s) * 0.9
+    except (TypeError, ValueError):
+        return False
+
+
+def _eng_calibrate_wiztree(letter: str) -> None:
+    """后台补测 WizTree 端到端耗时（导出 + 解析）。每 14 天一次、
+    互斥执行、绝不抛异常 —— 它只是给「谁快用谁」攒数据，失败了等下次。"""
+    if not _wiz_ok():
+        return
+    m = _ENGINE_SPEEDS.get(letter) or {}
+    if m.get("wiztree") and time.time() - (m.get("at") or 0) < 14 * 86400:
+        return
+    if not _ENG_CALIB_LOCK.acquire(blocking=False):
+        return
+    try:
+        csv_path, _werr = _wiztree_export(letter)
+        if not csv_path:
+            return
+        try:
+            t0 = time.time()
+            _wiztree_parse(csv_path)
+            _eng_speed_record(letter, "wiztree", time.time() - t0)
+        finally:
+            _wiztree_cleanup(csv_path)
+    except Exception:
+        pass
+    finally:
+        _ENG_CALIB_LOCK.release()
+
+
+_eng_speeds_load()
+
+
 def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dict:
     """磁盘概览：一次遍历生成整棵占用树，供界面逐层下钻。
 
-    三条扫描路径，按适配度自动选择（2026-11-01 起自研 MFT 首选）：
+    三条扫描路径，按适配度与**实测速度**自动选择（2026-11-01 起自研 MFT
+    升为首选；2026-11-02 起进一步「谁快用谁」—— 两引擎都有实测耗时且
+    WizTree 明显更快时先走 WizTree，失败仍回落 MFT）：
 
     1. **自研 MFT 直读**（管理员 + NTFS）：进程内直读 $MFT 产出全盘明细，
        无外部依赖、无临时文件，「任意目录逐层拆子项」是内存查表。
-    2. **WizTree**（非管理员，或 MFT 不可用）：调用
+    2. **WizTree**（非管理员，或 MFT 不可用，或实测更快）：调用
        `WizTree64.exe <盘> /export=<csv>` 借它读 MFT，同形表。
     3. **PowerShell 递归**（兜底）：整棵树在单个 PS 进程内递归完成。
 
@@ -1854,84 +1939,115 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
     depth_cap = max(1, min(max_depth, 6))
     engine = "powershell"
     table: dict | None = None
+    r: dict = {}
+    werr = ""
 
-    # 引擎链（2026-11-01 起 **自研 MFT 升为首选**）：管理员 + NTFS 时直读
-    # $MFT —— 进程内查表、无外部依赖、无临时 CSV（导出一份 D: 明细要
-    # 28MB），端到端实测快于 WizTree 导出+解析（D: 1.96s vs ~2.4s，
-    # C: 10.1s vs 历史导出 29s），数据已与 WizTree 逐位互证一致。
-    # 非管理员或非 NTFS 再借 WizTree（它非管理员也能扫，只是没有元文件
-    # 行）；都没有才 PowerShell 递归兜底。
-    if IS_WINDOWS and is_admin() and _mft_volume_ntfs(root):
-        mft_tbl, mft_info = _mft_build_table(
-            letter, root, ext_stats=True,
-            on_progress=lambda frac: prog_set(
-                "mft", f"正在直读 {letter}: 盘的 MFT（自研引擎，"
-                       f"{int(frac * 100)}%）", 8 + 62 * frac))
-        if mft_tbl is not None:
-            try:
-                prog_set("tree", "正在按体积展开目录树", 72)
-                roots, rootfiles, total = _wiztree_raw_nodes(
-                    root, mft_tbl, depth_cap,
-                    DISK_TREE_MIN_CHILD_MB * 1024 * 1024,
-                    DISK_TREE_MIN_DESCEND_RATIO, DISK_TREE_MIN_DESCEND_FLOOR,
-                    DISK_TREE_MAX_PER_DIR, DISK_TREE_MAX_NODES,
-                    DISK_TREE_MAX_DESCENTS)
-                r = {"root": root.lower(), "nodes": roots, "rootfiles": rootfiles,
-                     "total": total, "by_ext": _ext_top(mft_tbl.get("ext") or {})}
-                engine = "mft"
-                table = mft_tbl
-                with _lock:
-                    _WIZ_DIRS[letter] = {"table": table, "at": time.time(),
-                                         "parse_s": mft_info["secs"],
-                                         "engine": "mft"}
-            except Exception as e:
-                table = None
-                werr = f"自研 MFT 展开失败：{e}"
-        else:
-            werr = f"自研 MFT 不可用（{mft_info}），回退下一引擎"
+    # 引擎链（2026-11-01 起 **自研 MFT 升为首选**；2026-11-02 起「谁快用谁」）：
+    # 管理员 + NTFS 默认直读 $MFT —— 进程内查表、无外部依赖、无临时 CSV
+    # （导出一份 D: 明细要 28MB），端到端实测快于 WizTree 导出+解析
+    # （D: 1.96s vs ~2.4s，C: 10.1s vs 历史导出 29s），数据已与 WizTree
+    # 逐位互证一致。非管理员或非 NTFS 再借 WizTree（它非管理员也能扫，
+    # 只是没有元文件行）；都没有才 PowerShell 递归兜底。「谁快用谁」：
+    # 两引擎都有近期实测耗时且 WizTree 快 10% 以上时先试 WizTree，
+    # 失败仍回落 MFT（顺序见 try_wiz_first）。
+    mft_ok = IS_WINDOWS and is_admin() and _mft_volume_ntfs(root)
+    wiz_ok = _wiz_ok()
+    try_wiz_first = wiz_ok and (not mft_ok or _eng_prefer_wiztree(letter))
 
-    if engine != "mft" and _wiz_ok():
+    def _run_wiztree() -> bool:
+        """WizTree 加速路径。成功置 engine="wiztree" 并返回 True。"""
+        nonlocal engine, table, r, werr
         prog_set("export", f"正在用 WizTree 读取 {letter}: 盘的 MFT 明细", 10,
                  indeterminate=True)
         csv_path, werr = _wiztree_export(letter)
-        if csv_path:
-            try:
-                t0 = time.time()
-                table = _wiztree_parse(
-                    csv_path,
-                    on_progress=lambda frac: prog_set(
-                        "parse", "正在解析 MFT 明细"
-                                f"（{int(frac * 100)}%）", 14 + 56 * frac))
-                parsed = time.time() - t0
-                prog_set("tree", "正在按体积展开目录树", 72)
-                roots, rootfiles, total = _wiztree_raw_nodes(
-                    root, table, depth_cap,
-                    DISK_TREE_MIN_CHILD_MB * 1024 * 1024,
-                    DISK_TREE_MIN_DESCEND_RATIO, DISK_TREE_MIN_DESCEND_FLOOR,
-                    DISK_TREE_MAX_PER_DIR, DISK_TREE_MAX_NODES,
-                    DISK_TREE_MAX_DESCENTS)
-                r = {"root": root.lower(), "nodes": roots, "rootfiles": rootfiles,
-                     "total": total, "by_ext": _ext_top(table.get("ext") or {})}
-                engine = "wiztree"
-                # 表留在内存里，供「逐层拆子项」与后续下钻直接查
-                with _lock:
-                    _WIZ_DIRS[letter] = {"table": table, "at": time.time(),
-                                         "parse_s": round(parsed, 2),
-                                         "engine": "wiztree"}
-            except Exception as e:
-                table = None
-                werr = f"WizTree 导出解析失败：{e}"
-            finally:
-                # 导出的 CSV 很大（C 盘约 120 MB，含 77 万行），
-                # 表已经进内存了就必须删掉它 —— 否则一个「磁盘清理工具」
-                # 每扫一次就往临时目录塞一百多 MB，自己变成垃圾制造者。
-                # CSV 高达上百 MB，表进内存后必须立刻删，别让清理工具自己制造垃圾
-                _wiztree_cleanup(csv_path)
-        if engine != "wiztree":
-            # 加速路径失败不影响可用性，静默回退到 PowerShell；失败原因记在 payload 里
-            pass
-    elif engine != "mft":
+        if not csv_path:
+            return False
+        try:
+            t0 = time.time()
+            table = _wiztree_parse(
+                csv_path,
+                on_progress=lambda frac: prog_set(
+                    "parse", "正在解析 MFT 明细"
+                            f"（{int(frac * 100)}%）", 14 + 56 * frac))
+            parsed = time.time() - t0
+            prog_set("tree", "正在按体积展开目录树", 72)
+            roots, rootfiles, total = _wiztree_raw_nodes(
+                root, table, depth_cap,
+                DISK_TREE_MIN_CHILD_MB * 1024 * 1024,
+                DISK_TREE_MIN_DESCEND_RATIO, DISK_TREE_MIN_DESCEND_FLOOR,
+                DISK_TREE_MAX_PER_DIR, DISK_TREE_MAX_NODES,
+                DISK_TREE_MAX_DESCENTS)
+            r = {"root": root.lower(), "nodes": roots, "rootfiles": rootfiles,
+                 "total": total, "by_ext": _ext_top(table.get("ext") or {})}
+            engine = "wiztree"
+            # 表留在内存里，供「逐层拆子项」与后续下钻直接查
+            with _lock:
+                _WIZ_DIRS[letter] = {"table": table, "at": time.time(),
+                                     "parse_s": round(parsed, 2),
+                                     "engine": "wiztree"}
+            _eng_speed_record(letter, "wiztree", parsed)
+            return True
+        except Exception as e:
+            table = None
+            werr = f"WizTree 导出解析失败：{e}"
+            return False
+        finally:
+            # 导出的 CSV 很大（C 盘约 120 MB，含 77 万行），
+            # 表已经进内存了就必须删掉它 —— 否则一个「磁盘清理工具」
+            # 每扫一次就往临时目录塞一百多 MB，自己变成垃圾制造者。
+            _wiztree_cleanup(csv_path)
+
+    def _run_mft() -> bool:
+        """自研 MFT 直读路径。成功置 engine="mft" 并返回 True。"""
+        nonlocal engine, table, r, werr
+        mft_tbl, mft_info = _mft_build_table(
+            letter, root, ext_stats=True,
+            on_progress=lambda frac: prog_set(
+                "mft", f"正在直读 {letter}: 盘的 MFT（MFT 引擎，"
+                       f"{int(frac * 100)}%）", 8 + 62 * frac))
+        if mft_tbl is None:
+            werr = f"MFT 引擎不可用（{mft_info}），回退下一引擎"
+            return False
+        try:
+            prog_set("tree", "正在按体积展开目录树", 72)
+            roots, rootfiles, total = _wiztree_raw_nodes(
+                root, mft_tbl, depth_cap,
+                DISK_TREE_MIN_CHILD_MB * 1024 * 1024,
+                DISK_TREE_MIN_DESCEND_RATIO, DISK_TREE_MIN_DESCEND_FLOOR,
+                DISK_TREE_MAX_PER_DIR, DISK_TREE_MAX_NODES,
+                DISK_TREE_MAX_DESCENTS)
+            r = {"root": root.lower(), "nodes": roots, "rootfiles": rootfiles,
+                 "total": total, "by_ext": _ext_top(mft_tbl.get("ext") or {})}
+            engine = "mft"
+            table = mft_tbl
+            with _lock:
+                _WIZ_DIRS[letter] = {"table": table, "at": time.time(),
+                                     "parse_s": mft_info["secs"],
+                                     "engine": "mft"}
+            _eng_speed_record(letter, "mft", mft_info.get("secs") or 0)
+            return True
+        except Exception as e:
+            table = None
+            werr = f"MFT 引擎展开失败：{e}"
+            return False
+
+    if try_wiz_first:
+        if not _run_wiztree() and mft_ok:
+            _run_mft()
+    elif mft_ok:
+        if not _run_mft() and wiz_ok:
+            _run_wiztree()
+    elif wiz_ok:
+        _run_wiztree()
+    else:
         werr = "未安装 WizTree"
+    # 加速路径失败不影响可用性，静默回退到 PowerShell；失败原因记在 payload 里
+
+    if engine == "mft" and wiz_ok:
+        # 后台补测 WizTree 耗时：MFT 路径永远量不到它，没有实测值
+        # 「谁快用谁」就无从谈起。校准线程自己判过期/互斥/兜异常。
+        threading.Thread(target=_eng_calibrate_wiztree, args=(letter,),
+                         daemon=True).start()
 
     if engine not in ("wiztree", "mft"):
         # PowerShell 只有一次阻塞调用，中途进度靠脚本自己往临时文件里写计数
@@ -2294,7 +2410,7 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
         # 用了哪条扫描路径 —— 界面上要如实告诉用户「快是因为借了 WizTree」
         "engine": engine,
         "engine_label": ("WizTree MFT 加速" if engine == "wiztree"
-                         else "MFT 直读加速（自研）" if engine == "mft"
+                         else "MFT 直读加速" if engine == "mft"
                          else "PowerShell 递归（未安装 WizTree）"),
         "engine_note": (
             f"WizTree 导出 {table['rows']:,} 行，解析 "
@@ -6967,8 +7083,45 @@ def big_files(drive: str, limit: int = BIG_FILES_LIMIT) -> dict:
     try:
         rows: list = []
         engine = "powershell"
-        if os.name == "nt" and is_admin() and _mft_volume_ntfs(root):
-            # 自研 MFT 首选路径：文件地板降到与 PS 路径一致（10 MB），
+        # 引擎顺序（2026-11-02 起「谁快用谁」，与概览扫描同一份速度缓存）：
+        # 默认 MFT 在先（管理员 + NTFS）；实测 WizTree 明显更快时先试 WizTree。
+        mft_ok = os.name == "nt" and is_admin() and _mft_volume_ntfs(root)
+        wiz_ok = _wiz_ok()
+        try_wiz_first = wiz_ok and (not mft_ok or _eng_prefer_wiztree(letter))
+
+        def _wiz_big_run() -> bool:
+            """WizTree 路径：导出 → 解析大文件行 → 即删 CSV。"""
+            nonlocal rows, engine
+            prog_set("wiz", f"正在用 WizTree 读取 {letter}: 盘的 MFT 明细", 10,
+                     indeterminate=True)
+            csv_path, _werr = _wiztree_export(letter)
+            if not csv_path:
+                return False
+            engine = "wiztree"
+            try:
+                rows = _wiztree_big_files(csv_path, BIG_FILES_FLOOR_WIZ)
+            finally:
+                _wiztree_cleanup(csv_path)
+            return True
+
+        if try_wiz_first:
+            if not _wiz_big_run() and mft_ok:
+                # 自研 MFT 回落路径：文件地板降到与 PS 路径一致（10 MB），
+                # 内存增量可接受（万级条目 × ~100 B）；with_mtime 顺带带回
+                # 修改时间供前端「只看近期」。任何失败都静默回落下一引擎。
+                try:
+                    prog_set("mft", f"内置 MFT 引擎正在读取 {letter}: 盘的文件明细",
+                             10, indeterminate=True)
+                    tbl, info = _mft_build_table(letter, root,
+                                                 file_floor_mb=10, with_mtime=True)
+                    if tbl is not None:
+                        engine = "mft"
+                        rows = _mft_big_files(tbl, BIG_FILES_FLOOR_PS)
+                except Exception:
+                    traceback.print_exc()
+                    rows, engine = [], "powershell"
+        elif mft_ok:
+            # MFT 首选路径：文件地板降到与 PS 路径一致（10 MB），
             # 内存增量可接受（万级条目 × ~100 B）；with_mtime 顺带带回
             # 修改时间供前端「只看近期」。任何失败都静默回落下一引擎。
             try:
@@ -6982,16 +7135,8 @@ def big_files(drive: str, limit: int = BIG_FILES_LIMIT) -> dict:
             except Exception:
                 traceback.print_exc()
                 rows, engine = [], "powershell"
-        if engine == "powershell" and _wiz_ok():
-            prog_set("wiz", f"正在用 WizTree 读取 {letter}: 盘的 MFT 明细", 10,
-                     indeterminate=True)
-            csv_path, _werr = _wiztree_export(letter)
-            if csv_path:
-                engine = "wiztree"
-                try:
-                    rows = _wiztree_big_files(csv_path, BIG_FILES_FLOOR_WIZ)
-                finally:
-                    _wiztree_cleanup(csv_path)
+            if engine != "mft" and wiz_ok:
+                _wiz_big_run()
         if engine == "powershell":
             prog_file = os.path.join(
                 tempfile.gettempdir(), f"oc-bigfiles-{os.getpid()}-{letter}.txt")

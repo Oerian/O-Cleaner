@@ -653,17 +653,25 @@ class CDP {
     check(`全盘扫描作用于指定盘 ${DRIVE_}:`, title.startsWith(DRIVE_),
           `面板显示「${title}」`);
   }
-  // 类型分布（#51）：WizTree/MFT 引擎扫完即渲染按扩展名的占比条；
-  // PS 递归路径拿不到全量文件清单，没有该区块（属预期，不是缺陷）
+  // 类型分布（#51，2026-11-02 改版）：默认收起成一行入口；点击展开后
+  // 渲染为竖向柱状图（每列一个扩展名）。PS 递归路径无全量文件清单，
+  // 没有该区块（属预期，不是缺陷）
   if (ready) {
     const ext = await evaluate(`(() => {
       const fast = !!document.querySelector('#fsOverview .enginebar.fast');
-      return { fast,
-               rows: document.querySelectorAll('#fsOverview .extrow').length };
+      const box = document.querySelector('#extBox');
+      const collapsed = !!document.querySelector('#extToggle');
+      let cols = 0;
+      if (box && collapsed) {
+        box.querySelector('#extToggle').click();   // 展开成竖向柱状图
+        cols = document.querySelectorAll('#fsOverview .extcol').length;
+        box.querySelector('#extToggle').click();   // 收起还原
+      }
+      return { fast, box: !!box, collapsed, cols };
     })()`);
     if (ext.fast) {
-      check("类型分布：扫描完成即渲染按扩展名的占比条",
-            ext.rows > 0, `${ext.rows} 行`);
+      check("类型分布：默认收起、点击展开竖向柱状图",
+            ext.box && ext.collapsed && ext.cols > 0, `${ext.cols} 列`);
     } else {
       skip2("类型分布（PS 递归路径无全量文件清单，属预期）");
     }
@@ -899,31 +907,43 @@ class CDP {
     `!![...document.querySelectorAll('#fsModes .seg')].find(s => s.dataset.m === 'games')`);
   check("已移除「游戏等大项」分类", hasGamesMode === false);
 
-  // 默认应停在「全盘最大项目」：新用户一眼看到占地大头
-  const defaultMode = await evaluate(
-    `([...document.querySelectorAll('#fsModes .seg')].find(s => s.classList.contains('on'))||{}).dataset?.m`);
+  // 默认应停在「全盘最大项目」；但盘根层级上若与「顶层」列表重合
+  // （2026-11-02 合并逻辑），页签会被隐藏并回落到「顶层」—— 两者都算过
+  const modeInfo = await evaluate(`(() => {
+    const segs = [...document.querySelectorAll('#fsModes .seg')];
+    const on = segs.find(s => s.classList.contains('on'));
+    return { mode: on ? on.dataset.m : '',
+             hasBiggest: segs.some(s => s.dataset.m === 'biggest') };
+  })()`);
   const topNames = await evaluate(`[...document.querySelectorAll('#fsChart .fname')]
       .slice(0, 8).map(e => e.innerText.trim().split('\\n')[0])`);
-  checkScan("默认视图为「全盘最大项目」", defaultMode === "biggest", String(defaultMode));
+  checkScan("默认视图为「全盘最大项目」（与顶层重合时合并为顶层）",
+        modeInfo.mode === "biggest" ||
+        (modeInfo.mode === "dirs" && !modeInfo.hasBiggest),
+        JSON.stringify(modeInfo));
   console.log(`  [信息] 默认视图前八名: ${topNames.join(" / ")}`);
   // 所有视图都不该再出现「第 N 层」这种标注（按要求去掉）
   const layerTags = await evaluate(
     `[...document.querySelectorAll('#fsChart .vcat')].filter(e => /第\\d+层/.test(e.innerText)).length`);
   check("占用排行里不再标注「第 N 层」", layerTags === 0, `${layerTags} 条带层数`);
 
-  // 切到「全盘最大项目」也应能看到跨层大项
-  await evaluate(`(() => {
-    const s = [...document.querySelectorAll('#fsModes .seg')].find(x => x.dataset.m === 'biggest');
-    if (s) s.click();
-  })()`);
-  await sleep(700);
-  const biggestRows = await evaluate(`document.querySelectorAll('#fsChart .vrow').length`);
-  checkScan("「全盘最大项目」视图可用", biggestRows > 0, `${biggestRows} 条`);
-  await evaluate(`(() => {
-    const s = [...document.querySelectorAll('#fsModes .seg')].find(x => x.dataset.m === 'dirs');
-    if (s) s.click();
-  })()`);
-  await sleep(600);
+  // 切到「全盘最大项目」也应能看到跨层大项（页签与顶层合并时跳过）
+  if (modeInfo.hasBiggest) {
+    await evaluate(`(() => {
+      const s = [...document.querySelectorAll('#fsModes .seg')].find(x => x.dataset.m === 'biggest');
+      if (s) s.click();
+    })()`);
+    await sleep(700);
+    const biggestRows = await evaluate(`document.querySelectorAll('#fsChart .vrow').length`);
+    checkScan("「全盘最大项目」视图可用", biggestRows > 0, `${biggestRows} 条`);
+    await evaluate(`(() => {
+      const s = [...document.querySelectorAll('#fsModes .seg')].find(x => x.dataset.m === 'dirs');
+      if (s) s.click();
+    })()`);
+    await sleep(600);
+  } else {
+    skip("「全盘最大项目」视图", "与顶层列表重合已合并（顶层即全盘最大）");
+  }
 
   // ---- 重复大文件（#34）：全盘扫描后缓存已就位，端点必须能出结果 ----
   try {
@@ -1163,7 +1183,10 @@ class CDP {
   // 「点一下目录」不再会弹详情 —— 详情改由每行显式的「详情」按钮打开。
   // 所以这里不再挑叶子目录，而是直接点某一行的「详情」按钮。
   const segOk = await evaluate(`(() => {
-    const s = [...document.querySelectorAll('#fsModes .seg')].find(x => x.dataset.m === 'biggest');
+    const segs = [...document.querySelectorAll('#fsModes .seg')];
+    // 全盘最大与顶层合并时（2026-11-02）页签不存在，退回顶层视图同样能测
+    const s = segs.find(x => x.dataset.m === 'biggest')
+           || segs.find(x => x.dataset.m === 'dirs');
     if (s) { s.click(); return true; }
     return false;
   })()`);
@@ -1474,10 +1497,13 @@ class CDP {
 
   // ---------- Steam 独立页面 ----------
   console.log("\n  --- Steam 游戏库页面 ---");
-  const hasSteamBtn = await evaluate(`!!document.querySelector('#btnSteam')`);
-  check("工具栏有 Steam 入口", hasSteamBtn);
-    // 残留提醒横幅（2026-10-29）：本机真有残留才断言显示（CI 无 Steam，
-    // 按 /steam API 实况门控跳过）
+  // 2026-11-02：工具栏「游戏占用概览」按钮删去（与顶部导航重复），
+  // 入口统一为 #viewNav 的 [data-v="steam"]；顶部入口必须存在。
+  const hasSteamBtn = await evaluate(
+    `!!document.querySelector('#viewNav button[data-v="steam"]')`);
+  check("顶部导航有游戏占用概览入口（工具栏重复入口已删）", hasSteamBtn);
+  // 残留提醒横幅（2026-10-29）：本机真有残留才断言显示（CI 无 Steam，
+  // 按 /steam API 实况门控跳过）
     let apiOrphans = 0;
     try {
       const sj = await (await fetch(URL_ + "/__oc__/steam")).json();
@@ -1496,7 +1522,7 @@ class CDP {
             bw.shown && /\d/.test(bw.text), bw.text);
     }
   if (hasSteamBtn) {
-    await evaluate(`document.querySelector('#btnSteam').click()`);
+    await evaluate(`document.querySelector('#viewNav button[data-v="steam"]').click()`);
     // /__oc__/steam 可能要几秒（PS 枚举 + 残留测体积）——本机实测曾因
     // 只等 2.5s 把「装了 Steam」误判成 found=false，Steam 全部内容检查
     // 从此跳过。改为轮询等 STEAM 就绪（最多 30s），就绪后按真实状态走。
@@ -1518,8 +1544,10 @@ class CDP {
       // found=false 有两种成因：本机确实没有 Steam，或后端枚举失败。后者要看得见。
       steamErr: (typeof STEAM !== 'undefined' && STEAM && STEAM.error) ? String(STEAM.error).slice(0, 80) : '',
       drives: document.querySelectorAll('#stGames .dsk').length,
-      driveRows: [...document.querySelectorAll('#stGames .dsk .dskh')]
-        .map(e => e.innerText.replace(/\\n/g, ' ').slice(0, 60)),
+      // 2026-11-02 页签化：游戏清单不再按盘堆叠（.dsk 已删），
+      // 页签一次只显示一个库分区，选中页签带 on 态
+      tabs: [...document.querySelectorAll('#stTabs .seg')]
+        .map(e => ({ label: e.textContent.trim(), on: e.classList.contains('on') })),
       games: document.querySelectorAll('#stGames .vrow').length,
       sorts: document.querySelectorAll('#stSort .seg').length,
       filter: !!document.querySelector('#stFilter'),
@@ -1569,8 +1597,18 @@ class CDP {
       cta: !!document.querySelector('#stOverview button.tiny'),
       recMap: typeof recycleSel !== 'undefined' && recycleSel instanceof Map,
     }))()`);
-    check("吸顶头有平台页签（Steam/Epic/GOG/自定义）", gadd.tabs >= 4,
+    check("吸顶头有库分区页签（盘符组/Epic/GOG/自定义，≥3 个）", gadd.tabs >= 3,
           `${gadd.tabs} 个页签`);
+    if (gadd.found) {
+      // 2026-11-02 页签化：恰有一个选中页签，游戏清单只显示当前库分区
+      const tabState = await evaluate(`(() => {
+        const segs = [...document.querySelectorAll('#stTabs .seg')];
+        return { on: segs.filter(s => s.classList.contains('on')).length,
+                 total: segs.length };
+      })()`);
+      check("游戏库页签切换式（恰一个选中态）",
+            tabState.on === 1, JSON.stringify(tabState));
+    }
     check("游戏占用趋势容器就位且独立建议卡已移除", gadd.trendBox && gadd.suggGone,
           `trendBox=${gadd.trendBox} suggGone=${gadd.suggGone}`);
     check("回收建议面板无独立删除按钮（并入主清理出口）",
@@ -1602,8 +1640,9 @@ class CDP {
     // 新装机的开发机上都没有，面板会按设计显示空态（这是功能，不是缺陷）。
     // 所以这里以 STEAM.found / games 数量为前提，不具备就跳过而不是判失败。
     if (st.found && st.libCount > 0) {
-      check("按盘显示 Steam 占用", st.drives >= 1, `${st.drives} 个盘`);
-      console.log(`  [信息] 分盘: ${st.driveRows.join(" /// ")}`);
+      check("按库分区页签显示 Steam 占用（不再按盘堆叠 .dsk）",
+            st.drives === 0 && st.tabs.length >= 1,
+            `${st.tabs.length} 个页签: ${st.tabs.map(t => t.label).join(" / ")}`);
       check("列出游戏清单", st.games > 0, `${st.games} 条`);
       check("有排序与筛选", st.sorts >= 3 && st.filter);
 
@@ -1702,7 +1741,7 @@ class CDP {
       console.log("  [信息] 本机无 GOG 游戏，面板按设计隐藏");
     }
 
-    await evaluate(`document.querySelector('#btnSteam').click()`);
+    await evaluate(`document.querySelector('#viewNav button[data-v="full"]').click()`);
     await sleep(1200);
     check("可从 Steam 页面返回",
           await evaluate(`document.querySelector('#fullView').style.display !== 'none'`));

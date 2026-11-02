@@ -847,11 +847,17 @@ def phase1() -> None:
         # 管理员 + NTFS 时 big_files 必须直走 MFT，装了 WizTree 也不碰它
         _sv = {k: getattr(app, k) for k in
                ("is_admin", "_mft_volume_ntfs", "_mft_build_table",
-                "_mft_big_files", "_wiz_ok", "_wiztree_export")}
+                "_mft_big_files", "_wiz_ok", "_wiztree_export",
+                "_eng_speed_record")}
         try:
             app.is_admin = lambda: True
             app._mft_volume_ntfs = lambda root: True
             app._wiz_ok = lambda: True
+            # 速度缓存必须隔离：真实缓存里若有「WizTree 更快」的记录，
+            # 链路会先试 WizTree，本测试的前提就不成立了；测试产生的
+            # 耗时记录也不许落盘污染 config/engine_speed.json。
+            app._ENGINE_SPEEDS.pop("C", None)
+            app._eng_speed_record = lambda *a, **k: None
             _wiz_calls = []
 
             def _wiz_should_not_run(drive, timeout=300):
@@ -883,9 +889,12 @@ def phase1() -> None:
                 ("is_admin", "_mft_volume_ntfs", "_mft_build_table",
                  "_mft_big_files", "_wiz_ok", "_wiztree_export",
                  "_wiztree_big_files", "_wiztree_cleanup", "_wiztree_parse",
-                 "_wiztree_raw_nodes", "run_ps")}
+                 "_wiztree_raw_nodes", "run_ps", "_eng_speed_record")}
         try:
             _wiz_calls, _clean_calls = [], []
+            # 速度缓存隔离：不让真实缓存与测试产生的耗时记录互相污染
+            app._ENGINE_SPEEDS.pop("C", None)
+            app._eng_speed_record = lambda *a, **k: None
 
             def _wiz_fake_export(drive, timeout=300):
                 _wiz_calls.append(drive)
@@ -951,9 +960,33 @@ def phase1() -> None:
             check("非管理员自动改用：概览扫描 MFT 失败回落 WizTree",
                   r9.get("engine") == "wiztree" and _wiz_calls == ["C"],
                   str(r9)[:120])
+
+            # ⑥⑦「谁快用谁」（2026-11-02）：两引擎都有实测耗时且 WizTree 快
+            # 10% 以上时先走 WizTree；反之维持 MFT 在先。管理员 + NTFS 下验证。
+            app.is_admin = lambda: True
+            app._mft_volume_ntfs = lambda root: True
+            app._wiz_ok = lambda: True
+            app._wiztree_export = _wiz_fake_export
+            app._wiztree_big_files = lambda csv, floor: [
+                ("C:\\film.avi", 700 << 20, "2026-10-30 21:00")]
+            app._ENGINE_SPEEDS["C"] = {"mft": 5.0, "wiztree": 2.0}
+            _wiz_calls.clear()
+            r10 = app.big_files("C")
+            check("谁快用谁：实测 WizTree 更快时 big_files 先走 WizTree",
+                  r10.get("engine") == "wiztree" and _wiz_calls == ["C"],
+                  str(r10)[:120])
+            app._ENGINE_SPEEDS["C"] = {"mft": 2.0, "wiztree": 5.0}
+            app._mft_build_table = lambda *a, **k: (
+                {"files": {}}, {"secs": 2.0})   # MFT 可用（空表即可）
+            _wiz_calls.clear()
+            r11 = app.big_files("C")
+            check("谁快用谁：实测 MFT 更快时维持 MFT 在先不碰 WizTree",
+                  r11.get("engine") == "mft" and not _wiz_calls,
+                  str(r11)[:120])
         finally:
             for k, v in _sv2.items():
                 setattr(app, k, v)
+            app._ENGINE_SPEEDS.pop("C", None)   # 测试期间写入的择快数据不外泄
     finally:
         app._WIZ_DIRS.clear()
         app._WIZ_DIRS.update(_wiz_saved)
@@ -1380,7 +1413,7 @@ def phase3_http() -> None:
               and "n.cleanable && !n.in_game_body && !n.hidden_sys" in html)
         check("隐藏项合并行：成员行缩进样式与徽章词条就位",
               ".vrow-wrap.hidm{margin-left" in _css
-              and '"fs.hiddenAggName": "Hidden items"' in html
+              and '"fs.hiddenAggName": "System hidden items"' in html
               and '"fs.hiddenAggBadge": "Hidden"' in html)
         check("键盘导航：↑↓/空格/Enter 处理与焦点样式就位",
               '"ArrowDown"' in html and '" "' in html and "row.click()" in html
@@ -1396,9 +1429,11 @@ def phase3_http() -> None:
               and 'cr.top3' in html)
         check("磁盘概览直连扫描：概览卡带全盘扫描入口",
               'id="btnDiskFull"' in html and "startFullScan()" in html)
-        check("类型分布：概览渲染、占比条样式与词条就位",
-              "fs.extHead" in html and 'class="extrow"' in html
-              and ".extrow.extbari{display:block" in _css
+        check("类型分布（2026-11-02 改版）：默认收起、点击展开竖向柱状图",
+              "fs.extHead" in html and 'id="extBox"' in html
+              and "extOpen" in html and ".extv{display:flex" in _css
+              and ".extcol" in _css
+              and 'class="extrow"' not in html
               and '"fs.extOther": "Other types"' in html)
         check("大文件时间过滤：前端过滤器与渲染函数就位",
               'id="bfAge"' in html and "renderBfRows" in html
@@ -1432,7 +1467,8 @@ def phase3_http() -> None:
         # 各功能界面导航：两个视图常驻可达（高亮当前页），11 个折叠面板有吸顶目录
         # （v2.3 起常规清理页并入扫描概览，视图只剩 扫描概览 / Steam 游戏库）
         check("视图导航提供两个功能页入口",
-              'id="viewNav"' in html and html.count('data-v="') == 2)
+              'id="viewNav"' in html
+              and html.count('<button data-v="') == 2)
         check("侧栏面板目录条存在（吸顶导航）",
               'id="panelNav"' in html and "initPanelNav" in html)
         # Steam 残留目录（孤儿）2026-10-29 改版：折叠面板 + 勾选批量删，
@@ -1598,9 +1634,30 @@ def phase3_http() -> None:
         check("快速扫描注入游戏本体（不受扫描深度限制）",
               "补齐游戏本体节点" in app_src
               and "_is_game_body_path" in app_src)
-        check("引擎链翻转：概览扫描 MFT 首选分支先于 WizTree 分支",
-              0 < app_src.find("自研 MFT 升为首选")
+        check("引擎链「谁快用谁」（2026-11-02）：速度缓存与择快逻辑就位",
+              "_eng_prefer_wiztree" in app_src
+              and "_eng_speed_record" in app_src
+              and "_eng_calibrate_wiztree" in app_src
+              and "engine_speed.json" in app_src
+              and 0 < app_src.find("自研 MFT 升为首选")
               < app_src.find("正在用 WizTree 读取"))
+        check("引擎更名（2026-11-02 用户要求）：界面不出现「自研」强调字样",
+              "自研" not in html
+              and '"fs.mftOwn2": "Direct MFT read"' in html)
+        check("顶层与全盘最大合并（2026-11-02）：重合检测与页签过滤就位",
+              "BIG_CONTAINERS" in html and "biggestMerged" in html
+              and html.count("biggestMerged") >= 3)
+        check("游戏占用概览页签化（2026-11-02）：切换式页签、不再按盘堆叠",
+              "steamDriveGroups" in html and "applySteamTab" in html
+              and 'class="dsk' not in html and "steamTab" in html)
+        check("工具栏与顶部导航去重（2026-11-02）：游戏概览入口只留 viewNav",
+              'id="btnSteam"' not in html
+              and 'data-v="steam"' in html)
+        check("侧栏折叠默认值（2026-11-02）：只展开运行环境自检，存档键升 v2",
+              'data-acc="rules">' in html
+              and 'class="panel acc open" data-acc="rules"' not in html
+              and 'class="panel acc open" data-acc="guide"' in html
+              and 'oc.acc.v2' in html)
         check("PS 兜底文案专属：不再误称会用 WizTree，指引一键提权",
               html.count("fs.psHint") >= 2 and "fs.wiztreeHint" not in html)
         check("自检面板含数据目录可写项（后端实测写探针，前端三词条）",

@@ -416,14 +416,23 @@
   .cllegend span{display:flex;align-items:center;gap:6px}
   .cllegend em{width:9px;height:9px;border-radius:2px;display:inline-block;font-style:normal}
 
-  /* 扩展名分布（类型分布）：名称 | 占比条 | 体积·个数 三段式行 */
-  .extrow{display:flex;align-items:center;gap:8px;font-size:11.5px;margin-bottom:5px}
-  .extrow .extname{flex:none;width:110px;color:var(--dim);overflow:hidden;
-    text-overflow:ellipsis;white-space:nowrap;text-align:right}
-  .extrow .extbar{flex:1;height:8px;border-radius:4px;background:var(--track);overflow:hidden}
-  .extrow .extbar i{display:block;height:100%;border-radius:4px;
-    background:linear-gradient(90deg,var(--accent),var(--accent2))}
-  .extrow .extval{flex:none;min-width:130px;color:var(--dim2);font-variant-numeric:tabular-nums}
+  /* 扩展名分布（类型分布）2026-11-02 改版：默认收起成一行小按钮，
+     点击在环形图右侧空白区展开为**竖向柱状图**（每列一类型，柱高∝体积）。
+     原横条列表 13 行常驻把概览面板撑得过长，挤压主要功能。 */
+  .extbox{flex:1;min-width:270px;align-self:stretch;display:flex;
+    flex-direction:column;justify-content:center;min-height:134px}
+  .exttoggle{align-self:flex-start;color:var(--dim);font-size:11.5px;
+    background:none;border:none;cursor:pointer;padding:2px 0}
+  .exttoggle:hover{color:var(--accent)}
+  .extv{display:flex;align-items:flex-end;gap:7px;height:118px;margin-top:4px}
+  .extcol{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;
+    align-items:center;justify-content:flex-end;gap:2px;cursor:default}
+  .extcol i{display:block;width:62%;max-width:30px;min-height:3px;
+    border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--accent),var(--accent2))}
+  .extcol .extvval{font-size:9.5px;color:var(--dim2);font-variant-numeric:tabular-nums;
+    max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .extcol .extvlab{font-size:10px;color:var(--dim);max-width:100%;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
   /* 柱状图：柱上直接显示文件名 */
   .vchart{display:flex;flex-direction:column;gap:8px;margin-top:4px}
@@ -624,21 +633,10 @@
   .rule .racts{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
   .rule .racts button{flex:1;min-width:0}
 
-  /* Steam 独立页面：分盘占用 */
-  .dsk{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
-       padding:12px 14px;margin-bottom:10px}
-  .dsk .dskh{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;font-size:13px}
-  .dsk .dskh b{font-size:14.5px}
-  .dsk .dskh span{color:var(--dim)}
-  .dsk .dskcap{margin-left:auto;color:var(--dim2);font-size:11.5px}
-  .dsk .dskbar{height:8px;border-radius:4px;background:var(--bg);overflow:hidden;
-               margin:9px 0 10px}
-  .dsk .dskbar > i{display:block;height:100%;border-radius:4px;
-                   background:linear-gradient(90deg,var(--accent),var(--accent2))}
-  .dsk .dsklib{display:flex;align-items:center;gap:10px;padding:5px 0;
-               border-top:1px dashed var(--track2);font-size:12.5px}
-  .dsk .dsklib .mono{flex:1;min-width:0;overflow-wrap:anywhere;color:var(--fg-soft)}
-  .dsk .dsklib span:not(.mono){color:var(--dim);white-space:nowrap}
+  /* Steam 独立页面：游戏清单已页签化（2026-11-02），不再按盘分组堆叠，
+     原 .dsk 分盘占用块随之移除；游戏占用概览不跟随选中盘 —— 聚合所有
+     盘的游戏，顶部盘符卡的选中高亮在该页没有意义，切过去时压掉。 */
+  body[data-view="steam"] .drv.on{border-color:var(--line);background:var(--panel)}
 
   /* ================= 合并后的累积+换算面板 ================= */
   .cumhead{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
@@ -778,7 +776,6 @@
       <option value="4" data-i18n="depth.4">4 层</option>
       <option value="5" data-i18n="depth.5">5 层（最慢）</option>
     </select>
-    <button id="btnSteam" data-i18n="btn.steam">游戏占用概览</button>
     <button id="btnBigFiles" data-i18n="btn.bigFiles">大文件排行</button>
     <button id="btnDupFiles" data-i18n="btn.dupFiles">重复大文件</button>
     <button id="btnDlAdvice" data-i18n="btn.dlAdvice">下载整理</button>
@@ -1023,7 +1020,7 @@
       </div>
     </div>
 
-    <div class="panel acc open" data-acc="rules">
+    <div class="panel acc" data-acc="rules">
       <h3><span data-i18n="pane.rules">自定义规则</span> <span class="hint" data-i18n="rules.hint">勾选固定项，命名保存</span></h3>
       <div class="ab">
         <div style="color:var(--dim);font-size:12.5px;margin-bottom:11px;line-height:1.6"
@@ -2395,6 +2392,10 @@ let STEAM = null, steamSort = "size", steamFilter = "";
 // 排序方向：1 = 该维度的默认方向（体积/最久没玩：大到小；名称：A→Z），
 // 再次点击同一排序项时翻转为 -1。seg 上的 ▼/▲ 跟着它走。
 let steamSortDir = 1;
+// 游戏库页签（2026-11-02）：当前显示的库分区 id。盘符组是 "gr:<盘符>"
+// （如 gr:D、gr:rest=其他位置），平台分区直接用元素 id（epicPanel 等）。
+// 游戏不再按盘堆叠成长页 —— 用户要求：页签切换、一次只看一个库。
+let steamTab = "";
 // 回收建议面板的折叠态记忆：刷新/重开不再回到默认折叠（oc-orphan-open）
 const ORPHAN_OPEN_KEY = "oc-orphan-open";
 let stOrphanOpen = (() => {
@@ -2446,24 +2447,66 @@ function daysSince(d) {
   return Math.floor((Date.now() - t) / 86400000);
 }
 
-/** 平台页签（吸顶头内）：点击滚动到对应库分区，长滚动不再靠瞎划。
-    无数据的平台置灰禁点；Steam 没装也要构建（自定义库分区永远可达）。
-    必须在 renderOtherPlatforms() 之后调用 —— Epic/GOG 的显隐由它决定。 */
+/** Steam 库按盘分组（2026-11-02 抽出共用）：页签身份与游戏清单渲染都用它。
+    每组 {d: 盘数据|null, gs: 游戏}；d=null 是「库不在已知盘上」的兜底组。 */
+function steamDriveGroups(s) {
+  const driveOf = g => ((g.library || "").trim().toUpperCase()[0] || "?");
+  const groups = (s.by_drive || []).map(d =>
+    ({ d, gs: s.games.filter(g => driveOf(g) === String(d.drive).trim().toUpperCase()[0]) }));
+  const known = new Set(groups.map(gr => String(gr.d.drive).trim().toUpperCase()[0]));
+  const rest = s.games.filter(g => !known.has(driveOf(g)));
+  if (rest.length) groups.push({ d: null, gs: rest });
+  return groups;
+}
+const steamGidOf = gr =>
+  gr.d ? "gr:" + String(gr.d.drive).trim().toUpperCase() : "gr:rest";
+
+/** 按当前页签显隐库分区（只在 Steam 已找到的切换模式下调用）。 */
+function applySteamTab() {
+  const isGr = steamTab.startsWith("gr:");
+  const sec = $("secSteam");
+  if (sec) sec.style.display = isGr ? "" : "none";
+  ["epicPanel", "gogPanel", "secCustom"].forEach(id => {
+    const el = $(id);
+    if (el) el.style.display = id === steamTab ? "" : "none";
+  });
+}
+
+/** 库分区页签（2026-11-02 改版）：从「点击滚动定位」升级为「点击切换」——
+    一次只显示一个库分区（盘符组 / Epic / GOG / 自定义），游戏清单不再
+    按盘堆叠成长页。Steam 未找到时保持旧的滚动定位形态（错误提示与
+    空态引导住在 secSteam 里，切走会把用户带丢）。 */
 function renderSteamTabs() {
   if (!$("stTabs")) return;
-  $("stTabs").innerHTML = [
-    ["secSteam", "Steam"], ["epicPanel", "Epic"], ["gogPanel", "GOG"],
-    ["secCustom", t("pane.customLibs","自定义游戏库")],
-  ].map(([id, label]) => {
-    const el = $(id);
-    const vis = el && el.style.display !== "none";
-    return `<span class="seg${vis ? "" : " dim"}" data-tab="${id}"
-      style="${vis ? "" : "opacity:.45;pointer-events:none"}">${esc(label)}</span>`;
+  const s = STEAM;
+  const found = !!(s && s.found);
+  const tabs = [];
+  if (found) {
+    steamDriveGroups(s).forEach(gr => {
+      const label = gr.d
+        ? `${String(gr.d.drive).trim().toUpperCase()} ${t("st.driveSuffix","盘")}`
+        : t("st.otherDrives","其他位置");
+      tabs.push([steamGidOf(gr), `${label} · ${gr.gs.length}`]);
+    });
+  }
+  const vis = id => { const el = $(id); return el && el.style.display !== "none"; };
+  if (vis("epicPanel")) tabs.push(["epicPanel", "Epic"]);
+  if (vis("gogPanel")) tabs.push(["gogPanel", "GOG"]);
+  tabs.push(["secCustom", t("pane.customLibs","自定义游戏库")]);
+  $("stTabs").innerHTML = tabs.map(([id, label]) => {
+    const on = found && steamTab === id;
+    return `<span class="seg${on ? " on" : ""}" data-tab="${id}">${esc(label)}</span>`;
   }).join("");
   $("stTabs").querySelectorAll("[data-tab]").forEach(x =>
     x.addEventListener("click", () => {
-      const el = $(x.dataset.tab);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (found) {
+        steamTab = x.dataset.tab;
+        applySteamTab();
+        renderSteamPage();     // 重渲染当前库的游戏清单（页签 on 态同步）
+      } else {
+        const el = $(x.dataset.tab);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     }));
 }
 
@@ -2511,7 +2554,7 @@ function renderSteamPage() {
   // 视图来回切换是最频繁的路径，反复 innerHTML 重挂既慢又让页面闪白。
   const key = [s.game_count, s.total_size_h, s.orphan_count,
                (s.by_drive || []).map(d => `${d.drive}:${d.apps}`).join(","),
-               steamSort, steamSortDir, steamFilter, langParam(),
+               steamSort, steamSortDir, steamFilter, steamTab, langParam(),
                (GAMES && GAMES.games ? GAMES.games.length : 0)].join("|");
   loadGameTrend();            // 趋势数据便宜（本地 JSON），每次进来都刷新
   if (key === _steamPageKey) return;
@@ -2568,15 +2611,24 @@ function renderSteamPage() {
   $("stListHint").textContent = q ? t("st.filtered","筛选出 {n} 个").replace("{n}", games.length)
                                   : t("st.totalN","共 {n} 个").replace("{n}", games.length);
 
-  // ---- 按盘分组（库总览与游戏清单合并后的形态）----
-  // 每个盘一组：占用概览（Steam 体积/占比/库列表）+ 装在这个盘上的游戏，
-  // 用户对着一个盘就能看全「占了多少、都是什么」。
+  // ---- 按库分区页签展示（2026-11-02 改版）----
+  // 原形态：每个盘一组（盘占用概览 + 该盘游戏）从上到下堆叠，D/E 盘
+  // 混在一条长页里；用户要求改成页签切换、一次只看一个库，游戏清单
+  // 不再按盘分组堆叠（每行本来就带「位于 …」路径，盘信息不丢）。
+  // 页签身份来自全量 s.games（不受筛选影响），渲染取筛选排序后的子集。
   const driveOf = g => ((g.library || "").trim().toUpperCase()[0] || "?");
-  const groups = (s.by_drive || []).map(d =>
-    ({ d, gs: games.filter(g => driveOf(g) === String(d.drive).trim().toUpperCase()[0]) }));
-  const known = new Set(groups.map(gr => String(gr.d.drive).trim().toUpperCase()[0]));
-  const rest = games.filter(g => !known.has(driveOf(g)));
-  if (rest.length) groups.push({ d: null, gs: rest });   // 库不在已知盘上的兜底组
+  const allGroups = steamDriveGroups(s);
+  const knownDrives = new Set(
+    allGroups.filter(gr => gr.d).map(gr => String(gr.d.drive).trim().toUpperCase()[0]));
+  const gidOf = steamGidOf;
+  const tabIds = [...allGroups.map(gidOf), "epicPanel", "gogPanel", "secCustom"];
+  if (!tabIds.includes(steamTab))
+    steamTab = allGroups.length ? gidOf(allGroups[0]) : "secCustom";
+  const inTab = g =>
+    steamTab === "gr:rest" ? !knownDrives.has(driveOf(g))
+    : steamTab.startsWith("gr:") ? driveOf(g) === steamTab.slice(3)
+    : false;
+  const shownGames = games.filter(inTab);
 
   const staleOf = g => {
     const d = daysSince(g.last_played);
@@ -2612,29 +2664,10 @@ function renderSteamPage() {
   if (!games.length) {
     $("stGames").innerHTML = `<div class="empty" style="margin:0">${t("st.noMatch","没有匹配的游戏。")}</div>`;
   } else {
-    $("stGames").innerHTML = groups.map(({ d, gs }) => `
-      ${d ? `<div class="dsk">
-          <div class="dskh">
-            <b>${esc(d.drive)}: ${t("st.driveSuffix","盘")}</b>
-            <span>${t("st.driveLine","Steam {v} · {n} 个游戏 · 占该盘 {p}%").replace("{v}", esc(d.size_h)).replace("{n}", d.apps).replace("{p}", d.share)}</span>
-            <span class="dskcap">${t("st.diskCap","盘总 {t} · 可用 {f}").replace("{t}", esc(d.disk_total_h)).replace("{f}", esc(d.disk_free_h))}</span>
-          </div>
-          <div class="dskbar"><i style="width:${Math.min(100, d.share)}%"></i></div>
-          ${d.libraries.map(l => `<div class="dsklib">
-            <span class="mono">${esc(l.path)}</span>
-            <span>${l.apps} ${t("st.countSuffix","个")} · ${esc(l.size_h)}</span>
-            <button class="tiny ghost" data-reveal="${esc(l.path)}">${t("part.open","打开")}</button>
-          </div>`).join("")}
-        </div>`
-        : `<div class="dsk">
-          <div class="dskh"><b>${t("st.otherDrives","其他位置")}</b>
-            <span>${t("st.otherDrivesNote","库目录不在这几个盘上")}</span></div>
-        </div>`}
-      ${gs.length ? gs.map(gameRow).join("")
-        : `<div class="empty" style="margin:4px 0 10px">${t("st.noGamesOnDrive","这个盘上没有已安装游戏。")}</div>`}
-    `).join("");
+    $("stGames").innerHTML = shownGames.length ? shownGames.map(gameRow).join("")
+      : `<div class="empty" style="margin:4px 0 10px">${t("st.noGamesOnDrive","这个盘上没有已安装游戏。")}</div>`;
     $("stGames").querySelectorAll(".vrow").forEach(el => el.addEventListener("click", () => {
-      const g = games.find(x => x.appid === el.dataset.appid);
+      const g = shownGames.find(x => x.appid === el.dataset.appid);
       if (!g) return;
       const stale = staleOf(g);
       showDetail({
@@ -2653,7 +2686,7 @@ function renderSteamPage() {
     $("stGames").querySelectorAll("[data-delrow]").forEach(b =>
       b.addEventListener("click", ev => {
         ev.stopPropagation();
-        const g = games.find(x => x.appid === b.dataset.delrow);
+        const g = shownGames.find(x => x.appid === b.dataset.delrow);
         if (g) confirmDeleteGame(g, "steam");
       }));
   }
@@ -2769,6 +2802,8 @@ function renderSteamPage() {
 
   // ---- Epic / GOG 游戏库（有才显示）----
   renderOtherPlatforms();
+  // 页签在 Epic/GOG 显隐确定后构建；Steam 已找到时按页签切换显隐分区
+  if (s.found) applySteamTab();
   renderSteamTabs();          // 页签在 Epic/GOG 显隐确定后构建
 
   // 统一挂「打开目录」事件
@@ -3465,6 +3500,17 @@ let fsStack = [];
 // 隐藏项合并行的就地展开状态（2026-10-30）：只有一个合成行，全局一个开关
 // 就够。切视图/下钻/重扫时复位（见各处 hiddenAggOpen = false）。
 let hiddenAggOpen = false;
+// 类型分布（扩展名竖向柱状图）的展开状态（2026-11-02）：默认收起 ——
+// 13 行横条常驻把概览面板撑得过长；展开后放在环形图右侧空白区。
+let extOpen = false;
+// 「全盘最大项目」视图剔除的中间容器名（steamapps/common 等）：
+// 容器名对用户没有意义，它的子项才是实体。视图本体与「顶层 vs 全盘最大
+// 重合检测」（2026-11-02 用户要求：显示结果相同时合并展示）共用这份名单。
+const BIG_CONTAINERS = new Set([
+  "common", "steamapps", "steamlibrary", "downloads", "download",
+  "appdata", "programdata", "cache", "caches", "temp", "tmp",
+  "binaries", "content", "data", "models", "files",
+]);
 // 在途全盘扫描属于哪个盘、用什么作废。换盘时旧盘的扫描必须作废重开：
 // 否则「扫描中」守卫会把新盘的扫描吞掉，用户点 E 盘却一直看 C 盘的扫描面板。
 let fsScanDrive = null, fsAbort = null, fsScanDepth = null;
@@ -3497,6 +3543,7 @@ function renderViewNav() {
 let _steamPageKey = "";
 function switchView(name) {
   view = name;
+  document.body.dataset.view = name;   // CSS 据此压掉游戏页的盘符卡选中高亮
   $("fullView").style.display = name === "full" ? "flex" : "none";
   $("steamView").style.display = name === "steam" ? "flex" : "none";
   const inc = $(name === "full" ? "fullView" : "steamView");
@@ -3504,7 +3551,8 @@ function switchView(name) {
   void inc.offsetWidth;               // 强制回流，让动画类每次都能重新触发
   inc.classList.add(name === "steam" ? "slide-l" : "slide-r");
   setToolbars(true, name === "steam" ? "compact" : "normal");
-  $("btnSteam").textContent = name === "steam" ? t("nav.backFull","返回扫描概览") : t("nav.steam","游戏占用概览");
+  // 2026-11-02：工具栏的「游戏占用概览」按钮删去 —— 与顶部 viewNav 的同名
+  // 按钮完全重复（同一功能两个入口，用户指出导航重复），顶部导航保留。
   renderViewNav();
   if (name === "steam") renderSteamPage();
 }
@@ -3635,16 +3683,19 @@ async function startFullScan() {
       '<div style="color:var(--dim2);font-size:12px;margin-top:8px">' +
       t("fs.scanFailHint","可先用命令行确认服务端是否正常：") +
       `<code>python -X utf8 app.py --fullscan-only --drive ${esc(drive)}</code></div>`;
-    b.textContent = t("fs.retryFull","重试全盘扫描");
   } finally {
     clearInterval(timer);
     // 只有当自己仍是「当前扫描」时才清理状态与解禁按钮 —— 被换盘作废的旧扫描
     // 绝不能碰新扫描的面板、进度定时器与按钮状态。
+    // 文案必须一并恢复（2026-11-02 用户反馈「一直显示全盘扫描中」）：
+    // 旧代码只在 catch 里改成「重试全盘扫描」、成功路径从不恢复文案，
+    // 按钮解禁了字还卡在「全盘扫描中…」。
     if (fsAbort === ac) {
       fsAbort = null;
       fsScanDrive = null;
       fsScanDepth = null;
       b.disabled = false;
+      b.textContent = t("btn.fullScan","全盘扫描本盘");
     }
   }
 }
@@ -3747,6 +3798,32 @@ function fsUniqueNodes() {
   return ns.filter(n => !hasAncestorNode(normKey(n.path)));
 }
 
+/** 类型分布（扩展名）区块（2026-11-02）：收起 = 一行小按钮；
+    展开 = 竖向柱状图（每列一个类型，柱高 ∝ 体积，放在环形图右侧空白区）。
+    原 13 行横条常驻把概览面板撑得过长、挤压主要功能，用户要求改掉。 */
+function extBoxHTML() {
+  const list = FS.by_ext || [];
+  if (!list.length) return "";
+  const maxv = Math.max(1, ...list.map(e => e.size || 0));
+  const head = `${t("fs.extHead","空间都被什么类型吃了（按扩展名，Top 12）")}`;
+  if (!extOpen)
+    return `<button class="exttoggle" id="extToggle">${head} ▸ ${t("fs.extExpand","点击展开")}</button>`;
+  return `
+    <button class="exttoggle" id="extToggle">${head} ▴ ${t("fs.extCollapse","收起")}</button>
+    <div class="extv">
+      ${list.map(e => {
+        const h = Math.max(3, Math.round((e.size || 0) / maxv * 100));
+        const label = e.ext === "__other__" ? t("fs.extOther","其他类型")
+          : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
+        const tip = `${label} · ${fmt(e.size || 0)} · ${Number(e.count || 0).toLocaleString()} ${t("fs.extFilesShort","个")}`;
+        return `<div class="extcol" title="${tip}">
+          <span class="extvval">${fmt(e.size || 0)}</span>
+          <i style="height:${h}%"></i>
+          <span class="extvlab">${label}</span></div>`;
+      }).join("")}
+    </div>`;
+}
+
 function renderOverview() {
   // 所有导航路径（下钻/返回/换盘/重扫）都会经过这里 —— 隐藏项合并行的
   // 展开状态在这里复位；agg 行自己的展开/收起只调 renderChart，不受影响。
@@ -3780,10 +3857,11 @@ function renderOverview() {
       <div class="ovstats">
         <div class="stat"><span>${t("fs.scannedNow","本次扫到")}</span><b>${FS.scanned_total_h} · ${FS.node_count} ${t("fs.nodesSuffix","个节点")}</b></div>
       </div>
+      ${(FS.by_ext && FS.by_ext.length) ? `<div class="extbox" id="extBox">${extBoxHTML()}</div>` : ""}
     </div>
     ${FS.engine ? `<div class="enginebar ${FS.engine === "wiztree" || FS.engine === "mft" ? "fast" : ""}">
       <b>${FS.engine === "wiztree" ? t("fs.mftFast2","WizTree MFT 加速")
-          : FS.engine === "mft" ? t("fs.mftOwn2","MFT 直读加速（自研）")
+          : FS.engine === "mft" ? t("fs.mftOwn2","MFT 直读加速")
           : t("fs.psWalk","PowerShell 递归扫描")}</b>
       <span>${FS.engine_rows != null
         ? (FS.engine === "mft"
@@ -3795,8 +3873,8 @@ function renderOverview() {
       ${FS.engine === "wiztree"
         ? t("fs.wiztreeNote","<span>借本机已装的 WizTree 读 MFT，比逐目录递归快；不安装、不修改它。</span>")
         : FS.engine === "mft"
-        ? t("fs.mftOwnNote","<span>自研 MFT 直读引擎（首选）：管理员权限下直接解析 NTFS 主文件表，无需外部工具、无临时文件。</span>")
-        : t("fs.psHint","<span>当前用 PowerShell 递归扫描（最慢）：未安装 WizTree 且未提权。点右上「一键提权重启」后可用自研 MFT 引擎（最快），或安装 WizTree 加速。</span>")}
+        ? t("fs.mftOwnNote","<span>MFT 直读引擎：管理员权限下直接解析 NTFS 主文件表，无需外部工具、无临时文件。</span>")
+        : t("fs.psHint","<span>当前用 PowerShell 递归扫描（最慢）：未安装 WizTree 且未提权。点右上「一键提权重启」后可用 MFT 引擎（最快），或安装 WizTree 加速。</span>")}
     </div>` : ""}
     <div style="margin-top:15px;padding-top:13px;border-top:1px solid var(--line)">
       <div style="color:var(--dim2);font-size:11.5px;margin-bottom:3px">
@@ -3810,22 +3888,14 @@ function renderOverview() {
         <span><em style="background:var(--danger)"></em>${t("badge.keep","建议保留")} ${fmt(keepSum)}</span>
         <span><em style="background:var(--dim2)"></em>${t("badge.unk","未识别")} ${fmt(unkSum)}</span>
       </div>
-    </div>
-    ${(FS.by_ext && FS.by_ext.length) ? `
-    <div style="margin-top:15px;padding-top:13px;border-top:1px solid var(--line)">
-      <div style="color:var(--dim2);font-size:11.5px;margin-bottom:7px">
-        ${t("fs.extHead","空间都被什么类型吃了（按扩展名，Top 12）")}</div>
-      ${FS.by_ext.map(e => {
-        const base = FS.scanned_total || (FS.by_ext.reduce((a, x) => a + x.size, 0) || 1);
-        const pctv = Math.max(0.5, e.size / base * 100);
-        const label = e.ext === "__other__" ? t("fs.extOther","其他类型")
-          : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
-        return `<div class="extrow">
-          <span class="extname" title="${label}">${label}</span>
-          <span class="extbar"><i style="width:${pctv.toFixed(1)}%"></i></span>
-          <span class="extval">${fmt(e.size)} · ${Number(e.count).toLocaleString()}</span></div>`;
-      }).join("")}
-    </div>` : ""}`;
+    </div>`;
+
+  // 类型分布展开/收起：只重渲染概览面板（含 extBox），代价可忽略
+  const extTg = $("extToggle");
+  if (extTg) extTg.addEventListener("click", () => {
+    extOpen = !extOpen;
+    renderOverview();
+  });
 
   // 面包屑 + 返回上一级
   const crumbs = [`<span class="cb${fsStack.length ? "" : " cur"}" data-i="-1">${esc(FS.drive)}: ${t("st.driveSuffix","盘")}</span>`];
@@ -3933,6 +4003,23 @@ async function loadSubLevel(node) {
 function renderChart() {
   const parts = fsLayerParts();
   const here = parts.vis;
+  // 顶层 vs 全盘最大重合检测（2026-11-02 用户要求）：盘根层级上，
+  // 「全盘最大项目」（剔除容器目录后的目录实体，按体积降序前 30）若与
+  // 「顶层」的目录列表逐项相同（同路径同体积），两份列表就是同一信息的
+  // 两种说法 —— 隐藏「全盘最大项目」页签、选中它时按顶层渲染。
+  // 下钻带入深层节点、或扫出顶层之外的大项后，两份列表自然分化，页签恢复。
+  let biggestMerged = false;
+  if (fsStack.length === 0 && FS) {
+    const sig = l => l.map(n => normKey(n.path) + ":" + n.size).join("|");
+    const bigRows = FS.nodes.filter(n => n.type === "dir" && n.depth >= 1
+      && n.size > 0 && !BIG_CONTAINERS.has(n.name.toLowerCase())
+      && !n.in_game_body && !n.hidden_sys)
+      .sort((a, b) => b.size - a.size).slice(0, 30);
+    const topDirs = here.filter(n => n.type === "dir" && n.size > 0)
+      .sort((a, b) => b.size - a.size).slice(0, 30);
+    biggestMerged = sig(bigRows) === sig(topDirs);
+  }
+  if (fsMode === "biggest" && biggestMerged) fsMode = "dirs";
   let rows;
   if (fsMode === "clean") rows = FS.nodes.filter(n => n.cleanable && !n.in_game_body && !n.hidden_sys);
   else if (fsMode === "files") rows = here.filter(n => n.type === "file");
@@ -3956,13 +4043,8 @@ function renderChart() {
     // 默认扫描 1 层（2026-10-15 起）时只有首层节点，这里从 depth>=1 起取，
     // 否则该视图在默认档位下会是空的；容器过滤照常生效。
     // 隐藏项不单独出现（2026-10-30 用户要求），由下面的合并行承接。
-    const containers = new Set([
-      "common", "steamapps", "steamlibrary", "downloads", "download",
-      "appdata", "programdata", "cache", "caches", "temp", "tmp",
-      "binaries", "content", "data", "models", "files",
-    ]);
     rows = FS.nodes.filter(n => n.type === "dir" && n.depth >= 1 && n.size > 0
-      && !containers.has(n.name.toLowerCase()) && !n.in_game_body && !n.hidden_sys);
+      && !BIG_CONTAINERS.has(n.name.toLowerCase()) && !n.in_game_body && !n.hidden_sys);
   }
   else rows = here;
   // 排序方式可选：默认按占用降序；「按名称」用中文locale排序（2026-10-13
@@ -3996,7 +4078,7 @@ function renderChart() {
     if (hid.length) {
       const aggSize = hid.reduce((a, n) => a + (n.size || 0), 0);
       const aggRow = {
-        name: t("fs.hiddenAggName", "隐藏项"), hidden_agg: true,
+        name: t("fs.hiddenAggName", "系统隐藏项"), hidden_agg: true,
         badge_label: t("fs.hiddenAggBadge", "系统隐藏"),
         agg_count: hid.length,
         agg_members: hid.sort((a, b) => (b.size || 0) - (a.size || 0)).slice(0, 30),
@@ -4026,9 +4108,11 @@ function renderChart() {
     // Explorer 默认不显示的项。0 项时仍显示页签（带 0），避免用户以为功能没了。
     // 计数按路径去重：下钻时 /subdirs 会把树里已有的同一目录再补一份，
     // 不去重就会出现「页签写 14 项、实际只列出 12 行」的自相矛盾。
-    ["hidden", t("fs.hiddenTab","隐藏项（{n}）").replace("{n}",
+    ["hidden", t("fs.hiddenTab","系统隐藏项（{n}）").replace("{n}",
       new Set(FS.nodes.filter(n => n.hidden_sys).map(n => normKey(n.path))).size)],
-  ];
+  // 顶层与全盘最大显示结果相同（biggestMerged）时隐藏「全盘最大项目」页签，
+  // 两份列表合并为一份 —— 与上面 renderChart 的回落逻辑配套。
+  ].filter(([k]) => !(k === "biggest" && biggestMerged));
   $("fsModes").innerHTML = modes.map(([k, label]) =>
     `<span class="seg${fsMode === k ? " on" : ""}" data-m="${k}">${esc(label)}</span>`).join("");
   $("fsModes").querySelectorAll(".seg").forEach(s =>
@@ -4064,7 +4148,10 @@ function renderChart() {
     return;
   }
 
-  const maxSize = rows[0].size;
+  // 基准必须取本视图的最大项，而不是首行 —— 「按名称」排序时首行是字母序
+  // 最前的，往往是个小项：所有比它大的行全部被钳到 100%，整列柱条一样长
+  // （2026-11-02 用户截图：5.5 MB 与 26.2 GB 的柱条等长）。
+  const maxSize = Math.max(1, ...rows.map(r => r.size || 0));
   $("fsChart").innerHTML = rows.map((it, idx) => {
     // 徽章与柱条共用同一个「有效类别」（rowKind）：显式标签样式 > 徽章文字
     // 是三档标准文案时按文字推断 > 识别结果。用户改标签（如改成「可清理」）
@@ -5155,7 +5242,7 @@ function renderBfRows() {
 async function openBigFiles() {
   $("modal").innerHTML = `<h2>${t("bf.title", "全盘大文件排行")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
-      ${t("bf.loading", "正在全盘遍历大文件（管理员 + NTFS 时由自研 MFT 引擎秒级完成）…")}</div></div>`;
+      ${t("bf.loading", "正在全盘遍历大文件（管理员 + NTFS 时由 MFT 引擎秒级完成）…")}</div></div>`;
   $("mask").classList.add("on");
   let r;
   try {
@@ -5318,12 +5405,8 @@ $("btnDense").addEventListener("click", () => {
   applyDense();
 });
 
-$("btnSteam").addEventListener("click", () => {
-  if (view === "steam") { switchView("full"); return; }
-  switchView("steam");
-  loadSteam();
-  loadCustomLibs();
-});
+// （2026-11-02）工具栏「游戏占用概览」按钮已删：与顶部导航重复，
+// 入口统一为 #viewNav 的 [data-v="steam"]。
 $("cgAdd").addEventListener("click", () => { addCustomLib(); });
 
 // ---- 游戏清单导出：CSV（带 BOM，Excel 直接打开不乱码）/ Markdown ----
@@ -5767,7 +5850,10 @@ $("btnClearLog").addEventListener("click", async () => {  if (!confirm(t("confir
      * 「最近清理记录」的标题里嵌了「清空全部」按钮，点在按钮上不能顺带折叠；
      * 折叠状态要存成带版本号的对象，否则「全部收起」会被当成「没存过」，
        刷新后又按 HTML 上的默认值展开。 */
-const ACC_KEY = "oc.acc.v1";
+// v2（2026-11-02）：默认只展开「运行环境自检」，其余面板默认收起。
+// 升版本号让旧的 v1 存档（可能记着一堆展开的面板）整体作废，
+// 用户手动展开/收起后照常写回 v2。
+const ACC_KEY = "oc.acc.v2";
 function accSaved() {
   try {
     const o = JSON.parse(localStorage.getItem(ACC_KEY) || "null");
@@ -5986,10 +6072,10 @@ const I18N_EN = {
   "fs.hintBiggest": "Big items sorted by size across all levels (container dirs excluded)",
   "fs.hintClean": "Everything judged cleanable in the whole tree",
   "fs.hintDrill": "Click a folder to drill down, a file for details",
-  "fs.hiddenTab": "Hidden items ({n})",
+  "fs.hiddenTab": "System hidden items ({n})",
   "fs.hintHidden": "Items Explorer hides by default ($RECYCLE.BIN, System Volume Information, NTFS metadata, hidden folders and files). Switch back with one click — no need to climb back up.",
   "fs.emptyHidden": "No default-hidden items were found on this drive. If you are sure they exist (e.g. $RECYCLE.BIN), the scan depth may be too shallow — try a deeper or full scan.",
-  "fs.hiddenAggName": "Hidden items",
+  "fs.hiddenAggName": "System hidden items",
   "fs.hiddenAggBadge": "Hidden",
   "fs.hiddenAggDesc": "Items Explorer hides by default — click to expand/collapse",
   "fs.hiddenAggCount": " ({n} items)",
@@ -6153,14 +6239,16 @@ const I18N_EN = {
   "fs.noWiztreeOnTheFly": "WizTree acceleration is off; scanning this folder on the fly (may take seconds)…",
   "fs.tagline": "{drive}: drive · {nodes} nodes · {explained} identified · {depth} level(s){engine}",
   "fs.mftFast": " · WizTree MFT accelerated", "fs.mftFast2": "WizTree MFT acceleration",
-  "fs.mftOwnFast": " · Direct MFT read", "fs.mftOwn2": "Direct MFT read (built-in)",
+  "fs.mftOwnFast": " · Direct MFT read", "fs.mftOwn2": "Direct MFT read",
   "fs.mftOwnStat": "MFT read: {n} records, parsed in {s}s",
-  "fs.mftOwnNote": "<span>Built-in MFT engine (first choice): reads the NTFS Master File Table directly with admin rights — no external tool, no temp files.</span>",
+  "fs.mftOwnNote": "<span>MFT engine: reads the NTFS Master File Table directly with admin rights — no external tool, no temp files.</span>",
   "fs.psWalk": "PowerShell recursive scan",
   "fs.wiztreeNote": "<span>Reads the MFT via the WizTree installed on this machine — faster than per-folder recursion; it is never installed or modified.</span>",
   "fs.psHint": "<span>Currently scanning with PowerShell (slowest): WizTree is not installed and the process is not elevated. Click “Elevate & restart” (top right) to use the built-in MFT engine (fastest), or install WizTree to speed things up.</span>",
   "fs.scannedNow": "Scanned this run", "fs.nodesSuffix": "nodes",
   "fs.extHead": "What types are eating the space (by extension, top 12)",
+  "fs.extExpand": "Click to expand", "fs.extCollapse": "Collapse",
+  "fs.extFilesShort": "files",
   "fs.extOther": "Other types", "fs.extNone": "no extension",
   "fs.mixHead": "Of what was scanned, how much is cleanable vs. keep",
   "fs.upLevel": "Up one level", "fs.curDir": "Current folder: ",
