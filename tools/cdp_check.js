@@ -1597,7 +1597,8 @@ class CDP {
       cta: !!document.querySelector('#stOverview button.tiny'),
       recMap: typeof recycleSel !== 'undefined' && recycleSel instanceof Map,
     }))()`);
-    check("吸顶头有库分区页签（盘符组/Epic/GOG/自定义，≥3 个）", gadd.tabs >= 3,
+    check("吸顶头有库分区页签（Steam 在→盘符组+平台+自定义；不在→仅自定义）",
+          gadd.found ? gadd.tabs >= 3 : gadd.tabs >= 1,
           `${gadd.tabs} 个页签`);
     if (gadd.found) {
       // 2026-11-02 页签化：恰有一个选中页签，游戏清单只显示当前库分区
