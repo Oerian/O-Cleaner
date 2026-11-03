@@ -722,6 +722,18 @@ class CDP {
   })()`);
   check("扫描概览已并入磁盘概览面板（同面板、不重复统计）",
         mergedPanel.samePanel && !mergedPanel.dupDisk, JSON.stringify(mergedPanel));
+  // 2026-11-03 剩余空间趋势：磁盘卡折线画每日剩余空间（不再画清理事件）。
+  // 快照需多天积累：本地已有多天 → 断言折线几何；不足两天 → 断言如实说明。
+  const dtr = await evaluate(`(() => {
+    const cv = document.querySelector('#trendCv');
+    const lbl = (document.querySelector('#trendLbl')||{}).innerText || '';
+    const n = (typeof DISK_TREND !== 'undefined' && Array.isArray(DISK_TREND)) ? DISK_TREND.length : -1;
+    const geo = (typeof _TREND_GEO !== 'undefined' && _TREND_GEO) ? _TREND_GEO : null;
+    return { hasCv: !!cv, n, lbl, pts: geo && geo.pts ? geo.pts.length : 0 };
+  })()`);
+  checkScan("剩余空间趋势折线（多天快照→几何；不足两天→如实说明）",
+        dtr.hasCv && dtr.n >= 0 && (dtr.pts >= 2 || /记录|record/i.test(dtr.lbl)),
+        `days=${dtr.n} pts=${dtr.pts} lbl=${dtr.lbl.slice(0, 40)}`);
   // 视图切换流畅性：方向性滑入动画类 + 渲染缓存存在
   const smooth = await evaluate(`(() => {
     let kf = false, slide = false, cache = false;
@@ -1544,10 +1556,8 @@ class CDP {
       // found=false 有两种成因：本机确实没有 Steam，或后端枚举失败。后者要看得见。
       steamErr: (typeof STEAM !== 'undefined' && STEAM && STEAM.error) ? String(STEAM.error).slice(0, 80) : '',
       drives: document.querySelectorAll('#stGames .dsk').length,
-      // 2026-11-02 页签化：游戏清单不再按盘堆叠（.dsk 已删），
-      // 页签一次只显示一个库分区，选中页签带 on 态
-      tabs: [...document.querySelectorAll('#stTabs .seg')]
-        .map(e => ({ label: e.textContent.trim(), on: e.classList.contains('on') })),
+      // 2026-11-03 合盘展示：页签条已移除，游戏清单一条流（.dsk 分区已删）
+      tabsGone: !document.querySelector('#stTabs'),
       games: document.querySelectorAll('#stGames .vrow').length,
       sorts: document.querySelectorAll('#stSort .seg').length,
       filter: !!document.querySelector('#stFilter'),
@@ -1587,7 +1597,7 @@ class CDP {
     // （建议卡已并入折叠面板，#stSugg 容器已删除；面板内独立删除按钮
     //   #stOrphanDel 也已删除 —— 勾选项并入主工具栏「清理选中项」）
     const gadd = await evaluate(`(() => ({
-      tabs: document.querySelectorAll('#stTabs .seg').length,
+      tabsGone: !document.querySelector('#stTabs'),
       trendBox: !!document.querySelector('#gameTrendBox'),
       suggGone: !document.querySelector('#stSugg'),
       delGone: !document.querySelector('#stOrphanDel'),
@@ -1597,19 +1607,8 @@ class CDP {
       cta: !!document.querySelector('#stOverview button.tiny'),
       recMap: typeof recycleSel !== 'undefined' && recycleSel instanceof Map,
     }))()`);
-    check("吸顶头有库分区页签（Steam 在→盘符组+平台+自定义；不在→仅自定义）",
-          gadd.found ? gadd.tabs >= 3 : gadd.tabs >= 1,
-          `${gadd.tabs} 个页签`);
-    if (gadd.found) {
-      // 2026-11-02 页签化：恰有一个选中页签，游戏清单只显示当前库分区
-      const tabState = await evaluate(`(() => {
-        const segs = [...document.querySelectorAll('#stTabs .seg')];
-        return { on: segs.filter(s => s.classList.contains('on')).length,
-                 total: segs.length };
-      })()`);
-      check("游戏库页签切换式（恰一个选中态）",
-            tabState.on === 1, JSON.stringify(tabState));
-    }
+    check("吸顶头不再有库分区页签条（2026-11-03 合盘展示）",
+          gadd.tabsGone, `tabsGone=${gadd.tabsGone}`);
     check("游戏占用趋势容器就位且独立建议卡已移除", gadd.trendBox && gadd.suggGone,
           `trendBox=${gadd.trendBox} suggGone=${gadd.suggGone}`);
     check("回收建议面板无独立删除按钮（并入主清理出口）",
@@ -1641,9 +1640,9 @@ class CDP {
     // 新装机的开发机上都没有，面板会按设计显示空态（这是功能，不是缺陷）。
     // 所以这里以 STEAM.found / games 数量为前提，不具备就跳过而不是判失败。
     if (st.found && st.libCount > 0) {
-      check("按库分区页签显示 Steam 占用（不再按盘堆叠 .dsk）",
-            st.drives === 0 && st.tabs.length >= 1,
-            `${st.tabs.length} 个页签: ${st.tabs.map(t => t.label).join(" / ")}`);
+      check("游戏清单合并一条流（不按盘堆叠、无页签条）",
+            st.drives === 0 && st.tabsGone,
+            `drives=${st.drives} tabsGone=${st.tabsGone}`);
       check("列出游戏清单", st.games > 0, `${st.games} 条`);
       check("有排序与筛选", st.sorts >= 3 && st.filter);
 

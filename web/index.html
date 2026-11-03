@@ -419,20 +419,22 @@
   /* 扩展名分布（类型分布）2026-11-02 改版：默认收起成一行小按钮，
      点击在环形图右侧空白区展开为**竖向柱状图**（每列一类型，柱高∝体积）。
      原横条列表 13 行常驻把概览面板撑得过长，挤压主要功能。 */
-  .extbox{flex:1;min-width:270px;align-self:stretch;display:flex;
+  .extbox{flex:1;min-width:300px;align-self:stretch;display:flex;
     flex-direction:column;justify-content:center;min-height:134px}
   .exttoggle{align-self:flex-start;color:var(--dim);font-size:11.5px;
     background:none;border:none;cursor:pointer;padding:2px 0}
   .exttoggle:hover{color:var(--accent)}
-  .extv{display:flex;align-items:flex-end;gap:7px;height:118px;margin-top:4px}
+  .extv{display:flex;align-items:flex-end;gap:6px;height:126px;margin-top:4px}
   .extcol{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;
     align-items:center;justify-content:flex-end;gap:2px;cursor:default}
   .extcol i{display:block;width:62%;max-width:30px;min-height:3px;
     border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--accent),var(--accent2))}
+  /* 标签与数值完整展示（2026-11-03）：去掉 ellipsis —— 竖排空间里被截断
+     的「其他类…」比换行更伤观感；CJK 与数值 anywhere 断行、居中排。 */
   .extcol .extvval{font-size:9.5px;color:var(--dim2);font-variant-numeric:tabular-nums;
-    max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    max-width:100%;text-align:center;overflow-wrap:anywhere;line-height:1.15}
   .extcol .extvlab{font-size:10px;color:var(--dim);max-width:100%;
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    text-align:center;overflow-wrap:anywhere;line-height:1.2}
 
   /* 柱状图：柱上直接显示文件名 */
   .vchart{display:flex;flex-direction:column;gap:8px;margin-top:4px}
@@ -817,7 +819,6 @@
         <h3><span data-i18n="pane.steamOverview">游戏占用概览</span> <span class="hint" id="stListHint"></span></h3>
         <div class="fstabbar">
           <div class="segbtns" id="stSort"></div>
-          <div class="segbtns" id="stTabs" style="margin-top:6px"></div>
           <div style="margin-top:6px"><input type="text" id="stFilter"
             placeholder="按名称筛选，例如 witcher" style="width:100%" data-i18n-ph="steam.filter"></div>
         </div>
@@ -1713,10 +1714,12 @@ function renderDisk(d) {
   drawDiskTrend();
 }
 
-/* ---- 清理活动图（2026-10-17 改版）：纵轴是「每次清理释放了多少」 ----
-   数据来自清理历史（/history），只统计当前盘的事件（新记录带盘符；
-   早期记录没有盘符字段，不计入、也不混入别的盘）。折线各点 = 该次释放量，
-   点下方浅色透明填充衬托积累感；没有事件时如实说明，不画空图。 */
+/* ---- 剩余空间趋势图（2026-11-03 改版）：纵轴是「当天可用空间」 ----
+   数据来自磁盘快照（/__oc__/disk-trend，record_disk_snapshot 每天每盘
+   一条，同日空间变化才更新），折线各点 = 该盘当天的剩余空间，纵轴
+   只取 [min−18%, max+18%] 的局部区间 —— 从 0 起画会把几十 GB 的日常
+   波动压成一条直线（旧版画的是清理释放量，被用户指出「一直是一条
+   直线」，根因即此）。不足两个点时如实说明「从今天开始记录」。 */
 function cssVar(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
@@ -1728,11 +1731,11 @@ function hexToRgba(hex, alpha) {
   return `rgba(${(n >> 16) & 255},${n >> 8 & 255},${n & 255},${alpha})`;
 }
 let DISK_TREND = null;
-/* 悬停提示：记录最近一次绘制的几何信息，mousemove 时找最近的事件点 */
+/* 悬停提示：记录最近一次绘制的几何信息，mousemove 时找最近的数据点 */
 let _TREND_GEO = null;
 async function loadDiskTrend() {
   try {
-    const d = await apiJSON(`${API}/__oc__/history`);
+    const d = await apiJSON(`${API}/__oc__/disk-trend`);
     DISK_TREND = Array.isArray(d) ? d : [];
   } catch { DISK_TREND = []; }
   drawDiskTrend();
@@ -1740,7 +1743,8 @@ async function loadDiskTrend() {
 function drawDiskTrend() {
   const cv = $("trendCv"), lbl = $("trendLbl");
   if (!cv) return;
-  const hasDisk = !!(STATE.disk && STATE.disk.total);
+  const dk = STATE.disk || {};
+  const hasDisk = !!(dk && dk.total);
   const dpr = window.devicePixelRatio || 1;
   cv.width = Math.max(120, cv.clientWidth) * dpr;
   cv.height = 64 * dpr;
@@ -1753,63 +1757,59 @@ function drawDiskTrend() {
     if (lbl) lbl.textContent = "";
     return;
   }
-  // 当前盘的清理事件（旧 → 新）：只统计释放量 > 0 且盘符匹配的记录
-  // （跨盘的回收站清理记为 "C,D" 形式，包含当前盘即算）。
-  // 兼容历史：早期记录没有 drive 字段，从 trigger 尾部的「（X:）」补盘符
-  // （手动/定时清理、删除游戏、规则运行都是这个格式；「清空所选项的
-  // 回收站」不带盘符，旧记录解析不出时不归入任何盘）。
-  const now = Date.now(), CUT = 30 * 86400e3;
-  const all = (DISK_TREND || [])
-    .map(e => {
-      let drive = e.drive || "";
-      if (!drive) {
-        const m = (e.trigger || "").match(/（([A-Z]):）\s*$/);
-        drive = m ? m[1] : "";
-      }
-      return { t: Date.parse((e.time || "").replace(" ", "T")),
-               freed: +e.freed || 0, drive };
+  // 当前盘的每日快照（旧 → 新）：盘符大小写两侧都归一再匹配
+  const drv = String(dk.letter || STATE.current_drive || "").trim().toUpperCase()[0];
+  const now = Date.now(), CUT = 90 * 86400e3;
+  const pts = (DISK_TREND || [])
+    .map(day => {
+      const u = (day && day.u) || {};
+      const k = Object.keys(u).find(k => String(k).trim().toUpperCase()[0] === drv);
+      return { t: Date.parse(`${(day && day.d) || ""}T00:00:00`),
+               free: +((k && u[k]) || {}).free || 0 };
     })
-    .filter(e => e.freed > 0 && isFinite(e.t) && now - e.t <= CUT)
+    .filter(p => p.free > 0 && isFinite(p.t) && now - p.t <= CUT)
     .sort((a, b) => a.t - b.t);
-  const evs = all.filter(e => e.drive && e.drive.split(",").includes(drive));
   if (lbl) {
-    lbl.textContent = evs.length
-      ? t("trend.withEvents","近 30 天 {n} 次清理 · 共释放 {d}，折线各点即每次释放的空间")
-          .replace("{n}", evs.length).replace("{d}", fmt(evs.reduce((s, e) => s + e.freed, 0)))
-      : t("trend.noEvents","近 30 天本盘暂无清理记录；执行清理后，这里会显示每次释放的空间");
+    lbl.textContent = pts.length >= 2
+      ? t("trend.freeLbl","剩余空间趋势（近 90 天）：{a} → {b}")
+          .replace("{a}", fmt(pts[0].free)).replace("{b}", fmt(pts[pts.length - 1].free))
+      : t("trend.freePending","剩余空间趋势从今天开始记录，明天起这里会画出折线");
   }
-  if (!evs.length) { _TREND_GEO = null; return; }
-  // 折线 + 下方浅色透明填充：纵轴从 0 起，顶 = 最大单次释放量（至少 1 MiB）
-  const hi = Math.max(1024 * 1024, ...evs.map(e => e.freed));
-  const t0 = evs[0].t, pad = 6, base = H - pad;
-  const X = tt => 6 + (tt - t0) / Math.max(1, now - t0) * (W - 14);
-  const Y = v => pad + (base - pad) * (1 - v / hi);
+  if (pts.length < 2) { _TREND_GEO = null; return; }
+  // 纵轴取局部区间（见头部注释）：span=0（两天剩余一样）时用总容量的
+  // 1% 做对称垫高，保证折线仍可读；横轴按天数均匀分布（每日一条）。
+  const lo0 = Math.min(...pts.map(p => p.free)), hi0 = Math.max(...pts.map(p => p.free));
+  const span = hi0 - lo0;
+  let lo = lo0, hi = hi0;
+  if (span > 0) { lo -= span * 0.18; hi += span * 0.18; }
+  else { const zpad = Math.max((dk.total || 0) * 0.01, 2 * 1024 ** 3); lo -= zpad; hi += zpad; }
+  const pad = 6, base = H - pad;
+  const X = i => 6 + i / (pts.length - 1) * (W - 14);
+  const Y = v => pad + (base - pad) * (1 - (v - lo) / (hi - lo));
   const accent = cssVar("--accent", "#60a5fa");
-  // 折线：事件点连线，两端水平延伸到画布边缘，成一条连续的趋势线
+  // 折线：每天一点连线，成一条连续的剩余空间趋势线
   ctx.beginPath();
-  ctx.moveTo(2, Y(evs[0].freed));
-  evs.forEach(e => ctx.lineTo(X(e.t), Y(e.freed)));
-  ctx.lineTo(W - 2, Y(evs[evs.length - 1].freed));
+  pts.forEach((p, i) => i ? ctx.lineTo(X(i), Y(p.free)) : ctx.moveTo(X(i), Y(p.free)));
   ctx.strokeStyle = accent;
   ctx.lineWidth = 1.6;
   ctx.lineJoin = "round";
   ctx.stroke();
-  // 折线下方的浅色透明填充：衬托释放量的积累感，不抢数据本身
-  ctx.lineTo(W - 2, base);
-  ctx.lineTo(2, base);
+  // 折线下方的浅色透明填充：衬托容量变化，不抢数据本身
+  ctx.lineTo(X(pts.length - 1), base);
+  ctx.lineTo(X(0), base);
   ctx.closePath();
   ctx.fillStyle = hexToRgba(accent, 0.14);
   ctx.fill();
-  // 事件点圆点：每一次清理落一个点
+  // 数据点圆点：每一天一个点
   ctx.fillStyle = accent;
-  evs.forEach(e => {
-    ctx.beginPath(); ctx.arc(X(e.t), Y(e.freed), 2.4, 0, Math.PI * 2); ctx.fill();
+  pts.forEach((p, i) => {
+    ctx.beginPath(); ctx.arc(X(i), Y(p.free), 2.4, 0, Math.PI * 2); ctx.fill();
   });
-  // 记录几何信息供悬停查询（鼠标放到事件点附近 → 显示该次清理的时间与释放量）
-  _TREND_GEO = { evs, X, W };
+  // 记录几何信息供悬停查询（鼠标放到数据点附近 → 显示该天的剩余空间）
+  _TREND_GEO = { pts, X, W };
 }
 
-/* 清理活动图悬停：鼠标靠近事件点时显示该次清理的时间与释放容量。
+/* 剩余空间趋势悬停：鼠标靠近数据点时显示该天的日期与剩余容量。
    提示框挂在 body 上用固定定位，不挤占面板布局。 */
 let _trendTip = null;
 function trendTipEl() {
@@ -1833,17 +1833,17 @@ window.addEventListener("mousemove", ev => {
     return;
   }
   const mx = ev.clientX - r.left;
-  let best = null, bestD = 20;                  // 命中半径略大于半柱宽
-  for (const e of g.evs) {
-    const d = Math.abs(g.X(e.t) - mx);
-    if (d < bestD) { bestD = d; best = e; }
+  let best = null, bestI = -1, bestD = 20;      // 命中半径略大于点半径
+  for (let i = 0; i < g.pts.length; i++) {
+    const d = Math.abs(g.X(i) - mx);
+    if (d < bestD) { bestD = d; best = g.pts[i]; bestI = i; }
   }
   const tip = trendTipEl();
   if (!best) { tip.style.display = "none"; return; }
-  const timeStr = new Date(best.t).toLocaleString([], {
-    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-  tip.innerHTML = `<b>${t("trend.tipFreed","释放")}: ${fmt(best.freed)}</b><br>` +
-    `<span style="color:var(--dim2)">${esc(timeStr)}${best.drive.includes(",") ? " · " + esc(best.drive) : ""}</span>`;
+  const timeStr = new Date(best.t).toLocaleDateString([], {
+    year: "numeric", month: "2-digit", day: "2-digit" });
+  tip.innerHTML = `<b>${t("trend.tipFree","剩余")}: ${fmt(best.free)}</b><br>` +
+    `<span style="color:var(--dim2)">${esc(timeStr)}</span>`;
   tip.style.display = "block";
   const tw = tip.offsetWidth;
   tip.style.left = Math.min(window.innerWidth - tw - 8, ev.clientX + 12) + "px";
@@ -2420,10 +2420,9 @@ let STEAM = null, steamSort = "size", steamFilter = "";
 // 排序方向：1 = 该维度的默认方向（体积/最久没玩：大到小；名称：A→Z），
 // 再次点击同一排序项时翻转为 -1。seg 上的 ▼/▲ 跟着它走。
 let steamSortDir = 1;
-// 游戏库页签（2026-11-02）：当前显示的库分区 id。盘符组是 "gr:<盘符>"
-// （如 gr:D、gr:rest=其他位置），平台分区直接用元素 id（epicPanel 等）。
-// 游戏不再按盘堆叠成长页 —— 用户要求：页签切换、一次只看一个库。
-let steamTab = "";
+// 游戏占用概览展示形态（2026-11-03 用户定稿）：C/D/E 盘的游戏清单合并成
+// 一条流展示，不按盘分页签、也不分区块堆叠 —— 每行自带的「位于 …」路径
+// 已表明游戏在哪块盘，库分区（Steam/Epic/GOG/自定义）全部纵向排列。
 // 回收建议面板的折叠态记忆：刷新/重开不再回到默认折叠（oc-orphan-open）
 const ORPHAN_OPEN_KEY = "oc-orphan-open";
 let stOrphanOpen = (() => {
@@ -2475,69 +2474,10 @@ function daysSince(d) {
   return Math.floor((Date.now() - t) / 86400000);
 }
 
-/** Steam 库按盘分组（2026-11-02 抽出共用）：页签身份与游戏清单渲染都用它。
-    每组 {d: 盘数据|null, gs: 游戏}；d=null 是「库不在已知盘上」的兜底组。 */
-function steamDriveGroups(s) {
-  const driveOf = g => ((g.library || "").trim().toUpperCase()[0] || "?");
-  const groups = (s.by_drive || []).map(d =>
-    ({ d, gs: s.games.filter(g => driveOf(g) === String(d.drive).trim().toUpperCase()[0]) }));
-  const known = new Set(groups.map(gr => String(gr.d.drive).trim().toUpperCase()[0]));
-  const rest = s.games.filter(g => !known.has(driveOf(g)));
-  if (rest.length) groups.push({ d: null, gs: rest });
-  return groups;
-}
-const steamGidOf = gr =>
-  gr.d ? "gr:" + String(gr.d.drive).trim().toUpperCase() : "gr:rest";
-
-/** 按当前页签显隐库分区（只在 Steam 已找到的切换模式下调用）。 */
-function applySteamTab() {
-  const isGr = steamTab.startsWith("gr:");
-  const sec = $("secSteam");
-  if (sec) sec.style.display = isGr ? "" : "none";
-  ["epicPanel", "gogPanel", "secCustom"].forEach(id => {
-    const el = $(id);
-    if (el) el.style.display = id === steamTab ? "" : "none";
-  });
-}
-
-/** 库分区页签（2026-11-02 改版）：从「点击滚动定位」升级为「点击切换」——
-    一次只显示一个库分区（盘符组 / Epic / GOG / 自定义），游戏清单不再
-    按盘堆叠成长页。Steam 未找到时保持旧的滚动定位形态（错误提示与
-    空态引导住在 secSteam 里，切走会把用户带丢）。 */
-function renderSteamTabs() {
-  if (!$("stTabs")) return;
-  const s = STEAM;
-  const found = !!(s && s.found);
-  const tabs = [];
-  if (found) {
-    steamDriveGroups(s).forEach(gr => {
-      const label = gr.d
-        ? `${String(gr.d.drive).trim().toUpperCase()} ${t("st.driveSuffix","盘")}`
-        : t("st.otherDrives","其他位置");
-      tabs.push([steamGidOf(gr), `${label} · ${gr.gs.length}`]);
-    });
-  }
-  const vis = id => { const el = $(id); return el && el.style.display !== "none"; };
-  if (vis("epicPanel")) tabs.push(["epicPanel", "Epic"]);
-  if (vis("gogPanel")) tabs.push(["gogPanel", "GOG"]);
-  tabs.push(["secCustom", t("pane.customLibs","自定义游戏库")]);
-  $("stTabs").innerHTML = tabs.map(([id, label]) => {
-    const on = found && steamTab === id;
-    return `<span class="seg${on ? " on" : ""}" data-tab="${id}">${esc(label)}</span>`;
-  }).join("");
-  $("stTabs").querySelectorAll("[data-tab]").forEach(x =>
-    x.addEventListener("click", () => {
-      if (found) {
-        steamTab = x.dataset.tab;
-        applySteamTab();
-        renderSteamPage();     // 重渲染当前库的游戏清单（页签 on 态同步）
-      } else {
-        const el = $(x.dataset.tab);
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    }));
-}
-
+/** （2026-11-03）按盘分组工具 steamDriveGroups/steamGidOf 已随页签方案一起
+    移除：用户定稿为「C/D/E 盘放一起，不用页签区分」——游戏清单合并成
+    一条流，库分区（Steam/Epic/GOG/自定义）全部纵向排列。今后若要按盘
+    聚合展示，从 s.by_drive 与 g.library 首字母重建分组即可。 */
 /** 独立页面：吸顶模块头 + 残留清理（折叠勾选）+ Steam 游戏库（按盘分组）
  *  + Epic / GOG / 自定义游戏库（2026-10-29 起：一个面板承载全部） */
 function renderSteamPage() {
@@ -2559,7 +2499,6 @@ function renderSteamPage() {
     $("stGames").innerHTML = ""; $("stSort").innerHTML = "";
     $("stExportBar").style.display = "none";
     $("gameTrendBox").style.display = "none";
-    $("stTabs").innerHTML = "";
     $("stOrphanPanel").style.display = "none";
     // 空态引导：Steam 没找到时不给死胡同 —— 直达「自定义游戏库」入口
     const cta = document.createElement("button");
@@ -2571,7 +2510,6 @@ function renderSteamPage() {
     });
     $("stOverview").appendChild(cta);
     renderOtherPlatforms();   // Steam 没有不等于 Epic/GOG 也没有
-    renderSteamTabs();        // 页签在 Epic/GOG 显隐确定后构建
     return;
   }
 
@@ -2582,7 +2520,7 @@ function renderSteamPage() {
   // 视图来回切换是最频繁的路径，反复 innerHTML 重挂既慢又让页面闪白。
   const key = [s.game_count, s.total_size_h, s.orphan_count,
                (s.by_drive || []).map(d => `${d.drive}:${d.apps}`).join(","),
-               steamSort, steamSortDir, steamFilter, steamTab, langParam(),
+               steamSort, steamSortDir, steamFilter, langParam(),
                (GAMES && GAMES.games ? GAMES.games.length : 0)].join("|");
   loadGameTrend();            // 趋势数据便宜（本地 JSON），每次进来都刷新
   if (key === _steamPageKey) return;
@@ -2639,25 +2577,10 @@ function renderSteamPage() {
   $("stListHint").textContent = q ? t("st.filtered","筛选出 {n} 个").replace("{n}", games.length)
                                   : t("st.totalN","共 {n} 个").replace("{n}", games.length);
 
-  // ---- 按库分区页签展示（2026-11-02 改版）----
-  // 原形态：每个盘一组（盘占用概览 + 该盘游戏）从上到下堆叠，D/E 盘
-  // 混在一条长页里；用户要求改成页签切换、一次只看一个库，游戏清单
-  // 不再按盘分组堆叠（每行本来就带「位于 …」路径，盘信息不丢）。
-  // 页签身份来自全量 s.games（不受筛选影响），渲染取筛选排序后的子集。
-  const driveOf = g => ((g.library || "").trim().toUpperCase()[0] || "?");
-  const allGroups = steamDriveGroups(s);
-  const knownDrives = new Set(
-    allGroups.filter(gr => gr.d).map(gr => String(gr.d.drive).trim().toUpperCase()[0]));
-  const gidOf = steamGidOf;
-  const tabIds = [...allGroups.map(gidOf), "epicPanel", "gogPanel", "secCustom"];
-  if (!tabIds.includes(steamTab))
-    steamTab = allGroups.length ? gidOf(allGroups[0]) : "secCustom";
-  const inTab = g =>
-    steamTab === "gr:rest" ? !knownDrives.has(driveOf(g))
-    : steamTab.startsWith("gr:") ? driveOf(g) === steamTab.slice(3)
-    : false;
-  const shownGames = games.filter(inTab);
-
+  // ---- 游戏清单：全部盘合在一条流里展示（2026-11-03 用户定稿）----
+  // C/D/E 盘的游戏不再分页签、也不再按盘分区堆叠：排序/筛选后的完整清单
+  // 一次渲染，每行自带的「位于 …」路径已标明游戏在哪块盘。Epic/GOG/自定义
+  // 库分区紧随其后纵向排列（不再藏进页签）。
   const staleOf = g => {
     const d = daysSince(g.last_played);
     return d === null ? t("st.neverPlayed","从没玩过") : (d > 180 ? t("st.staleDays","{n} 天没玩").replace("{n}", d) : "");
@@ -2692,10 +2615,9 @@ function renderSteamPage() {
   if (!games.length) {
     $("stGames").innerHTML = `<div class="empty" style="margin:0">${t("st.noMatch","没有匹配的游戏。")}</div>`;
   } else {
-    $("stGames").innerHTML = shownGames.length ? shownGames.map(gameRow).join("")
-      : `<div class="empty" style="margin:4px 0 10px">${t("st.noGamesOnDrive","这个盘上没有已安装游戏。")}</div>`;
+    $("stGames").innerHTML = games.map(gameRow).join("");
     $("stGames").querySelectorAll(".vrow").forEach(el => el.addEventListener("click", () => {
-      const g = shownGames.find(x => x.appid === el.dataset.appid);
+      const g = games.find(x => x.appid === el.dataset.appid);
       if (!g) return;
       const stale = staleOf(g);
       showDetail({
@@ -2714,7 +2636,7 @@ function renderSteamPage() {
     $("stGames").querySelectorAll("[data-delrow]").forEach(b =>
       b.addEventListener("click", ev => {
         ev.stopPropagation();
-        const g = shownGames.find(x => x.appid === b.dataset.delrow);
+        const g = games.find(x => x.appid === b.dataset.delrow);
         if (g) confirmDeleteGame(g, "steam");
       }));
   }
@@ -2828,11 +2750,8 @@ function renderSteamPage() {
     }
   }
 
-  // ---- Epic / GOG 游戏库（有才显示）----
+  // ---- Epic / GOG 游戏库（有才显示，与 Steam 库纵向排列）----
   renderOtherPlatforms();
-  // 页签在 Epic/GOG 显隐确定后构建；Steam 已找到时按页签切换显隐分区
-  if (s.found) applySteamTab();
-  renderSteamTabs();          // 页签在 Epic/GOG 显隐确定后构建
 
   // 统一挂「打开目录」事件
   $("steamView").querySelectorAll("[data-reveal]").forEach(b =>
@@ -3869,9 +3788,11 @@ function renderOverview() {
   const unkSum = uniqueNodes.filter(n => !n.recognized).reduce((a, n) => a + n.size, 0);
   const mix = Math.max(keepSum + unkSum, 1);
 
+  // 面板头部行不再带「N 个节点」（2026-11-03）：用户反馈该数字显得繁杂，
+  // 体量信息「本次扫到」一格已足够。
   $("fsHint").textContent =
-    t("fs.tagline","{drive}: 盘 · {nodes} 个节点 · 已识别 {explained} 个 · {depth} 层{engine}")
-      .replace("{drive}", FS.drive).replace("{nodes}", FS.node_count)
+    t("fs.tagline","{drive}: 盘 · 已识别 {explained} 个 · {depth} 层{engine}")
+      .replace("{drive}", FS.drive)
       .replace("{explained}", FS.explained).replace("{depth}", FS.max_depth)
       .replace("{engine}", FS.engine === "wiztree" ? t("fs.mftFast"," · WizTree MFT 加速")
         : FS.engine === "mft" ? t("fs.mftOwnFast"," · MFT 直读加速") : "");
@@ -6291,8 +6212,6 @@ const I18N_EN = {
   "st.diskCap": "Disk {t} total · {f} free",
   "st.filtered": "{n} matched", "st.totalN": "{n} in total",
   "st.noMatch": "No matching games.", "st.neverPlayed": "Never played",
-  "st.otherDrives": "Other locations", "st.otherDrivesNote": "Library folders not on the drives above",
-  "st.noGamesOnDrive": "No installed games on this drive.",
   "st.orphanExpand": "Click to expand · tick items to delete in bulk",
   
   
@@ -6338,7 +6257,7 @@ const I18N_EN = {
   "fs.scanFailHint": "You can first confirm the server works from a command line:",
   "fs.retryFull": "Retry full-disk scan",
   "fs.noWiztreeOnTheFly": "WizTree acceleration is off; scanning this folder on the fly (may take seconds)…",
-  "fs.tagline": "{drive}: drive · {nodes} nodes · {explained} identified · {depth} level(s){engine}",
+  "fs.tagline": "{drive}: drive · {explained} identified · {depth} level(s){engine}",
   "fs.mftFast": " · WizTree MFT accelerated", "fs.mftFast2": "WizTree MFT acceleration",
   "fs.mftOwnFast": " · Direct MFT read", "fs.mftOwn2": "Direct MFT read",
   "fs.mftOwnStat": "MFT read: {n} records, parsed in {s}s",
@@ -6601,9 +6520,9 @@ const I18N_EN = {
   "disk.unknownErr": "Unknown error",
   "disk.total": "Total", "disk.used": "Used", "disk.free": "Free",
   "sel.items": "items", "sel.free": "Estimated free", "sel.picked": "Picked",
-  "trend.withEvents": "Last 30 days: {n} cleanups · {d} freed in total; each point on the line is one cleanup",
-  "trend.noEvents": "No cleanups on this drive in the last 30 days; each cleanup will appear here as a bar",
-  "trend.tipFreed": "Freed",
+  "trend.freeLbl": "Free-space trend (last 90 days): {a} → {b}",
+  "trend.freePending": "Free-space tracking starts today; the line will appear from tomorrow",
+  "trend.tipFree": "Free",
   "cr.lockHint": "Hint",
   "btn.cleanSelected": "Clean selected",
   "pane.sched": "Scheduled Auto-Clean",

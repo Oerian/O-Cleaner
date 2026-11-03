@@ -1582,9 +1582,9 @@ def phase3_http() -> None:
               '"/__oc__/game-cover"' in open(app.__file__, encoding="utf-8").read()
               and "appid 必须是数字" in open(app.__file__, encoding="utf-8").read()
               and 'class="gcover"' in html)
-        # 回收建议折叠面板（建议卡已并入）+ 平台页签 + 风险提示记忆
-        check("回收建议折叠面板与平台页签就位（独立建议卡已删）",
-              'id="stOrphanPanel"' in html and 'id="stTabs"' in html
+        # 回收建议折叠面板（建议卡已并入）+ 库分区页签已随合盘展示移除
+        check("回收建议折叠面板就位且页签条已移除（独立建议卡已删）",
+              'id="stOrphanPanel"' in html and 'id="stTabs"' not in html
               and 'id="stSugg"' not in html
               and "st.suggCount" in html and "st.suggGroup" in html
               and "st.orphanGroup" in html and "scrollIntoView" in html)
@@ -1717,9 +1717,19 @@ def phase3_http() -> None:
         check("顶层与全盘最大合并（2026-11-02）：重合检测与页签过滤就位",
               "BIG_CONTAINERS" in html and "biggestMerged" in html
               and html.count("biggestMerged") >= 3)
-        check("游戏占用概览页签化（2026-11-02）：切换式页签、不再按盘堆叠",
-              "steamDriveGroups" in html and "applySteamTab" in html
-              and 'class="dsk' not in html and "steamTab" in html)
+        check("游戏占用概览合盘展示（2026-11-03）：不分盘不页签，一条流",
+              "steamTab" not in html and 'id="stTabs"' not in html
+              and 'class="dsk' not in html and "renderSteamPage" in html
+              and 'id="stGames"' in html)
+        check("剩余空间趋势图（2026-11-03）：磁盘卡画每日剩余空间，不再画清理事件",
+              "/__oc__/disk-trend" in html and '"/__oc__/disk-trend"' in app_src
+              and "trend.freeLbl" in html and "trend.freePending" in html
+              and "record_disk_snapshot" in app_src
+              and '"/__oc__/history"' not in html.split("loadDiskTrend")[1][:400])
+        check("类型分布标签完整展示（2026-11-03）：去省略号改换行",
+              "extvlab{font-size:10px;color:var(--dim);max-width:100%;text-align:center"
+              in "".join(html.split())
+              and "overflow-wrap:anywhere" in html)
         check("工具栏与顶部导航去重（2026-11-02）：游戏概览入口只留 viewNav",
               'id="btnSteam"' not in html
               and 'data-v="steam"' in html)
@@ -1757,7 +1767,6 @@ def phase3_http() -> None:
         check("setLang 重画列表覆盖全部渲染函数（豁免：Steam 系、ViewNav、SubdirList）",
               _sl_m is not None
               and _sl_defs - _sl_listed <= {"renderSteam", "renderOtherPlatforms",
-                                            "renderSteamTabs",
                                             "renderViewNav", "renderSubdirList",
                                             "renderSchSummary"},
               f"未列={sorted(_sl_defs - _sl_listed)[:8]}")
