@@ -1556,6 +1556,15 @@ SECURITY 该处表述未动。
 - **回归**：selftest **573-0-6**（+12：同步行为 4（临时配置文件 + fake `_gist_request`，不真联网）、竖向类型分布/合并/页签/文案/手风琴等 UI 结构 8）；CDP **139-0-5**（+/-：extToggle 点击展开计数 13 列、页签切换 on===1、合并门控）；本地 7 道门禁全过；CI d0cc30d 与 9379468 两轮全绿（run 41453481410 / 41455618395）。
 - **CI 排障经验**：`[ci]` 必须在 HEAD（gitignore 等小提交跟在后面会跳过慢作业 → `gh workflow run CI --ref main` 兜底）；gh CLI 在本机偶发 TLS 握手超时，改用 `curl -H "Authorization: Bearer $(gh auth token)"` 直接打 API（含 check-run annotations、job log 下载）反而稳定；CI 上库分区页签/隐藏项断言需按"合并态/无 Steam"分支写，两轮失败均为此因。
 
+**⑨补（2026-11-03）：游戏概览合盘定稿 + 剩余空间趋势图 + 类型分布标签完整显示（提交 ef82fb1）**——用户对上一轮两处方案改主意 + 两个新缺陷：
+- **游戏占用概览合盘（页签方案撤销）**：用户定稿「CDE 盘放一起，不用页签区分」——`steamTab/applySteamTab/renderSteamTabs` 与 `#stTabs` 全部移除，游戏清单一条流渲染（`shownGames` 过滤层删除，排序/筛选后的全量直接上），每行自带的「位于 …」路径标明所在盘；Epic/GOG/自定义库分区恢复纵向排列。**教训**：交互形态的"改主意"要快速彻底回退——按功能块删（页签容器、状态变量、三个函数、渲染分支、渲染缓存 key 里的 steamTab、i18n 死词条 st.otherDrives/st.noGamesOnDrive 一并清），漏一处就是死引用；编辑时 new_string 手滑夹带 `let GAMES` 声明造成重复声明，自查 Read 一眼抓住。
+- **剩余空间趋势图（真修"一直是一条直线"）**：根因是画错了数据——磁盘卡 `trendCv` 画的是**清理释放量**（`/__oc__/history`），而 `/__oc__/disk-trend` 端点（`record_disk_snapshot` 每天每盘一条、存 90 天）后端一直就绪、**前端从未接线**。改版后 `loadDiskTrend()` 拉 `/__oc__/disk-trend`，`drawDiskTrend()` 画当前盘每日剩余空间；关键点：**纵轴取局部区间 [min−18%, max+18%]**（span=0 时用总容量 1% 对称垫高）——从 0 起画会把几十 GB 的日常波动压成直线，那是另一种"直线 bug"；横轴按天均匀分布，悬停显示日期+剩余容量；不足两个点如实说"从今天开始记录"。i18n：trend.withEvents/noEvents/tipFreed → freeLbl/freePending/tipFree。
+- **类型分布标签完整显示**：`.extvval/.extvlab` 去掉 `ellipsis+nowrap` 改 `overflow-wrap:anywhere` 居中换行，`.extv` 高 118→126、gap 7→6、extbox min-width 270→300——竖排柱状图里"其他类…"被截断比换行更伤观感（用户原话"省略号影响观感"）。顺带把面板头部 `fs.tagline` 的「N 个节点」删掉（上一轮只删了统计格里的，头部漏网）。
+- **工作模式（用户要求）**：恢复「本地积累 → 本地验证 → 单个大提交带 `[ci]` 推送」——中途不推小提交，CI 一次触发。
+- **回归**：selftest **575-0-6**（+2：合盘展示/趋势图接线/标签换行三项新断言替换页签断言）；CDP **141-0-5**（页签断言改 tabsGone、新增剩余空间趋势折线几何断言，多天快照走几何、不足走文案）；本地 7 道门禁全过；本机截图核验：折线有真实起伏（263.9 GB → 161.1 GB）、D/E 盘游戏按体积混排、13 列标签无省略号。
+- **selftest 写断言教训**：模板字符串 `` `${API}/__oc__/disk-trend` `` 里没有双引号，源码断言别写 `'"/__oc__/disk-trend"' in html`；CSS 断言用 `"".join(html.split())` 归一全部空白（`html.replace(" ","")` 不去换行，跨行声明匹配不上）。
+- **CI 首轮失败（run 41553113844，0f1f710 修复）**：新趋势断言在 CI 上 `days=1 pts=0`（首日快照与卡面盘符不齐， legitimately 走"待积累"分支）→ 但 CI 是**英文界面**，EN 文案 "Free-space tracking starts today…" 与断言正则 `/记录|record/i` 两边都没含 "record"——中文脑写英文文案再拿中文关键词去匹配，两头落空。修法：EN 文案改写为含 "records" 的句子 + 正则放宽到 `/记录|record|明天|tomorrow/i`。**教训：双语断言的正则必须对中英文文案各自查一遍字面量**，"文案里显然有"不算数。
+
 ---
 
 ## 七、文件资产与代码清单
