@@ -395,20 +395,24 @@
   .fspanel .panel{margin:0}
 
   /* 磁盘概览：占比环 + 统计（环保留在扫描概览原位 —— 2026-11-03 用户定稿，
-     挪进统计卡会整体错位；组件页签图表放磁盘卡下部原位） */
-  .ovrow{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
-  .ring{width:134px;height:134px;border-radius:50%;flex:none;position:relative;
+     挪进统计卡会整体错位；组件页签图表放磁盘卡下部原位）。
+     环 150px（134 偏小显紧凑）+ 上下留白：环行紧贴进度条/引擎条会显得挤。 */
+  .ovrow{display:flex;gap:24px;align-items:center;flex-wrap:wrap;
+         padding:6px 0;margin-bottom:8px}
+  .ring{width:150px;height:150px;border-radius:50%;flex:none;position:relative;
         background:conic-gradient(var(--track) 0turn,var(--track) 1turn)}
-  .ring::after{content:"";position:absolute;inset:17px;border-radius:50%;background:var(--panel)}
+  .ring::after{content:"";position:absolute;inset:19px;border-radius:50%;background:var(--panel)}
   .ring .rt{position:absolute;inset:0;display:flex;flex-direction:column;
             align-items:center;justify-content:center;z-index:1;text-align:center}
-  .ring .rt .p{font-size:22px;font-weight:800;line-height:1}
-  .ring .rt .l{font-size:10.5px;color:var(--dim2);margin-top:3px}
+  .ring .rt .p{font-size:24px;font-weight:800;line-height:1}
+  .ring .rt .l{font-size:11px;color:var(--dim2);margin-top:3px}
   /* .ovstats 收缩到内容宽（2026-11-03 用户定稿）：数值紧贴「本次扫到」
      标签，不留整行空档 —— 腾出的右侧空间放组件图表坞（#dwDock）。
      需要拉伸的场景（结果卡）自己在行内声明 flex:1。 */
   .ovstats{flex:none;min-width:0}
   .ovstats .stat b{font-size:13.5px}
+  /* 环行与上方磁盘卡（进度条）之间留一档呼吸空间 */
+  #fsOverview{margin-top:6px}
   /* 组件图表坞：扫描概览占比环一行的右侧。扫描后组件槽搬到这里
      （drawDiskTrend 动态选主：有 #dwDock 用 dock，否则留在卡内 #dwHome）。
      页签用紧凑小胶囊（大号 .seg 在图表旁显得笨重、风格不搭）；
