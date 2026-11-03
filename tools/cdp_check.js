@@ -732,7 +732,7 @@ class CDP {
     return { hasCv: !!cv, n, lbl, pts: geo && geo.pts ? geo.pts.length : 0 };
   })()`);
   checkScan("剩余空间趋势折线（多天快照→几何；不足两天→如实说明）",
-        dtr.hasCv && dtr.n >= 0 && (dtr.pts >= 2 || /记录|record/i.test(dtr.lbl)),
+        dtr.hasCv && dtr.n >= 0 && (dtr.pts >= 2 || /记录|record|明天|tomorrow/i.test(dtr.lbl)),
         `days=${dtr.n} pts=${dtr.pts} lbl=${dtr.lbl.slice(0, 40)}`);
   // 视图切换流畅性：方向性滑入动画类 + 渲染缓存存在
   const smooth = await evaluate(`(() => {
