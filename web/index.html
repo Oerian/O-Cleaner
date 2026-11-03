@@ -394,7 +394,8 @@
   .fspanel{grid-column:1;display:flex;flex-direction:column;gap:14px}
   .fspanel .panel{margin:0}
 
-  /* 磁盘概览：占比环 + 统计 */
+  /* 磁盘概览：占比环 + 统计（环保留在扫描概览原位 —— 2026-11-03 用户定稿，
+     挪进统计卡会整体错位；组件页签图表放磁盘卡下部原位） */
   .ovrow{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
   .ring{width:134px;height:134px;border-radius:50%;flex:none;position:relative;
         background:conic-gradient(var(--track) 0turn,var(--track) 1turn)}
@@ -403,8 +404,21 @@
             align-items:center;justify-content:center;z-index:1;text-align:center}
   .ring .rt .p{font-size:22px;font-weight:800;line-height:1}
   .ring .rt .l{font-size:10.5px;color:var(--dim2);margin-top:3px}
-  .ovstats{flex:1;min-width:250px}
+  /* .ovstats 收缩到内容宽（2026-11-03 用户定稿）：数值紧贴「本次扫到」
+     标签，不留整行空档 —— 腾出的右侧空间放组件图表坞（#dwDock）。
+     需要拉伸的场景（结果卡）自己在行内声明 flex:1。 */
+  .ovstats{flex:none;min-width:0}
   .ovstats .stat b{font-size:13.5px}
+  /* 组件图表坞：扫描概览占比环一行的右侧。扫描后组件槽搬到这里
+     （drawDiskTrend 动态选主：有 #dwDock 用 dock，否则留在卡内 #dwHome）。
+     页签用紧凑小胶囊（大号 .seg 在图表旁显得笨重、风格不搭）；
+     坞内容总高必须 ≤ 环高 134px，否则页签会冒到环上缘、贴住上方进度条
+     （2026-11-03 用户截图反馈「重合、页签太大」）。 */
+  .dwdock{flex:1;min-width:0;align-self:center}
+  #dwTabs{gap:5px}
+  #dwTabs .seg{padding:2px 9px;font-size:11px;font-weight:500}
+  #dwTabs .seg.on{font-weight:600}
+  #dwTabs .tvlbl{margin-top:3px}
 
   /* 可清理 / 需保留 汇总条 */
   .clbar{display:flex;height:12px;border-radius:6px;overflow:hidden;margin:7px 0 5px;
@@ -416,25 +430,37 @@
   .cllegend span{display:flex;align-items:center;gap:6px}
   .cllegend em{width:9px;height:9px;border-radius:2px;display:inline-block;font-style:normal}
 
-  /* 扩展名分布（类型分布）2026-11-02 改版：默认收起成一行小按钮，
-     点击在环形图右侧空白区展开为**竖向柱状图**（每列一类型，柱高∝体积）。
-     原横条列表 13 行常驻把概览面板撑得过长，挤压主要功能。 */
-  .extbox{flex:1;min-width:300px;align-self:stretch;display:flex;
-    flex-direction:column;justify-content:center;min-height:134px}
-  .exttoggle{align-self:flex-start;color:var(--dim);font-size:11.5px;
-    background:none;border:none;cursor:pointer;padding:2px 0}
-  .exttoggle:hover{color:var(--accent)}
-  .extv{display:flex;align-items:flex-end;gap:6px;height:126px;margin-top:4px}
+  /* 扩展名分布（类型分布）竖向柱状图：每列一类型，柱高∝体积。
+     2026-11-03 起从扫描概览的收起/展开器迁移为磁盘卡组件页签，
+     .extbox/.exttoggle 退役；列结构保留（三段定高，共享基线）。 */
+  .extv{display:flex;align-items:flex-end;gap:6px;height:100px;margin-top:3px}
+  /* 2026-11-03 对齐修复：列改三段固定区（数值 2 行高 / 弹性柱区 / 标签
+     2 行高）—— 旧版标签换行会把柱子顶得高低不一（用户截图「换行导致
+     柱状图错位」）；现在所有柱共享同一条基线，长标签在各自固定区内换行。 */
   .extcol{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;
-    align-items:center;justify-content:flex-end;gap:2px;cursor:default}
+    align-items:stretch;cursor:default}
   .extcol i{display:block;width:62%;max-width:30px;min-height:3px;
     border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--accent),var(--accent2))}
-  /* 标签与数值完整展示（2026-11-03）：去掉 ellipsis —— 竖排空间里被截断
-     的「其他类…」比换行更伤观感；CJK 与数值 anywhere 断行、居中排。 */
-  .extcol .extvval{font-size:9.5px;color:var(--dim2);font-variant-numeric:tabular-nums;
-    max-width:100%;text-align:center;overflow-wrap:anywhere;line-height:1.15}
-  .extcol .extvlab{font-size:10px;color:var(--dim);max-width:100%;
-    text-align:center;overflow-wrap:anywhere;line-height:1.2}
+  .extcol .extvval{height:22px;display:flex;align-items:flex-end;justify-content:center;
+    font-size:9px;line-height:1.1;color:var(--dim2);font-variant-numeric:tabular-nums;
+    overflow-wrap:anywhere;text-align:center}
+  .extcol .extvbar{flex:1;display:flex;align-items:flex-end;justify-content:center}
+  .extcol .extvlab{height:24px;display:flex;align-items:flex-start;justify-content:center;
+    font-size:9.5px;line-height:1.15;color:var(--dim);
+    overflow-wrap:anywhere;text-align:center}
+
+  /* 磁盘卡组件槽（2026-11-03）：剩余空间趋势（类型分布同款竖柱）/
+     清理记录 / 类型分布，页签切换，图表在占比环右侧。 */
+  .tv{display:flex;align-items:flex-end;gap:2px;height:44px}
+  .tvcol{flex:1;min-width:2px;height:100%;display:flex;flex-direction:column;
+    justify-content:flex-end;cursor:default}
+  .tvcol i{display:block;width:100%;min-height:2px;border-radius:2px 2px 0 0;
+    background:linear-gradient(180deg,var(--accent),var(--accent2));opacity:.55}
+  .tvcol.last i{opacity:1;outline:1px solid var(--accent);outline-offset:1px}
+  .tvlbl{color:var(--dim2);font-size:11px;margin-top:4px}
+  .dwlist{display:flex;flex-direction:column;gap:5px;margin-top:4px}
+  .dwrow{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim)}
+  .dwrow .dwr{font-variant-numeric:tabular-nums}
 
   /* 柱状图：柱上直接显示文件名 */
   .vchart{display:flex;flex-direction:column;gap:8px;margin-top:4px}
@@ -769,6 +795,13 @@
   <div class="toolbar">
     <button id="btnScan" class="primary" data-i18n="btn.scan">重新扫描</button>
     <button id="btnFullScan" data-i18n="btn.fullScan">全盘扫描本盘</button>
+    <select id="engPref" style="width:auto"
+            title="全盘扫描引擎：自动=谁快用谁（缺省 WizTree 在先，MFT 需实测快 10% 以上才上位）；也可强制固定用某一引擎"
+            data-i18n-title="eng.title">
+      <option value="auto" data-i18n="eng.auto">引擎：自动（谁快用谁）</option>
+      <option value="wiztree" data-i18n="eng.wiztree">引擎：WizTree 优先</option>
+      <option value="mft" data-i18n="eng.mft">引擎：MFT 直读</option>
+    </select>
     <select id="fsDepthSel" style="width:auto"
             title="扫描展开的层数（可自定义，默认 1 层）。层数越少越快，深层目录点击下钻查看（按占用/名称排序）；游戏本体与已提级的目录始终会出现在排行里"
             data-i18n-title="depth.title">
@@ -1706,20 +1739,21 @@ function renderDisk(d) {
         <i style="display:block;height:100%;width:${usedRatio.toFixed(1)}%;background:${color}"></i>
       </div>
     </div>
-    <canvas id="trendCv" style="width:100%;height:64px;margin-top:8px;display:block"></canvas>
-    <div id="trendLbl" style="color:var(--dim2);font-size:11.5px;margin-top:3px"></div>`;
+    <div id="dwHome">
+      <div class="segbtns" id="dwTabs" style="margin-top:8px;flex-wrap:wrap"></div>
+      <div id="dwBody" style="margin-top:3px"></div>
+    </div>`;
   // 磁盘概览直连扫描（#41）：概览卡上一步直达全盘扫描，不用回工具栏找按钮
   const bf = $("btnDiskFull");
   if (bf) bf.addEventListener("click", () => startFullScan());
   drawDiskTrend();
 }
 
-/* ---- 剩余空间趋势图（2026-11-03 改版）：纵轴是「当天可用空间」 ----
-   数据来自磁盘快照（/__oc__/disk-trend，record_disk_snapshot 每天每盘
-   一条，同日空间变化才更新），折线各点 = 该盘当天的剩余空间，纵轴
-   只取 [min−18%, max+18%] 的局部区间 —— 从 0 起画会把几十 GB 的日常
-   波动压成一条直线（旧版画的是清理释放量，被用户指出「一直是一条
-   直线」，根因即此）。不足两个点时如实说明「从今天开始记录」。 */
+/* ---- 磁盘卡组件槽（2026-11-03）：磁盘卡下部（进度条下）放可切换的小组件 ----
+   候选：①剩余空间趋势（类型分布同款竖向柱，默认）②清理记录（当前盘最近
+   5 次）③类型分布（全盘扫描的扩展名柱状图）。用户点页签自选，localStorage
+   （oc-diskwid）记住选择。趋势数据来自 /__oc__/disk-trend（record_disk_
+   snapshot 每盘每日一条，同日空间变化才更新）。 */
 function cssVar(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
@@ -1731,8 +1765,14 @@ function hexToRgba(hex, alpha) {
   return `rgba(${(n >> 16) & 255},${n >> 8 & 255},${n & 255},${alpha})`;
 }
 let DISK_TREND = null;
-/* 悬停提示：记录最近一次绘制的几何信息，mousemove 时找最近的数据点 */
-let _TREND_GEO = null;
+let _dwWid = (() => {
+  try {
+    const v = localStorage.getItem("oc-diskwid");
+    return ["trend", "clean", "ext"].includes(v) ? v : "trend";
+  } catch (_) { return "trend"; }
+})();
+let _CLEAN_CACHE = null, _CLEAN_AT = 0;
+
 async function loadDiskTrend() {
   try {
     const d = await apiJSON(`${API}/__oc__/disk-trend`);
@@ -1740,24 +1780,47 @@ async function loadDiskTrend() {
   } catch { DISK_TREND = []; }
   drawDiskTrend();
 }
+
 function drawDiskTrend() {
-  const cv = $("trendCv"), lbl = $("trendLbl");
-  if (!cv) return;
-  const dk = STATE.disk || {};
-  const hasDisk = !!(dk && dk.total);
-  const dpr = window.devicePixelRatio || 1;
-  cv.width = Math.max(120, cv.clientWidth) * dpr;
-  cv.height = 64 * dpr;
-  const ctx = cv.getContext("2d");
-  ctx.scale(dpr, dpr);
-  const W = cv.width / dpr, H = cv.height / dpr;
-  ctx.clearRect(0, 0, W, H);
-  if (!hasDisk) {
-    _TREND_GEO = null;              // 换盘/无数据：清掉旧几何，悬停不再显示上一块盘的点
-    if (lbl) lbl.textContent = "";
-    return;
+  // 组件槽双宿主（2026-11-03 用户定稿）：扫描后 fsOverview 的占比环一行
+  // 有空档（本次扫到已收紧到标签旁），图表搬去环右侧的 #dwDock；
+  // 没做过全盘扫描时 fsOverview 还没渲染，图表留在磁盘卡内 #dwHome。
+  // 只写其中一个并把另一个清空，保证 #dwTabs/#dwBody 全页仅一份。
+  const dock = $("dwDock"), home = $("dwHome");
+  const host = dock || home;
+  if (!host) return;                    // 磁盘卡未渲染（STATE 未就绪）
+  if (dock && home && home.contains($("dwTabs"))) home.innerHTML = "";
+  host.innerHTML =
+    `<div class="segbtns" id="dwTabs" style="flex-wrap:wrap"></div>` +
+    `<div id="dwBody" style="margin-top:3px"></div>`;
+  const tabsEl = $("dwTabs"), body = $("dwBody");
+  const tabs = [
+    ["trend", t("dw.trend", "剩余空间趋势")],
+    ["clean", t("dw.clean", "清理记录")],
+    ["ext", t("dw.ext", "类型分布")],
+  ];
+  if (tabsEl) {
+    tabsEl.innerHTML = tabs.map(([k, lab]) =>
+      `<span class="seg${_dwWid === k ? " on" : ""}" data-dw="${k}">${esc(lab)}</span>`).join("");
+    tabsEl.querySelectorAll("[data-dw]").forEach(x =>
+      x.addEventListener("click", () => {
+        _dwWid = x.dataset.dw;
+        try { localStorage.setItem("oc-diskwid", _dwWid); } catch (_) {}
+        drawDiskTrend();
+      }));
   }
-  // 当前盘的每日快照（旧 → 新）：盘符大小写两侧都归一再匹配
+  const dk = STATE.disk || {};
+  if (!dk || !dk.total) { body.innerHTML = ""; return; }
+  if (_dwWid === "ext") { _dwRenderExt(body); return; }
+  if (_dwWid === "clean") { _dwRenderCleanups(body); return; }
+  _dwRenderTrend(body, dk);
+}
+
+/* 剩余空间趋势：类型分布同款竖向柱（DOM 渲染，无 canvas —— 用户定稿
+   「做成类型分布那样的图」）。柱高在 [min−18%, max+18%] 的局部区间映射
+   —— 从 0 起画会把几十 GB 的日常波动压成一条平线。悬停每根柱显示日期
+   与剩余容量；信息行给日期范围 + 首末对比 + 最低/最高。 */
+function _dwRenderTrend(body, dk) {
   const drv = String(dk.letter || STATE.current_drive || "").trim().toUpperCase()[0];
   const now = Date.now(), CUT = 90 * 86400e3;
   const pts = (DISK_TREND || [])
@@ -1769,86 +1832,94 @@ function drawDiskTrend() {
     })
     .filter(p => p.free > 0 && isFinite(p.t) && now - p.t <= CUT)
     .sort((a, b) => a.t - b.t);
-  if (lbl) {
-    lbl.textContent = pts.length >= 2
-      ? t("trend.freeLbl","剩余空间趋势（近 90 天）：{a} → {b}")
-          .replace("{a}", fmt(pts[0].free)).replace("{b}", fmt(pts[pts.length - 1].free))
-      : t("trend.freePending","剩余空间趋势从今天开始记录，明天起这里会画出折线");
+  const md = tt => { const d = new Date(tt); return `${d.getMonth() + 1}/${d.getDate()}`; };
+  if (pts.length < 2) {
+    body.innerHTML = `<div class="tvlbl">${esc(t("trend.freePending",
+      "剩余空间趋势从今天开始记录，明天起这里会画出柱状图"))}</div>`;
+    return;
   }
-  if (pts.length < 2) { _TREND_GEO = null; return; }
-  // 纵轴取局部区间（见头部注释）：span=0（两天剩余一样）时用总容量的
-  // 1% 做对称垫高，保证折线仍可读；横轴按天数均匀分布（每日一条）。
   const lo0 = Math.min(...pts.map(p => p.free)), hi0 = Math.max(...pts.map(p => p.free));
   const span = hi0 - lo0;
   let lo = lo0, hi = hi0;
   if (span > 0) { lo -= span * 0.18; hi += span * 0.18; }
   else { const zpad = Math.max((dk.total || 0) * 0.01, 2 * 1024 ** 3); lo -= zpad; hi += zpad; }
-  const pad = 6, base = H - pad;
-  const X = i => 6 + i / (pts.length - 1) * (W - 14);
-  const Y = v => pad + (base - pad) * (1 - (v - lo) / (hi - lo));
-  const accent = cssVar("--accent", "#60a5fa");
-  // 折线：每天一点连线，成一条连续的剩余空间趋势线
-  ctx.beginPath();
-  pts.forEach((p, i) => i ? ctx.lineTo(X(i), Y(p.free)) : ctx.moveTo(X(i), Y(p.free)));
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 1.6;
-  ctx.lineJoin = "round";
-  ctx.stroke();
-  // 折线下方的浅色透明填充：衬托容量变化，不抢数据本身
-  ctx.lineTo(X(pts.length - 1), base);
-  ctx.lineTo(X(0), base);
-  ctx.closePath();
-  ctx.fillStyle = hexToRgba(accent, 0.14);
-  ctx.fill();
-  // 数据点圆点：每一天一个点
-  ctx.fillStyle = accent;
-  pts.forEach((p, i) => {
-    ctx.beginPath(); ctx.arc(X(i), Y(p.free), 2.4, 0, Math.PI * 2); ctx.fill();
-  });
-  // 记录几何信息供悬停查询（鼠标放到数据点附近 → 显示该天的剩余空间）
-  _TREND_GEO = { pts, X, W };
+  const tipFree = t("trend.tipFree", "剩余");
+  body.innerHTML =
+    `<div class="tv">${pts.map((p, i) => {
+      const h = Math.max(4, Math.round((p.free - lo) / (hi - lo) * 100));
+      return `<span class="tvcol${i === pts.length - 1 ? " last" : ""}"` +
+        ` title="${md(p.t)} · ${tipFree} ${fmt(p.free)}"><i style="height:${h}%"></i></span>`;
+    }).join("")}</div>` +
+    `<div class="tvlbl">${esc(t("trend.freeLbl",
+        "剩余空间趋势（{d1} ~ {d2}）：{a} → {b} · 最低 {min} · 最高 {max}")
+      .replace("{d1}", md(pts[0].t)).replace("{d2}", md(pts[pts.length - 1].t))
+      .replace("{a}", fmt(pts[0].free)).replace("{b}", fmt(pts[pts.length - 1].free))
+      .replace("{min}", fmt(lo0)).replace("{max}", fmt(hi0)))}</div>`;
 }
 
-/* 剩余空间趋势悬停：鼠标靠近数据点时显示该天的日期与剩余容量。
-   提示框挂在 body 上用固定定位，不挤占面板布局。 */
-let _trendTip = null;
-function trendTipEl() {
-  if (!_trendTip) {
-    _trendTip = document.createElement("div");
-    _trendTip.style.cssText = "position:fixed;z-index:9999;pointer-events:none;" +
-      "background:var(--panel,#1c1c1c);color:var(--fg,#eee);border:1px solid var(--line);" +
-      "border-radius:8px;padding:6px 9px;font-size:12px;line-height:1.55;display:none;" +
-      "box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:260px";
-    document.body.appendChild(_trendTip);
+/* 清理记录（当前盘）：/__oc__/history 最近 5 次带释放量的清理，60s 缓存 */
+async function _dwRenderCleanups(body) {
+  const now = Date.now();
+  if (!_CLEAN_CACHE || now - _CLEAN_AT > 60000) {
+    body.innerHTML = `<div class="tvlbl">${t("dw.loading", "读取中…")}</div>`;
+    try {
+      const d = await apiJSON(`${API}/__oc__/history`);
+      _CLEAN_CACHE = Array.isArray(d) ? d : [];
+    } catch { _CLEAN_CACHE = []; }
+    _CLEAN_AT = Date.now();
   }
-  return _trendTip;
+  if (_dwWid !== "clean") return;       // 等待期间用户已切走：不覆盖别的组件
+  const dk = STATE.disk || {};
+  const drv = String(dk.letter || STATE.current_drive || "").trim().toUpperCase();
+  const evs = _CLEAN_CACHE
+    .map(e => {
+      let dv = e.drive || "";
+      if (!dv) {
+        const m = (e.trigger || "").match(/（([A-Z]):）\s*$/);
+        dv = m ? m[1] : "";             // 早期记录没有 drive 字段，从 trigger 补
+      }
+      return { t: Date.parse((e.time || "").replace(" ", "T")),
+               freed: +e.freed || 0, drive: dv };
+    })
+    .filter(e => e.freed > 0 && isFinite(e.t)
+                 && e.drive.split(",").includes(drv))
+    .sort((a, b) => b.t - a.t).slice(0, 5);
+  body.innerHTML = evs.length
+    ? `<div class="dwlist">${evs.map(e => {
+        const d = new Date(e.t);
+        const when = `${d.getMonth() + 1}/${d.getDate()} ` +
+          `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+        return `<div class="dwrow"><span>${esc(when)}</span>` +
+          `<span class="dwr freed">-${fmt(e.freed)}</span></div>`;
+      }).join("")}</div>`
+    : `<div class="tvlbl">${esc(t("dw.noClean", "近 30 天本盘暂无清理记录"))}</div>`;
 }
-window.addEventListener("mousemove", ev => {
-  const cv = document.getElementById("trendCv");
-  const g = _TREND_GEO;
-  if (!cv || !g) return;
-  const r = cv.getBoundingClientRect();
-  if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top - 8 || ev.clientY > r.bottom + 8) {
-    trendTipEl().style.display = "none";
+
+/* 类型分布（当前盘）：全盘扫描后用 FS.by_ext 画竖向柱状图（与扫描概览
+   旧 extBox 同款 .extcol 三段定高结构 —— 2026-11-03 从扫描概览的展开器
+   迁移为组件页签）。没扫过当前盘或 PS 递归路径没有全量清单时如实提示。 */
+function _dwRenderExt(body) {
+  const dk = STATE.disk || {};
+  const drv = String(dk.letter || STATE.current_drive || "").trim().toUpperCase()[0] || "";
+  const fsDrv = String(FS.drive || "").trim().toUpperCase()[0] || "";
+  const list = (drv && fsDrv && drv === fsDrv && Array.isArray(FS.by_ext)) ? FS.by_ext : [];
+  if (!list.length) {
+    body.innerHTML = `<div class="tvlbl">${esc(t("dw.extHint",
+      "对 {d}: 盘做一次全盘扫描后，这里显示文件类型分布").replace("{d}", esc(drv || "?")))}</div>`;
     return;
   }
-  const mx = ev.clientX - r.left;
-  let best = null, bestI = -1, bestD = 20;      // 命中半径略大于点半径
-  for (let i = 0; i < g.pts.length; i++) {
-    const d = Math.abs(g.X(i) - mx);
-    if (d < bestD) { bestD = d; best = g.pts[i]; bestI = i; }
-  }
-  const tip = trendTipEl();
-  if (!best) { tip.style.display = "none"; return; }
-  const timeStr = new Date(best.t).toLocaleDateString([], {
-    year: "numeric", month: "2-digit", day: "2-digit" });
-  tip.innerHTML = `<b>${t("trend.tipFree","剩余")}: ${fmt(best.free)}</b><br>` +
-    `<span style="color:var(--dim2)">${esc(timeStr)}</span>`;
-  tip.style.display = "block";
-  const tw = tip.offsetWidth;
-  tip.style.left = Math.min(window.innerWidth - tw - 8, ev.clientX + 12) + "px";
-  tip.style.top = Math.max(8, r.top - tip.offsetHeight - 8) + "px";
-});
+  const maxv = Math.max(1, ...list.map(e => e.size || 0));
+  body.innerHTML = `<div class="extv">${list.map(e => {
+    const h = Math.max(3, Math.round((e.size || 0) / maxv * 100));
+    const label = e.ext === "__other__" ? t("fs.extOther","其他类型")
+      : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
+    const tipc = `${label} · ${fmt(e.size || 0)} · ${Number(e.count || 0).toLocaleString()} ${t("fs.extFilesShort","个")}`;
+    return `<div class="extcol" title="${tipc}">
+      <span class="extvval">${fmt(e.size || 0)}</span>
+      <span class="extvbar"><i style="height:${h}%"></i></span>
+      <span class="extvlab">${label}</span></div>`;
+  }).join("")}</div>`;
+}
 
 // 窗口尺寸变化（拖小浏览器窗口、分屏、收起侧栏）时重绘趋势画布：
 // 画布宽度来自 clientWidth，不重绘会拉伸模糊或留白。
@@ -3447,9 +3518,6 @@ let fsStack = [];
 // 隐藏项合并行的就地展开状态（2026-10-30）：只有一个合成行，全局一个开关
 // 就够。切视图/下钻/重扫时复位（见各处 hiddenAggOpen = false）。
 let hiddenAggOpen = false;
-// 类型分布（扩展名竖向柱状图）的展开状态（2026-11-02）：默认收起 ——
-// 13 行横条常驻把概览面板撑得过长；展开后放在环形图右侧空白区。
-let extOpen = false;
 // 「全盘最大项目」视图剔除的中间容器名（steamapps/common 等）：
 // 容器名对用户没有意义，它的子项才是实体。视图本体与「顶层 vs 全盘最大
 // 重合检测」（2026-11-02 用户要求：显示结果相同时合并展示）共用这份名单。
@@ -3623,6 +3691,7 @@ async function startFullScan() {
     if (view !== "steam") switchView("full");
     renderOverview();
     renderChart();     // 概览与排行必须一起渲染，否则只有统计没有列表
+    drawDiskTrend();   // 组件槽（类型分布页签）吃到新 FS.by_ext，立即出图
   } catch (e) {
     if (ac.signal.aborted) return;   // 被换盘作废：界面已交给新扫描，静默退出
     $("fsOverview").innerHTML =
@@ -3745,33 +3814,6 @@ function fsUniqueNodes() {
   return ns.filter(n => !hasAncestorNode(normKey(n.path)));
 }
 
-/** 类型分布（扩展名）区块（2026-11-02 二次精简）：收起 = 一个「类型分布 ▸」
-    小按钮；展开 = 竖向柱状图（每列一个类型，柱高 ∝ 体积，放在环形图右侧
-    空白区）。不再渲染长标题行 —— 用户反馈"显得繁杂"，柱状图自身即说明，
-    完整说明放悬停提示；点小按钮（▴）或整块收起。 */
-function extBoxHTML() {
-  const list = FS.by_ext || [];
-  if (!list.length) return "";
-  const maxv = Math.max(1, ...list.map(e => e.size || 0));
-  const chip = t("fs.extChip","类型分布");
-  const tip = t("fs.extHead","空间都被什么类型吃了（按扩展名，Top 12）");
-  if (!extOpen)
-    return `<button class="exttoggle" id="extToggle" title="${tip}">${chip} ▸</button>`;
-  return `
-    <button class="exttoggle" id="extToggle" title="${tip}">${chip} ▴</button>
-    <div class="extv">
-      ${list.map(e => {
-        const h = Math.max(3, Math.round((e.size || 0) / maxv * 100));
-        const label = e.ext === "__other__" ? t("fs.extOther","其他类型")
-          : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
-        const tipc = `${label} · ${fmt(e.size || 0)} · ${Number(e.count || 0).toLocaleString()} ${t("fs.extFilesShort","个")}`;
-        return `<div class="extcol" title="${tipc}">
-          <span class="extvval">${fmt(e.size || 0)}</span>
-          <i style="height:${h}%"></i>
-          <span class="extvlab">${label}</span></div>`;
-      }).join("")}
-    </div>`;
-}
 
 function renderOverview() {
   // 所有导航路径（下钻/返回/换盘/重扫）都会经过这里 —— 隐藏项合并行的
@@ -3799,7 +3841,8 @@ function renderOverview() {
 
   // 磁盘概览面板已吸收本块（原「扫描概览」小板块）：总容量/已使用/可用
   // 由 renderDisk() 的 #diskInfo 独家呈现，这里只补「本次扫到」这个
-  // 全盘扫描特有的信息，占比环保留（它是扫描结果的直观形状）。
+  // 全盘扫描特有的信息，占比环保留原位（2026-11-03 用户定稿：环不挪进
+  // #diskInfo，组件页签图表放磁盘卡下部原位）。
   $("fsOverview").innerHTML = `
     <div class="ovrow">
       <div class="ring" style="background:conic-gradient(${color} 0turn ${(usedPct/100).toFixed(3)}turn, var(--track) ${(usedPct/100).toFixed(3)}turn 1turn)">
@@ -3808,7 +3851,7 @@ function renderOverview() {
       <div class="ovstats">
         <div class="stat"><span>${t("fs.scannedNow","本次扫到")}</span><b>${FS.scanned_total_h}</b></div>
       </div>
-      ${(FS.by_ext && FS.by_ext.length) ? `<div class="extbox" id="extBox">${extBoxHTML()}</div>` : ""}
+      <div class="dwdock" id="dwDock"></div>
     </div>
     ${FS.engine ? `<div class="enginebar ${FS.engine === "wiztree" || FS.engine === "mft" ? "fast" : ""}">
       <b>${FS.engine === "wiztree" ? t("fs.mftFast2","WizTree MFT 加速")
@@ -3841,12 +3884,9 @@ function renderOverview() {
       </div>
     </div>`;
 
-  // 类型分布展开/收起：只重渲染概览面板（含 extBox），代价可忽略
-  const extTg = $("extToggle");
-  if (extTg) extTg.addEventListener("click", () => {
-    extOpen = !extOpen;
-    renderOverview();
-  });
+  // fsOverview 重建后 #dwDock 是空的：立刻重画组件槽，图表搬进环右侧
+  // （drawDiskTrend 自己会选主并清掉卡内 #dwHome 的空壳，防止 ID 重影）
+  drawDiskTrend();
 
   // 面包屑 + 返回上一级
   const crumbs = [`<span class="cb${fsStack.length ? "" : " cur"}" data-i="-1">${esc(FS.drive)}: ${t("st.driveSuffix","盘")}</span>`];
@@ -5139,6 +5179,24 @@ try {
 $("fsDepthSel").addEventListener("change", () => {
   try { localStorage.setItem("oc-fs-depth", $("fsDepthSel").value); } catch (e) {}
 });
+/* 扫描引擎偏好（2026-11-03）：auto=谁快用谁（缺省 WizTree 在先）；
+   wiztree/mft 强制固定。选择存后端 config/engine_speed.json（跨会话），
+   初始化时从 /__oc__/engine/pref 读回。 */
+$("engPref").addEventListener("change", async () => {
+  try {
+    const r = await apiJSON(`${API}/__oc__/engine/pref`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pref: $("engPref").value }) });
+    toast(t("eng.saved","扫描引擎偏好已保存：{p}").replace("{p}", r.pref || "?"));
+  } catch (e) { toast(String(e && e.message || e)); }
+});
+(async () => {
+  try {
+    const r = await apiJSON(`${API}/__oc__/engine/pref`);
+    if (r && r.pref) $("engPref").value = r.pref;
+  } catch (e) { /* 后端不可用就留在默认项 */ }
+})();
 /* 视图导航：两个页常驻可达。扫描概览没扫过时与工具栏按钮同一行为 ——
    点一下就自动开扫，不需要再点第二次。 */
 document.querySelectorAll("#viewNav button").forEach(b => b.addEventListener("click", async () => {
@@ -6266,8 +6324,7 @@ const I18N_EN = {
   "fs.wiztreeNote": "<span>Reads the MFT via the WizTree installed on this machine — faster than per-folder recursion; it is never installed or modified.</span>",
   "fs.psHint": "<span>Currently scanning with PowerShell (slowest): WizTree is not installed and the process is not elevated. Click “Elevate & restart” (top right) to use the built-in MFT engine (fastest), or install WizTree to speed things up.</span>",
   "fs.scannedNow": "Scanned this run", "fs.nodesSuffix": "nodes",
-  "fs.extHead": "What types are eating the space (by extension, top 12)",
-  "fs.extChip": "Type breakdown", "fs.extFilesShort": "files",
+  "fs.extFilesShort": "files",
   "fs.extOther": "Other types", "fs.extNone": "no extension",
   "fs.mixHead": "Of what was scanned, how much is cleanable vs. keep",
   "fs.upLevel": "Up one level", "fs.curDir": "Current folder: ",
@@ -6520,8 +6577,16 @@ const I18N_EN = {
   "disk.unknownErr": "Unknown error",
   "disk.total": "Total", "disk.used": "Used", "disk.free": "Free",
   "sel.items": "items", "sel.free": "Estimated free", "sel.picked": "Picked",
-  "trend.freeLbl": "Free-space trend (last 90 days): {a} → {b}",
-  "trend.freePending": "Free-space trend records start today; the line will appear from tomorrow",
+  "trend.freeLbl": "Free-space trend ({d1} ~ {d2}): {a} → {b} · min {min} · max {max}",
+  "eng.title": "Full-scan engine: auto = whoever is faster (WizTree first by default)",
+  "eng.auto": "Engine: auto (whoever is faster)",
+  "eng.wiztree": "Engine: WizTree first",
+  "eng.mft": "Engine: MFT direct read",
+  "eng.saved": "Scan engine preference saved: {p}",
+  "dw.trend": "Free-space trend", "dw.clean": "Cleanups", "dw.ext": "Type distribution",
+  "dw.loading": "Loading…", "dw.noClean": "No cleanups on this drive in the last 30 days",
+  "dw.extHint": "Run a full scan on drive {d}: to see the file type distribution here",
+  "trend.freePending": "Free-space trend records start today; the bars will appear from tomorrow",
   "trend.tipFree": "Free",
   "cr.lockHint": "Hint",
   "btn.cleanSelected": "Clean selected",

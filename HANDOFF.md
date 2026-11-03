@@ -1565,6 +1565,31 @@ SECURITY 该处表述未动。
 - **selftest 写断言教训**：模板字符串 `` `${API}/__oc__/disk-trend` `` 里没有双引号，源码断言别写 `'"/__oc__/disk-trend"' in html`；CSS 断言用 `"".join(html.split())` 归一全部空白（`html.replace(" ","")` 不去换行，跨行声明匹配不上）。
 - **CI 首轮失败（run 41553113844，0f1f710 修复）**：新趋势断言在 CI 上 `days=1 pts=0`（首日快照与卡面盘符不齐， legitimately 走"待积累"分支）→ 但 CI 是**英文界面**，EN 文案 "Free-space tracking starts today…" 与断言正则 `/记录|record/i` 两边都没含 "record"——中文脑写英文文案再拿中文关键词去匹配，两头落空。修法：EN 文案改写为含 "records" 的句子 + 正则放宽到 `/记录|record|明天|tomorrow/i`。**教训：双语断言的正则必须对中英文文案各自查一遍字面量**，"文案里显然有"不算数。
 
+**⑩补（2026-11-03 上午）：C 盘扫描提速 + 趋势柱状图紧凑化与信息行（本地待推送）**——用户：C 盘扫描太慢；柱状图更紧凑、加点信息；工作模式改为**本地积累、用户明示才推送**。
+- **C 盘慢的真凶（提权探针分段计时）**：`_wiztree_raw_nodes` 的 `kids_of()` 每展开一个节点就把 dirs **全量扫一遍**（O(节点×目录)——C 盘 ~40 万目录 × 预算 420 节点 ≈ 上亿次 startswith/count 字符串比较）。修法：**一次遍历按父路径分桶 + 桶内预排序**（桶键与 kids_of 的 pre 一致：目录路径带尾反斜杠，盘根 "c:\" 天然是顶层桶），`kids_of` 退化为字典查找；顶层循环同样换索引。合成基准（36 万目录）：532ms → **129ms**；selftest 新增「与旧全量扫描版逐项等价」断言（旧算法原样内联为参照实现，合成表对比）。WizTree/MFT 两条引擎共用此函数，同享收益。
+- **读/解析流水线：实测负优化，已回退**。探针拆账：C 盘 build 11.09s = read 4.44s + 解析 ~6.1s + agg 0.54s。试「后台线程读 + 队列深度 3」——read 段膨胀到 21.14s、总耗时 35.55s：解析端纯 Python 几乎不放 GIL，读线程每次 DeviceIoControl 回来重拿 GIL 都挨切换间隔，**GIL 争用成本 > I/O 重叠收益**。纯 Python 消费端面前不要做这类流水线。顺带踩坑：解析端应用 fixup 会**原地写**记录缓冲（扇区尾修复），队列里传 bytes 直接 TypeError——这些缓冲必须可变。
+- **读块 1MB→16MB**：76 次调用替代 1140 次，读速持平（~250MB/s，已到这块盘的物理极限）——保留 16MB（无损耗、系统调用少 15 倍）。C 盘最终 ~10.1s（基线 11.09，约 -9%；读 4.7s 是磁盘上限，再快要重写解析或换语言，不在本轮范围）。**探针分段计时法**：monkeypatch `_mft_read_at`/`_mft_agg_paths` 累加 perf_counter，一次提权探针把 11s 拆到段，比凭感觉优化可靠。
+- **趋势柱状图紧凑化 + 信息行**：画布 64→56px、pad 6→4、柱宽上限 16→10px；信息行加密度：`剩余空间趋势（{d1} ~ {d2}）：{a} → {b} · 最低 {min} · 最高 {max}`（中英同步）。CDP 断言带 bw 几何。
+- **工作模式（用户要求）**：改动本地积累、本地验证后即汇报；提交与推送（带 `[ci]`）等用户明示。已写入维护者长期记忆。
+- **回归**：selftest **576-0-6**（+1 子项索引等价性）；CDP **141-0-5**；本机截图核验紧凑柱状图与信息行。
+
+**⑪补（2026-11-03 下午）：扫描引擎架构重构（默认 WizTree + 用户可选）+ MFT 惰性解码 + 类型分布对齐 + 磁盘卡组件槽（本地待推送）**——用户：扫描还是慢 → 默认改 WizTree、继续优化 MFT、引擎可自选；类型分布换行导致柱状图错位；剩余空间柱状图改成类型分布那样的图，腾出的位置放可切换组件。
+- **引擎架构定稿**：`_eng_pref()` 返回 auto/wiztree/mft（`config/engine_speed.json` 的 `_pref` 字段持久化，`_eng_set_pref` 校验非法值抛 ValueError）。auto 模式不再"WizTree 优先、MFT 兜底"，改为 `_eng_prefer_mft(letter)`：仅当校准数据显示 mft < wiztree×0.9 时 MFT 先行，否则 WizTree 先行、MFT 兜底——默认引擎变为 **WizTree**。`_scan_overview_impl` 与 `big_files` 两条链路同构；MFT 侧校准照旧后台镜像（engine=="wiztree" 且 mft_ok 时 spawn `_eng_calibrate_mft`）。工具栏新增 `<select id="engPref">`（auto/智能、wiztree/WizTree、mft/MFT），change → POST `/__oc__/engine/pref`，启动 GET 回填。
+- **MFT 惰性解码 + 定向路径构建**：`_mft_build_table` 解析循环不再即时解码目录名（UTF-16LE 原始字节存 `dir_names`），`_mft_agg_paths` 新签名 `(…, dir_names, root, floor=0, need_frns=None)`：BFS 求序/总量只用键（无名目录排除语义不变）；路径只为 {5 号根} ∪ {总量≥floor} ∪ {根直子} ∪ {文件父目录} 构建，自上而下 memo 链式回溯 + 环防护。floor=0 时与旧行为逐项等价（selftest 断言）。预期 C 盘再省 ~1s（待真机复测）。
+- **类型分布对齐修复**：换行标签（"无扩展名"、".qcow2" 两行）把各列撑出不同高度导致柱子错位。列结构改三段定高：`.extvval` 22px（值两行）/ `.extvbar` flex:1（弹性的柱区，所有柱共享基线）/ `.extvlab` 24px（标签两行），柱包 `<span class="extvbar"><i style="height:h%"></i></span>`。
+- **磁盘卡组件槽**：canvas 趋势图退役，`#dwTabs`（segbtns）+ `#dwBody` 承载 3 个可切换组件——**趋势**（默认；DOM 柱 `.tvcol`，本地量程 [min−18%, max+18%]，title 悬浮提示，信息行含日期区间/最低/最高）、**清理记录**（近 5 条 `/__oc__/history`，匹配该盘，60s 缓存，兼容旧触发正则 `（([A-Z]):）\s*$`，陈旧切换守卫）、**各盘对比**（STATE.drives 百分比条）。`_dwWid` 存 localStorage `oc-diskwid`；`drawDiskTrend()` 保留为入口名（renderDisk/loadDiskTrend/resize/主题/setLang 调用点不动）。
+- **selftest 适配**：⑥⑦ 校准函数 stub 化（曾触发真实 WizTree C 盘导出导致跑批 12 分钟）；引擎偏好测试用 `_pref` 精确控场；r4b 新增（auto+无数据 → 先试 WizTree 再 MFT 兜底）；源码检查要求 `_eng_prefer_mft`/`_eng_set_pref`/`_eng_calibrate_mft`/`/__oc__/engine/pref` 且不得回退 `_eng_prefer_wiztree`。
+- **回归**：selftest **580-0-6** 全绿；阶段三失败一次为残留 8797 实例干扰（清理端口后复跑通过）。
+
+**⑫补（2026-11-03 傍晚→晚）：组件槽换类型分布，图表坞进环右侧空档（三轮定稿，本地待推送）**——用户三轮收敛：①各盘对比换类型分布、图表放环右侧 → ②真机截图反馈「错位难看」→ 环回原位、图表回卡内 → ③「463.2 GB 放到本次扫到那里，就可以有地方放图表」→ **定稿：本次扫到收紧到标签旁（.ovstats flex:none，数值不再飘到行尾），环一行的剩余空档放组件图表坞 `#dwDock`（flex:1）**。
+- **组件槽双宿主**：`#dwHome`（磁盘卡内，renderDisk 静态创建）+ `#dwDock`（fsOverview 环一行内，renderOverview 创建）。`drawDiskTrend()` 动态选主：有 dock 用 dock（并清掉 home 的空壳防 ID 重影——home 的静态壳在文档序里靠前，`$("dwTabs")` 会先命中它，必须清），否则留卡内；`#dwTabs/#dwBody` 全页恒一份。renderOverview 重建 fsOverview 后必须补调 `drawDiskTrend()`（dock 是空壳，图表内容不会自己回来）。
+- **组件替换（保留）**：`_dwRenderDrives`（各盘对比）删除，换 `_dwRenderExt`（类型分布）——复用 `.extcol` 三段定高柱状图（共享基线）；数据源 `FS.by_ext`（仅当扫描盘 == 当前盘），没扫过则如实提示（`dw.extHint`）。扫描概览旧的收起/展开器整套退役：`extBoxHTML`/`extOpen`/`extToggle`/`.extbox`/`.exttoggle` 全删，`dw.drives`/`dw.noDrives`/`fs.extChip`/`fs.extHead` 词条退役，新增 `dw.ext`/`dw.extHint`（中英同步）。
+- **刷新链补全（保留）**：全盘扫描成功路径补 `drawDiskTrend()`——否则扫描完成时开着类型分布页签不出图（FS.by_ext 已更新但组件不重渲染）。
+- **教训**：把环塞进统计卡会破坏 `.stat` 的左右对齐节奏；但反过来把「本次扫到」数值飘到行尾同样浪费一整行——紧凑化 + 坞是两全解。布局实验要当轮给截图让用户确认。
+- **回归适配**：selftest 组件槽检查加双宿主断言（`dwHome`/`dwDock`/`const host = dock || home`/renderOverview 内调 `drawDiskTrend()`）；cdp_check 类型分布检查改为「切 ext 页签量列数，切回 trend 并复位 oc-diskwid」（页签记忆跨页面存活，不复位会污染后续断言）。
+- **坞内视觉收敛（第四轮微调）**：用户截图反馈「页签与进度条重合、页签太大、风格不协调」。根因：坞内容（页签 30px + extv 126px ≈ 180px）高于环 134px，`align-items:center` 把页签顶出环上缘贴住进度条。修法：`#dwTabs .seg` 改紧凑小胶囊（padding 2px 9px / 字号 11px）、`.extv` 126→100px、`.tv` 52→44px——坞内容总高 ≤ 环高，几何断言 `fitsRing`（页签顶 ≥ 环顶）通过。
+- **回归**：selftest **580-0-6** 全绿（stub 化后全量 ~2.5 分钟）；CDP **141-0-5**；7 道门禁全过；探针实测：本次扫到统计宽 123px（原整行拉伸）、图表坞 769px 宽、13 列柱底边唯一（628px）、无横向溢出、`#dwTabs` 全页唯一、页签 23px 高/11px 字号且落在环带内。
+
 ---
 
 ## 七、文件资产与代码清单

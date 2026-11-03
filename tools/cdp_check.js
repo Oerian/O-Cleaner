@@ -653,25 +653,29 @@ class CDP {
     check(`全盘扫描作用于指定盘 ${DRIVE_}:`, title.startsWith(DRIVE_),
           `面板显示「${title}」`);
   }
-  // 类型分布（#51，2026-11-02 改版）：默认收起成一行入口；点击展开后
-  // 渲染为竖向柱状图（每列一个扩展名）。PS 递归路径无全量文件清单，
-  // 没有该区块（属预期，不是缺陷）
+  // 类型分布（2026-11-03 组件页签化）：扫描概览的收起/展开器退役，
+  // 改为环状图右侧三页签之一 —— 切到 ext 页签应有 .extcol 竖向柱状图。
+  // PS 递归路径无全量文件清单，没有该区块（属预期，不是缺陷）。
+  // 测完切回 trend 并复位记忆，避免影响后续组件槽断言。
   if (ready) {
-    const ext = await evaluate(`(() => {
+    const ext = await evaluate(`(async () => {
       const fast = !!document.querySelector('#fsOverview .enginebar.fast');
-      const box = document.querySelector('#extBox');
-      const collapsed = !!document.querySelector('#extToggle');
-      let cols = 0;
-      if (box && collapsed) {
-        box.querySelector('#extToggle').click();   // 展开成竖向柱状图
-        cols = document.querySelectorAll('#fsOverview .extcol').length;
-        box.querySelector('#extToggle').click();   // 收起还原
-      }
-      return { fast, box: !!box, collapsed, cols };
+      const tabs = [...document.querySelectorAll('#dwTabs .seg')];
+      const extTab = tabs.find(t => t.dataset.dw === 'ext');
+      if (!extTab) return { fast, tab: false, cols: 0, lbl: '' };
+      extTab.click();
+      await new Promise(r => setTimeout(r, 300));
+      const body = document.querySelector('#dwBody');
+      const cols = body ? body.querySelectorAll('.extcol').length : 0;
+      const lbl = (body && body.querySelector('.tvlbl')||{}).innerText || '';
+      const trendTab = tabs.find(t => t.dataset.dw === 'trend');
+      if (trendTab) trendTab.click();
+      try { localStorage.setItem('oc-diskwid', 'trend'); } catch (e) {}
+      return { fast, tab: true, cols, lbl };
     })()`);
     if (ext.fast) {
-      check("类型分布：默认收起、点击展开竖向柱状图",
-            ext.box && ext.collapsed && ext.cols > 0, `${ext.cols} 列`);
+      check("类型分布：环右页签切换出竖向柱状图",
+            ext.tab && ext.cols > 0, `${ext.cols} 列`);
     } else {
       skip2("类型分布（PS 递归路径无全量文件清单，属预期）");
     }
@@ -722,18 +726,23 @@ class CDP {
   })()`);
   check("扫描概览已并入磁盘概览面板（同面板、不重复统计）",
         mergedPanel.samePanel && !mergedPanel.dupDisk, JSON.stringify(mergedPanel));
-  // 2026-11-03 剩余空间趋势：磁盘卡折线画每日剩余空间（不再画清理事件）。
-  // 快照需多天积累：本地已有多天 → 断言折线几何；不足两天 → 断言如实说明。
+  // 2026-11-03 磁盘卡组件槽：剩余空间趋势（类型分布同款 DOM 竖柱，默认
+  // 选中）/清理记录/各盘对比 页签切换。快照需多天积累：本地已有多天 →
+  // 断言柱几何；不足两天 → 断言如实说明。
   const dtr = await evaluate(`(() => {
-    const cv = document.querySelector('#trendCv');
-    const lbl = (document.querySelector('#trendLbl')||{}).innerText || '';
+    const body = document.querySelector('#dwBody');
+    const lbl = (document.querySelector('#dwBody .tvlbl')||{}).innerText || '';
+    const segs = [...document.querySelectorAll('#dwTabs .seg')];
+    const on = (segs.find(s => s.classList.contains('on'))||{}).dataset ? true : false;
+    const onId = (segs.find(s => s.classList.contains('on'))||{dataset:{}}).dataset.dw || '';
     const n = (typeof DISK_TREND !== 'undefined' && Array.isArray(DISK_TREND)) ? DISK_TREND.length : -1;
-    const geo = (typeof _TREND_GEO !== 'undefined' && _TREND_GEO) ? _TREND_GEO : null;
-    return { hasCv: !!cv, n, lbl, pts: geo && geo.pts ? geo.pts.length : 0 };
+    return { hasBody: !!body, segs: segs.length, on, onId, n, lbl,
+             bars: body ? body.querySelectorAll('.tvcol').length : 0 };
   })()`);
-  checkScan("剩余空间趋势折线（多天快照→几何；不足两天→如实说明）",
-        dtr.hasCv && dtr.n >= 0 && (dtr.pts >= 2 || /记录|record|明天|tomorrow/i.test(dtr.lbl)),
-        `days=${dtr.n} pts=${dtr.pts} lbl=${dtr.lbl.slice(0, 40)}`);
+  checkScan("磁盘卡组件槽：三页签、趋势默认选中且柱状图就位",
+        dtr.hasBody && dtr.segs === 3 && dtr.on && dtr.onId === "trend"
+        && dtr.n >= 0 && (dtr.bars >= 2 || /记录|record|明天|tomorrow/i.test(dtr.lbl)),
+        `days=${dtr.n} bars=${dtr.bars} on=${dtr.onId} lbl=${dtr.lbl.slice(0, 36)}`);
   // 视图切换流畅性：方向性滑入动画类 + 渲染缓存存在
   const smooth = await evaluate(`(() => {
     let kf = false, slide = false, cache = false;

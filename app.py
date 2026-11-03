@@ -82,7 +82,7 @@ WEB_DIR = BASE_DIR / "web"
 # config/drives.json 的 app.version），2026-10-12 升 v2.3 时漏改了后两处，
 # 结果界面显示的仍是 2.2。收敛成一个常量后，drives.json 与打包脚本由自测断言
 # 强制保持一致（见 tools/selftest.py 的「版本号三处一致」）。
-APP_VERSION = "2.10"
+APP_VERSION = "2.11"
 APP_UA = f"O-Cleaner/{APP_VERSION}"
 
 TARGETS_PATH = CONFIG_DIR / "targets.json"
@@ -1501,7 +1501,11 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
         arr_parent = array("q")
         arr_size = array("q")
         arr_flags = bytearray()            # bit0: 目录
-        dir_names: dict[int, str] = {}     # frn -> 目录名
+        dir_names: dict[int, bytes] = {}   # frn -> 目录名（UTF-16LE 原始字节，
+                                           # 2026-11-03 起惰性解码：35 万目录里
+                                           # 最终进树的只有千余条，全量解码
+                                           # 白付 ~0.4s；消费端 _mft_agg_paths
+                                           # 按需解码）
         file_keep: dict[int, tuple[str, int, int]] = {}  # frn -> (名, 体积, 父)
         file_mtime: dict[int, int] = {}    # frn -> FILETIME（仅 with_mtime）
         exts: dict[str, list] = {}         # 扩展名 -> [字节, 个数]（仅 ext_stats）
@@ -1514,8 +1518,8 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
             块间零头（跨 run 边界不足一条记录的尾巴）留在缓冲头部，仅做
             每块一次 ≤1KB 的小搬运 —— 旧版每 32MB 块要整块 memcpy 两次。
             """
-            CH = max(frs_size * 1024, 1_048_576) - \
-                (max(frs_size * 1024, 1_048_576) % frs_size)
+            CH = max(frs_size * 1024, 16 * 1024 * 1024) - \
+                (max(frs_size * 1024, 16 * 1024 * 1024) % frs_size)
             buf = bytearray(CH + frs_size)     # 尾部留一条记录给零头拼接
             held = 0                           # 头部已持有的上块零头字节数
             for lcn, clusters in runs:
@@ -1540,6 +1544,14 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                     left -= got
             # 尾块不足一条记录：丢弃（截断的卷尾）
 
+        # 读/解析流水线（2026-11-03）：**实测负优化，已回退**。C 盘探针：
+        # 串行 read 4.44s + 解析 ~6.1s = 11.09s；改后台读线程 + 队列深度 3
+        # 后 read 段膨胀到 21.14s、总耗时 35.55s —— 解析端纯 Python 几乎
+        # 不放 GIL，读线程每次 DeviceIoControl 后重新拿 GIL 都要挨系统
+        # 切换间隔（1140 次 × 1MB 的往返被拉长 5 倍）。ctypes 释放 GIL
+        # 不等于重叠免费：**GIL 争用成本 > I/O 重叠收益**，此类流水线
+        # 在纯 Python 消费端面前不要重试。提速改走「加大读块」路线
+        # （减少系统调用次数，见 CH 取值）。
         for chunk, usable in read_chunks():
             for roff in range(0, usable, frs_size):
                 idx = records
@@ -1558,7 +1570,7 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                 arr_flags.append(1 if is_dir else 0)
                 if is_dir:
                     if name_raw and idx != 5:
-                        dir_names[idx] = _mft_name_decode(name_raw)
+                        dir_names[idx] = name_raw     # 惰性解码（见上）
                 elif name_raw:
                     if ext_stats:
                         _ext_bump_raw(exts, name_raw, size)
@@ -1575,9 +1587,12 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                 except Exception:
                     pass
 
-        # 目录体积聚合 + 路径拼装：抽出为纯函数（见 _mft_agg_paths）
+        # 目录体积聚合 + 路径拼装（2026-11-03 定向化）：只为「会进树的
+        # 目录」（体积达标 / 一层 / 文件父目录）拼路径，35 万目录里省掉
+        # 99% 的 UTF-16 解码与字符串拼接（C 盘实测 ~1s）。
         dir_total, dir_path = _mft_agg_paths(
-            arr_parent, arr_size, arr_flags, dir_names, root)
+            arr_parent, arr_size, arr_flags, dir_names, root,
+            floor, {p for (_n, _s, p) in file_keep.values()})
 
         dirs_out: dict[str, int] = {}
         for frn, path in dir_path.items():
@@ -1585,6 +1600,8 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
             if frn == 5:
                 dirs_out[root.lower()] = sz
             elif sz >= floor or path.count("\\") <= 1:
+                # 与旧版同一过滤：链上为「文件父目录」补建的路径若不达标
+                # 不进树（文件行照旧留在 files_out，与旧行为一致）
                 dirs_out[path] = sz
         files_out: dict[str, list] = {}
         mtimes: dict[str, str] = {}
@@ -1629,6 +1646,23 @@ def _wiztree_raw_nodes(root: str, table: dict,
     budget = max_nodes
     root_key = os.path.normpath(root).lower()
 
+    # 子项索引（2026-11-03 性能修复）：旧版每展开一个节点就把 dirs 全量扫
+    # 一遍（O(节点数 × 目录数)——C 盘 ~40 万目录 × 预算 420 节点 ≈ 1.7 亿
+    # 次 startswith/count 字符串比较，是「C 盘扫描慢」的主凶，比 MFT 解析
+    # 本身还贵一个量级）。改为一次遍历按「父路径」分桶 + 桶内预排序，
+    # kids_of 退化为一次字典查找 + 截前 max_per_dir。
+    # 桶键与 kids_of 的 pre 一致（目录路径带尾反斜杠；盘根 "c:\" 天然就是
+    # 顶层桶）。根目录自身条目（"c:" 去尾后无父）落进永不查询的兜底桶，
+    # 恰好等价于旧版 `p == root_key` 的排除。
+    children: dict[str, list[tuple[str, int]]] = {}
+    for p, sz in dirs.items():
+        key = p.rstrip("\\")
+        i = key.rfind("\\")
+        par = key[:i + 1] if i > 0 else key[:3]     # "c:\users"→"c:\"；畸形键兜底
+        children.setdefault(par, []).append((p, sz))
+    for bucket in children.values():
+        bucket.sort(key=lambda t: -t[1])            # 体积降序预排，展开时免排序
+
     def min_descend(parent_size: int) -> int:
         d = int(parent_size * ratio)
         return max(int(floor), min(d, 4_000_000_000))
@@ -1636,13 +1670,8 @@ def _wiztree_raw_nodes(root: str, table: dict,
     def kids_of(path_key: str) -> list[dict]:
         """某一层的候选子项（目录 + 文件），按体积降序取前 max_per_dir。"""
         pre = path_key if path_key.endswith("\\") else path_key + "\\"
-        depth = pre.count("\\")
         items = []
-        for p, sz in dirs.items():
-            if p == path_key or not p.startswith(pre):
-                continue
-            if p.count("\\") != depth:
-                continue
+        for p, sz in children.get(pre, ()):
             if sz < min_child:
                 continue
             items.append({"type": "dir", "name": p.rstrip("\\").split("\\")[-1],
@@ -1676,12 +1705,10 @@ def _wiztree_raw_nodes(root: str, table: dict,
                 walk(k["path"], depth + 1, k["path"], k["size"])
 
     # 顶层：盘符根的直接子目录（原版对第一层不做 minChild 过滤）
+    # —— 同样走子项索引（顶层桶键恰好是带尾反斜杠的 root_key）
     tops = []
     pre = root_key if root_key.endswith("\\") else root_key + "\\"
-    depth = pre.count("\\")
-    for p, sz in dirs.items():
-        if p == root_key or not p.startswith(pre) or p.count("\\") != depth:
-            continue
+    for p, sz in children.get(pre, ()):
         tops.append({"name": p.rstrip("\\").split("\\")[-1], "path": p, "size": sz})
     tops.sort(key=lambda x: -x["size"])
     total = sum(t["size"] for t in tops)
@@ -1833,16 +1860,20 @@ def scan_disk_overview(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dict
 
 
 # ======================================================================
-#  引擎实测速度缓存（2026-11-02 起「谁快用谁」）
+#  引擎实测速度缓存 + 用户引擎偏好（2026-11-03 定稿：缺省 WizTree 在先）
 # ======================================================================
-# 每个盘记录 MFT / WizTree 两引擎最近一次端到端耗时；两边都有实测值且
-# WizTree 快 10% 以上时，概览与大文件排行先走 WizTree（失败仍回落 MFT）。
-# 耗时在扫描成功时顺带记录；WizTree 的耗时由后台校准线程补测 —— 否则
-# MFT 恒先跑、WizTree 永远攒不到实测值，机制就成了摆设。缓存落盘
-# config/engine_speed.json 跨会话保留；缺省（无实测值）维持 MFT 在先。
+# 每个盘记录 MFT / WizTree 两引擎最近一次端到端耗时。选择逻辑分两层：
+#   * 用户显式偏好 `_pref`（auto / wiztree / mft，前端下拉 + 端点可改）；
+#   * auto 模式「谁快用谁」：两引擎都有实测值且 MFT 快 10% 以上才让
+#     MFT 先跑，**缺省（无实测值）WizTree 在先** —— 用户定稿「扫描还是
+#     慢，改用默认 WizTree」；MFT 是无 WizTree 时的加速手段与自研储备。
+# 耗时在扫描成功时顺带记录；非首选引擎的耗时由后台校准线程补测（每
+# 14 天一次，两边对称），否则永远攒不到实测值。缓存落盘
+# config/engine_speed.json 跨会话保留（"_pref" 键也存这里）。
 _ENGINE_SPEEDS: dict = {}
 _ENGINE_SPEED_FILE = CONFIG_DIR / "engine_speed.json"
 _ENG_CALIB_LOCK = threading.Lock()
+_ENG_PREFS = ("auto", "wiztree", "mft")
 
 
 def _eng_speeds_load() -> None:
@@ -1873,15 +1904,37 @@ def _eng_speed_record(letter: str, engine: str, secs: float) -> None:
         pass
 
 
-def _eng_prefer_wiztree(letter: str) -> bool:
-    """两引擎都有近期实测且 WizTree 明显更快（>10%，留滞后带防抖动）时
-    返回 True。没有实测值时一律 False（维持 MFT 在先）。"""
+def _eng_pref() -> str:
+    """用户引擎偏好；缺省/非法值一律 auto（谁快用谁，缺省 WizTree 在先）。"""
+    p = _ENGINE_SPEEDS.get("_pref")
+    return p if p in _ENG_PREFS else "auto"
+
+
+def _eng_set_pref(p: str) -> str:
+    """保存用户引擎偏好并落盘；非法值抛 ValueError（路由层转 400）。"""
+    p = str(p or "").strip().lower()
+    if p not in _ENG_PREFS:
+        raise ValueError(f"未知引擎偏好：{p!r}（可选 auto / wiztree / mft）")
+    _ENGINE_SPEEDS["_pref"] = p
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _ENGINE_SPEED_FILE.write_text(
+            json.dumps(_ENGINE_SPEEDS, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    return p
+
+
+def _eng_prefer_mft(letter: str) -> bool:
+    """auto 模式的「谁快用谁」：两引擎都有近期实测且 MFT 明显更快
+    （>10%，留滞后带防抖动）时返回 True；证据不足一律 False ——
+    2026-11-03 起缺省 WizTree 在先，MFT 需要拿出实测优势才上位。"""
     m = _ENGINE_SPEEDS.get(letter) or {}
     mft_s, wiz_s = m.get("mft"), m.get("wiztree")
     if not mft_s or not wiz_s:
         return False
     try:
-        return float(wiz_s) < float(mft_s) * 0.9
+        return float(mft_s) < float(wiz_s) * 0.9
     except (TypeError, ValueError):
         return False
 
@@ -1906,6 +1959,29 @@ def _eng_calibrate_wiztree(letter: str) -> None:
             _eng_speed_record(letter, "wiztree", time.time() - t0)
         finally:
             _wiztree_cleanup(csv_path)
+    except Exception:
+        pass
+    finally:
+        _ENG_CALIB_LOCK.release()
+
+
+def _eng_calibrate_mft(letter: str, root: str) -> None:
+    """后台补测 MFT 端到端耗时（直读 + 构表）。WizTree 升为缺省首选后
+    MFT 恒不主跑、攒不到实测值 —— 与 _eng_calibrate_wiztree 对称，
+    管理员 + NTFS 才有意义，其余情况静默退出。"""
+    if os.name != "nt" or not is_admin() or not _mft_volume_ntfs(root):
+        return
+    m = _ENGINE_SPEEDS.get(letter) or {}
+    if m.get("mft") and time.time() - (m.get("at") or 0) < 14 * 86400:
+        return
+    if not _ENG_CALIB_LOCK.acquire(blocking=False):
+        return
+    try:
+        t0 = time.time()
+        tbl, info = _mft_build_table(letter, root, ext_stats=True)
+        if tbl is not None:
+            _eng_speed_record(letter, "mft",
+                              (info or {}).get("secs") or (time.time() - t0))
     except Exception:
         pass
     finally:
@@ -1943,17 +2019,21 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
     r: dict = {}
     werr = ""
 
-    # 引擎链（2026-11-01 起 **自研 MFT 升为首选**；2026-11-02 起「谁快用谁」）：
-    # 管理员 + NTFS 默认直读 $MFT —— 进程内查表、无外部依赖、无临时 CSV
-    # （导出一份 D: 明细要 28MB），端到端实测快于 WizTree 导出+解析
-    # （D: 1.96s vs ~2.4s，C: 10.1s vs 历史导出 29s），数据已与 WizTree
-    # 逐位互证一致。非管理员或非 NTFS 再借 WizTree（它非管理员也能扫，
-    # 只是没有元文件行）；都没有才 PowerShell 递归兜底。「谁快用谁」：
-    # 两引擎都有近期实测耗时且 WizTree 快 10% 以上时先试 WizTree，
-    # 失败仍回落 MFT（顺序见 try_wiz_first）。
+    # 引擎链（2026-11-03 用户定稿：**缺省 WizTree 在先**，MFT 为加速储备）：
+    # 用户嫌 C 盘扫描慢 —— WizTree 由成熟引擎负责读盘，MFT 退居「没装
+    # WizTree 时的自研加速 + 离线依赖兜底」。两层选择：
+    #   * 用户显式偏好（/__oc__/engine/pref，auto / wiztree / mft）；
+    #   * auto 模式谁快用谁：两引擎都有实测且 MFT 快 10% 以上才让 MFT 先，
+    #     缺省（无实测值）WizTree 在先。
     mft_ok = IS_WINDOWS and is_admin() and _mft_volume_ntfs(root)
     wiz_ok = _wiz_ok()
-    try_wiz_first = wiz_ok and (not mft_ok or _eng_prefer_wiztree(letter))
+    pref = _eng_pref()
+    if pref == "wiztree":
+        try_wiz_first = wiz_ok
+    elif pref == "mft":
+        try_wiz_first = False
+    else:
+        try_wiz_first = wiz_ok and (not mft_ok or not _eng_prefer_mft(letter))
 
     def _run_wiztree() -> bool:
         """WizTree 加速路径。成功置 engine="wiztree" 并返回 True。"""
@@ -2045,9 +2125,14 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
     # 加速路径失败不影响可用性，静默回退到 PowerShell；失败原因记在 payload 里
 
     if engine == "mft" and wiz_ok:
-        # 后台补测 WizTree 耗时：MFT 路径永远量不到它，没有实测值
-        # 「谁快用谁」就无从谈起。校准线程自己判过期/互斥/兜异常。
+        # 后台补测 WizTree 耗时：MFT 主跑时 WizTree 永远量不到，没有实测
+        # 值「谁快用谁」就无从谈起。校准线程自己判过期/互斥/兜异常。
         threading.Thread(target=_eng_calibrate_wiztree, args=(letter,),
+                         daemon=True).start()
+    if engine == "wiztree" and mft_ok:
+        # 对称补测 MFT 耗时（2026-11-03）：WizTree 升为缺省首选后 MFT 恒
+        # 不主跑 —— 不补测它就永远拿不到实测值，auto 模式无从比较。
+        threading.Thread(target=_eng_calibrate_mft, args=(letter, root),
                          daemon=True).start()
 
     if engine not in ("wiztree", "mft"):
@@ -7278,11 +7363,13 @@ def _wiztree_big_files(csv_path: str, floor: int) -> list:
     return rows
 
 
-def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str):
+def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str,
+                   floor: int = 0, need_frns: "set[int] | None" = None):
     """由稠密数组聚合目录体积并拼全路径（纯函数，selftest 可测）。
 
     arr_*：以 frn 为下标的稠密数组（parent/size/flags，见
-    _mft_build_table）；dir_names：frn → 目录名（不含根）。
+    _mft_build_table）；dir_names：frn → 目录名（**UTF-16LE 原始字节**，
+    2026-11-03 起惰性解码）。
     返回 (dir_total, dir_path)。聚合两段式 O(记录数 + 目录边)：
     ①每个文件把体积记到**直接父目录**头上（1 次 dict 操作/文件，替代
     旧版沿 parent 链逐跳累加的 O(文件×深度)——百万文件 × 十来层是千万级
@@ -7290,6 +7377,10 @@ def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str):
     聚合（子先于父）：total[d] = direct[d] + Σ total[child]。
     顺带修复旧版 hops<128 截断：超过 128 层的链会丢文件贡献，本版无此限。
     孤儿目录（不在根可达树上）不出现在结果里，与路径表一致。
+    路径**定向拼装**（2026-11-03）：C 盘 35 万目录里进树的只有千余条，
+    旧版给每一层每一目录都做 UTF-16 解码 + 字符串拼接白付 ~1s。本版只为
+    「体积 ≥ floor、一层目录、以及 need_frns（达标文件的父目录）的祖先
+    链」拼路径；floor=0 时全部可达目录都拼（等价旧行为，测试用）。
     """
     direct: dict[int, int] = {}
     n_recs = len(arr_size)
@@ -7301,7 +7392,7 @@ def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str):
         if 0 < p < n_recs:
             direct[p] = direct.get(p, 0) + sz
 
-    # 目录路径：从根（frn 5）按 parent 链下探拼全路径；key 格式与
+    # 目录树拓扑（不需要名字）：从根（frn 5）BFS 定序；key 格式与
     # _wiztree_parse 对齐（盘根带尾反斜杠，其余不带）。
     kids: dict[int, list[int]] = {}
     for frn in dir_names:
@@ -7309,22 +7400,56 @@ def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str):
         if 0 < p < n_recs:
             kids.setdefault(p, []).append(frn)
     order = [5]
-    dir_path: dict[int, str] = {5: root.lower()}
     qi = 0
     while qi < len(order):
         cur = order[qi]
         qi += 1
-        base = dir_path[cur]
-        prefix = base if base.endswith("\\") else base + "\\"
-        for ch in kids.get(cur, ()):
-            dir_path[ch] = prefix + dir_names[ch]
-            order.append(ch)
+        order.extend(kids.get(cur, ()))
     dir_total: dict[int, int] = {}
     for d in reversed(order):
         s = direct.get(d, 0)
         for c in kids.get(d, ()):
             s += dir_total[c]
         dir_total[d] = s
+
+    # 谁需要路径：根 / 体积达标 / 一层（parent==5）/ 文件父目录
+    in_tree = set(order)
+    want = {5}
+    for frn in order:
+        if frn != 5 and (dir_total.get(frn, 0) >= floor
+                         or arr_parent[frn] == 5):
+            want.add(frn)
+    for frn in (need_frns or ()):
+        if frn in in_tree:
+            want.add(frn)
+
+    # 按 parent 链向上补齐祖先（memo 化：链上每个名字只解码一次）
+    dir_path: dict[int, str] = {5: root.lower()}
+    for frn in want:
+        chain = []
+        cur = frn
+        seen = set()                      # 环防御：损坏的 parent 链不成死循环
+        while cur not in dir_path:
+            if not 0 < cur < n_recs or cur in seen:
+                chain = []
+                break
+            chain.append(cur)
+            seen.add(cur)
+            cur = arr_parent[cur]
+        if not chain:
+            continue
+        base = dir_path[cur]
+        for f in reversed(chain):
+            nm = dir_names.get(f)
+            if not nm:
+                base = None               # 链上有无名目录：与旧版一致不给路径
+                break
+            base = (base if base.endswith("\\") else base + "\\") \
+                + _mft_name_decode(nm)
+            dir_path[f] = base
+        if base is None:
+            for f in chain:               # 回滚半截链
+                dir_path.pop(f, None)
     return dir_total, dir_path
 
 
@@ -7362,11 +7487,17 @@ def big_files(drive: str, limit: int = BIG_FILES_LIMIT) -> dict:
     try:
         rows: list = []
         engine = "powershell"
-        # 引擎顺序（2026-11-02 起「谁快用谁」，与概览扫描同一份速度缓存）：
-        # 默认 MFT 在先（管理员 + NTFS）；实测 WizTree 明显更快时先试 WizTree。
+        # 引擎顺序（2026-11-03 定稿）：缺省 WizTree 在先（与概览扫描同一份
+        # 速度缓存与用户偏好）；auto 模式下实测 MFT 明显更快才让 MFT 先。
         mft_ok = os.name == "nt" and is_admin() and _mft_volume_ntfs(root)
         wiz_ok = _wiz_ok()
-        try_wiz_first = wiz_ok and (not mft_ok or _eng_prefer_wiztree(letter))
+        pref = _eng_pref()
+        if pref == "wiztree":
+            try_wiz_first = wiz_ok
+        elif pref == "mft":
+            try_wiz_first = False
+        else:
+            try_wiz_first = wiz_ok and (not mft_ok or not _eng_prefer_mft(letter))
 
         def _wiz_big_run() -> bool:
             """WizTree 路径：导出 → 解析大文件行 → 即删 CSV。"""
@@ -8101,6 +8232,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(load_history())
         if route == "/__oc__/fsgroups":
             return self._json({"groups": load_fs_groups()})
+        if route == "/__oc__/engine/pref":
+            # 扫描引擎偏好（前端下拉）：auto=谁快用谁（缺省 WizTree 在先）
+            return self._json({"pref": _eng_pref()})
         if route == "/__oc__/disk-trend":
             data = _load_json(DISK_TREND_PATH, [], use_cache=False)
             return self._json(data if isinstance(data, list) else [])
@@ -8782,6 +8916,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": str(e)}, 400)
             return self._json({"ok": True, **rep})
         # ---- 云端同步：自定义数据存用户自己的 GitHub 私密 Gist ----
+        if route == "/__oc__/engine/pref":
+            try:
+                p = _eng_set_pref(body.get("pref"))
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+            return self._json({"ok": True, "pref": p})
         if route == "/__oc__/sync/save":
             cfg = _sync_cfg()
             tok = str(body.get("token") or "").strip()

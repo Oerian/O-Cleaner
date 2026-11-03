@@ -857,6 +857,7 @@ def phase1() -> None:
             # 链路会先试 WizTree，本测试的前提就不成立了；测试产生的
             # 耗时记录也不许落盘污染 config/engine_speed.json。
             app._ENGINE_SPEEDS.pop("C", None)
+            app._ENGINE_SPEEDS.pop("_pref", None)
             app._eng_speed_record = lambda *a, **k: None
             _wiz_calls = []
 
@@ -873,12 +874,24 @@ def phase1() -> None:
                 (full, sz, (tbl.get("mtimes") or {}).get(full, ""))
                 for _p, items in (tbl.get("files") or {}).items()
                 for _n, sz, full in items if sz >= floor]
+            # 2026-11-03 起缺省 WizTree 在先：MFT 在先需要用户显式偏好
+            app._ENGINE_SPEEDS["_pref"] = "mft"
             r4 = app.big_files("C")    # C 盘存在；引擎全被 monkeypatch
-            check("引擎链翻转：big_files 管理员+NTFS 直走 MFT 不碰 WizTree",
+            check("引擎偏好 mft：big_files 走 MFT 不碰 WizTree",
                   r4.get("engine") == "mft" and not _wiz_calls
                   and r4["files"] and r4["files"][0]["mtime"] == "2026-11-01 12:00",
                   str(r4)[:120])
+            # auto + 无实测：缺省先试 WizTree（失败回落 MFT，可用性不变）
+            app._ENGINE_SPEEDS["_pref"] = "auto"
+            _wiz_calls.clear()
+            r4b = app.big_files("C")
+            check("引擎默认翻转（2026-11-03）：auto 无实测先试 WizTree 再回落 MFT",
+                  len(_wiz_calls) == 1 and r4b.get("engine") == "mft"
+                  and r4b["files"] and r4b["files"][0]["mtime"] == "2026-11-01 12:00",
+                  f"wiz_calls={_wiz_calls} engine={r4b.get('engine')}")
+            app._ENGINE_SPEEDS.pop("_pref", None)
         finally:
+            app._ENGINE_SPEEDS.pop("_pref", None)
             for k, v in _sv.items():
                 setattr(app, k, v)
 
@@ -889,12 +902,18 @@ def phase1() -> None:
                 ("is_admin", "_mft_volume_ntfs", "_mft_build_table",
                  "_mft_big_files", "_wiz_ok", "_wiztree_export",
                  "_wiztree_big_files", "_wiztree_cleanup", "_wiztree_parse",
-                 "_wiztree_raw_nodes", "run_ps", "_eng_speed_record")}
+                 "_wiztree_raw_nodes", "run_ps", "_eng_speed_record",
+                 "_eng_calibrate_wiztree", "_eng_calibrate_mft")}
         try:
             _wiz_calls, _clean_calls = [], []
-            # 速度缓存隔离：不让真实缓存与测试产生的耗时记录互相污染
+            # 速度缓存隔离：不让真实缓存与测试产生的耗时记录互相污染；
+            # 校准线程钉死为 no-op —— 否则 ⑥⑦ 会真跑一次 WizTree 导出
+            # （stub 的 _wiz_ok=True 骗过了staleness 检查，C 盘导出几十秒）。
             app._ENGINE_SPEEDS.pop("C", None)
+            app._ENGINE_SPEEDS.pop("_pref", None)
             app._eng_speed_record = lambda *a, **k: None
+            app._eng_calibrate_wiztree = lambda *a, **k: None
+            app._eng_calibrate_mft = lambda *a, **k: None
 
             def _wiz_fake_export(drive, timeout=300):
                 _wiz_calls.append(drive)
@@ -953,10 +972,13 @@ def phase1() -> None:
                   and _clean_calls == ["FAKE.csv"], str(r8)[:120])
 
             # ⑤ 概览同样生效：MFT 构表失败 → 回落 WizTree
+            # （缺省已翻转，这里显式 pref=mft 才会先试 MFT）
             app.is_admin = lambda: True
             app._mft_volume_ntfs = lambda root: True
+            app._ENGINE_SPEEDS["_pref"] = "mft"
             _wiz_calls.clear()
             r9 = app._scan_overview_impl("C", max_depth=1)
+            app._ENGINE_SPEEDS.pop("_pref", None)
             check("非管理员自动改用：概览扫描 MFT 失败回落 WizTree",
                   r9.get("engine") == "wiztree" and _wiz_calls == ["C"],
                   str(r9)[:120])
@@ -1499,10 +1521,11 @@ def phase3_http() -> None:
               and 'cr.top3' in html)
         check("磁盘概览直连扫描：概览卡带全盘扫描入口",
               'id="btnDiskFull"' in html and "startFullScan()" in html)
-        check("类型分布（2026-11-02 改版）：默认收起、点击展开竖向柱状图",
-              "fs.extHead" in html and 'id="extBox"' in html
-              and "extOpen" in html and ".extv{display:flex" in _css
+        check("类型分布（2026-11-03 组件页签）：柱状图结构与提示就位，旧展开器退役",
+              "_dwRenderExt" in html and '"dw.extHint"' in html
+              and ".extv{display:flex" in _css
               and ".extcol" in _css
+              and 'id="extBox"' not in html and "extToggle" not in html
               and 'class="extrow"' not in html
               and '"fs.extOther": "Other types"' in html)
         check("大文件时间过滤：前端过滤器与渲染函数就位",
@@ -1630,10 +1653,21 @@ def phase3_http() -> None:
               "riskCompact" in html and "dgRiskRemember" in html
               and "dgRiskRestore" in html and 'localStorage.setItem(RISK_KEY, "1")' in html)
         # 磁盘趋势：快照落盘（每天每盘一条）+ 端点 + 前端 canvas 折线
-        check("磁盘空间趋势有三件套（快照/端点/折线）",
+        check("磁盘空间趋势有三件套（快照/端点/组件槽渲染）",
               "def record_disk_snapshot" in open(app.__file__, encoding="utf-8").read()
               and "/__oc__/disk-trend" in open(app.__file__, encoding="utf-8").read()
-              and 'id="trendCv"' in html and "function drawDiskTrend" in html)
+              and 'id="dwBody"' in html and 'id="dwTabs"' in html
+              and "function drawDiskTrend" in html)
+        check("磁盘卡组件槽（2026-11-03）：三组件可切换并记忆选择，双宿主（卡内/环右坞）",
+              "oc-diskwid" in html and "_dwRenderTrend" in html
+              and "_dwRenderCleanups" in html and "_dwRenderExt" in html
+              and "/__oc__/history" in html
+              and 'id="dwHome"' in html and 'id="dwDock"' in html
+              and 'const host = dock || home' in html
+              and 'drawDiskTrend();' in html.split("function renderOverview")[1][:6000])
+        check("扫描引擎偏好（2026-11-03）：工具栏下拉 + 端点读写",
+              'id="engPref"' in html and "/__oc__/engine/pref" in html
+              and "eng.auto" in html and "eng.wiztree" in html and "eng.mft" in html)
         # 详情弹窗的定位与复制路径按钮；后端 reveal 支持 /select 高亮定位
         check("详情弹窗有「定位」与「复制路径」按钮",
               'id="dLocate"' in html and 'id="dCopy"' in html
@@ -1704,13 +1738,15 @@ def phase3_http() -> None:
         check("快速扫描注入游戏本体（不受扫描深度限制）",
               "补齐游戏本体节点" in app_src
               and "_is_game_body_path" in app_src)
-        check("引擎链「谁快用谁」（2026-11-02）：速度缓存与择快逻辑就位",
-              "_eng_prefer_wiztree" in app_src
+        check("引擎链（2026-11-03 定稿：缺省 WizTree 在先）：偏好/择快/校准就位",
+              "_eng_prefer_mft" in app_src
+              and "_eng_set_pref" in app_src
+              and "_eng_prefer_wiztree" not in app_src
               and "_eng_speed_record" in app_src
               and "_eng_calibrate_wiztree" in app_src
-              and "engine_speed.json" in app_src
-              and 0 < app_src.find("自研 MFT 升为首选")
-              < app_src.find("正在用 WizTree 读取"))
+              and "_eng_calibrate_mft" in app_src
+              and '"/__oc__/engine/pref"' in app_src
+              and "engine_speed.json" in app_src)
         check("引擎更名（2026-11-02 用户要求）：界面不出现「自研」强调字样",
               "自研" not in html
               and '"fs.mftOwn2": "Direct MFT read"' in html)
@@ -1726,9 +1762,9 @@ def phase3_http() -> None:
               and "trend.freeLbl" in html and "trend.freePending" in html
               and "record_disk_snapshot" in app_src
               and '"/__oc__/history"' not in html.split("loadDiskTrend")[1][:400])
-        check("类型分布标签完整展示（2026-11-03）：去省略号改换行",
-              "extvlab{font-size:10px;color:var(--dim);max-width:100%;text-align:center"
-              in "".join(html.split())
+        check("类型分布对齐（2026-11-03）：三段固定区，柱共享基线、完整换行",
+              ".extvbar{flex:1" in "".join(html.split())
+              and ".extcol.extvval{height:22px" in "".join(html.split())
               and "overflow-wrap:anywhere" in html)
         check("工具栏与顶部导航去重（2026-11-02）：游戏概览入口只留 viewNav",
               'id="btnSteam"' not in html
@@ -3329,7 +3365,7 @@ def phase7_scoping_and_accel() -> None:
         _as.append(sz)
         _af.append(1 if is_dir else 0)
         if is_dir and idx != 5 and name:
-            _dn[idx] = name
+            _dn[idx] = name.encode("utf-16-le")   # 2026-11-03 起存原始字节
         return idx
 
     for _ in range(5):
@@ -3340,8 +3376,11 @@ def phase7_scoping_and_accel() -> None:
     _agg_add(_d2, 300, False)                  # games\steam 里 300
     _agg_add(5, 70, False)                     # 根下 70
     _cur = 5
+    _deep0 = 0
     for _i in range(150):                      # 150 层深链（旧版 128 截断）
         _cur = _agg_add(_cur, 0, True, f"deep{_i}")
+        if _i == 0:
+            _deep0 = _cur
     _agg_add(_cur, 900, False)                 # 链底 900
     _orphan = _agg_add(999999, 0, True, "orphan")
     _agg_add(_orphan, 555, False)              # 孤儿目录下的文件（不输出）
@@ -3354,6 +3393,108 @@ def phase7_scoping_and_accel() -> None:
           and list(_agg_path)[0] == 5 and _agg_path[5] == "q:\\")
     check("目录聚合：孤儿目录与其文件不进结果",
           _orphan not in _agg_path and _orphan not in _agg_total)
+    # 定向拼装（2026-11-03）：floor>0 时只为达标目录/一层目录/need_frns
+    # 拼路径 —— C 盘 35 万目录里进树只千余条，全量解码拼接白付 ~1s。
+    _agg_t2, _agg_p2 = app._mft_agg_paths(
+        _ap, _as, _af, _dn, "q:\\", 1000, {_d2})
+    check("目录聚合定向拼装：只拼达标/一层/需要的路径，孤儿仍排除",
+          set(_agg_p2) == {5, _d1, _d2, _deep0}
+          and _agg_p2.get(_d2) == "q:\\games\\steam"
+          and _agg_t2 == _agg_total,
+          f"paths={sorted(_agg_p2)}")
+
+    # ---- 4b) 库分区展开的子项索引（2026-11-03）：与旧全量扫描版逐项等价 ----
+    # 旧版 kids_of 每展开一个节点就把 dirs 全量扫一遍（O(节点×目录)，C 盘
+    # 40 万目录时上亿次字符串比较）；现改为「一次分桶 + 桶内预排序」。
+    # 这里用小规模合成表 + 内联参照实现（旧算法原样复刻）钉住输出相等，
+    # 防止索引键（尾反斜杠/盘根桶/孤儿排除）将来被改破。
+    import random as _rnd
+    _rnd.seed(50)
+    _rd = {"c:\\": 0}
+    for _t in range(6):
+        _tp = f"c:\\t{_t}"
+        _rd[_tp] = _rnd.randint(10, 40) * 1024 ** 2
+        for _m in range(8):
+            _mp = f"{_tp}\\m{_m}"
+            _rd[_mp] = _rnd.randint(20, 900) * 1024 ** 2
+            for _l in range(10):
+                _rd[f"{_mp}\\l{_l}"] = _rnd.randint(5, 600) * 1024 ** 2
+    _rfiles = {"c:\\": [("pagefile.sys", 30 * 1024 ** 2, "c:\\pagefile.sys")]}
+    _rargs = ("c:\\", {"dirs": _rd, "files": _rfiles}, 2,
+              20 * 1024 ** 2, 0.12, 60 * 1024 ** 2, 12, 200, 5)
+
+    def _ref_raw_nodes(root, table, max_depth, min_child, ratio, floor,
+                       max_per_dir, max_nodes, max_descents):
+        _dirs, _files = table["dirs"], table["files"]
+        _out, _budget = [], max_nodes
+        _rk = os.path.normpath(root).lower()
+        def _md(ps):
+            return max(int(floor), min(int(ps * ratio), 4_000_000_000))
+        def _kids(pk):
+            _pre = pk if pk.endswith("\\") else pk + "\\"
+            _depth = _pre.count("\\")
+            _items = []
+            for _p, _sz in _dirs.items():
+                if _p == pk or not _p.startswith(_pre):
+                    continue
+                if _p.count("\\") != _depth or _sz < min_child:
+                    continue
+                _items.append({"type": "dir", "name": _p.rstrip("\\").split("\\")[-1],
+                               "path": _p, "size": _sz, "modified": ""})
+            for _n, _sz, _f in _files.get(pk, ()):
+                if _sz >= min_child:
+                    _items.append({"type": "file", "name": _n, "path": _f.lower(),
+                                   "size": _sz, "modified": ""})
+            _items.sort(key=lambda x: -x["size"])
+            return _items[:max_per_dir]
+        def _walk(pk, dep, par, ss):
+            nonlocal _budget
+            if dep > max_depth or _budget <= 0:
+                return
+            _desc = 0
+            for _k in _kids(pk):
+                if _budget <= 0:
+                    break
+                _budget -= 1
+                _has = False
+                if (_k["type"] == "dir" and _k["size"] >= _md(ss) and dep < max_depth
+                        and _desc < max_descents and _budget > 0):
+                    _desc += 1
+                    _has = True
+                _out.append({"parent": par, "name": _k["name"], "path": _k["path"],
+                             "type": _k["type"], "size": _k["size"], "depth": dep,
+                             "modified": _k["modified"], "hasChildren": _has})
+                if _has:
+                    _walk(_k["path"], dep + 1, _k["path"], _k["size"])
+        _tops = []
+        _pre = _rk if _rk.endswith("\\") else _rk + "\\"
+        _dep = _pre.count("\\")
+        for _p, _sz in _dirs.items():
+            if _p == _rk or not _p.startswith(_pre) or _p.count("\\") != _dep:
+                continue
+            _tops.append({"name": _p.rstrip("\\").split("\\")[-1], "path": _p, "size": _sz})
+        _tops.sort(key=lambda x: -x["size"])
+        _total = sum(t["size"] for t in _tops)
+        for t in _tops:
+            if _budget <= 0:
+                break
+            _budget -= 1
+            _has = t["size"] >= _md(_total) and _budget > 0
+            _out.append({"parent": _rk, "name": t["name"], "path": t["path"],
+                         "type": "dir", "size": t["size"], "depth": 1,
+                         "modified": "", "hasChildren": _has})
+            if _has:
+                _walk(t["path"], 2, t["path"], t["size"])
+        _rf = [{"name": n, "path": f.lower(), "size": s, "modified": ""}
+               for n, s, f in _files.get(_rk, ())
+               if s >= min_child or app._is_hidden_sys(n, f)]
+        return _out, _rf, _total
+
+    _ref_out = _ref_raw_nodes(*_rargs)
+    _new_out = app._wiztree_raw_nodes(*_rargs)
+    check("库分区展开（子项索引）：输出与旧全量扫描实现逐项相等",
+          _ref_out == _new_out,
+          f"ref={len(_ref_out[0])}项/{_ref_out[2]} new={len(_new_out[0])}项/{_new_out[2]}")
 
     # ---- 5) 子进程调用的超时有界性 ----
     # 这一段对应一次实际观察到的卡死：扫描停在「正在读取 Steam 库清单」不动，

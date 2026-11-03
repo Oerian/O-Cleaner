@@ -41,6 +41,9 @@ __pycache__/
 tools/_ui_check.png
 tools/_fs_check.png
 tools/_partition_deep.png
+# probe_ui 视觉核验截图（--shot 任意命名，统一 _r_ 前缀 + cdp 补跑编号）
+tools/_r_*.png
+tools/_ui_check*.png
 
 # 临时/备份文件（自测与 linter 自测会临时产生）
 *.tmp
