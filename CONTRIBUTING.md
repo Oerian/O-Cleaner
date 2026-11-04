@@ -97,10 +97,10 @@ python -X utf8 tools/lint_rules.py --strict     # 第 [2/8] 节专门检查资�
 ### 运行测试
 
 ```
-python -X utf8 tools/selftest.py              # 300+ 项断言，含真实删除与 HTTP 端到端
+python -X utf8 tools/selftest.py              # 580+ 项断言，含真实删除与 HTTP 端到端
 python -X utf8 tools/lint_rules.py --strict   # 规则与资源包门禁（8 项检查，警告计为失败）
 python -X utf8 tools/_lint_selftest.py        # 验证 linter 有检出能力（知识库 15 类 + 资源包 20 类 + 脚本模板 5 类注入，共 44 项）
-node tools/cdp_check.js "http://127.0.0.1:8770"   # 真实浏览器渲染与交互检查（50+ 项断言）
+node tools/cdp_check.js "http://127.0.0.1:8770"   # 真实浏览器渲染与交互检查（140+ 项断言）
 ```
 
 断言数量依机器环境浮动：数据盘数量、是否装有 Steam、是否装有 WizTree

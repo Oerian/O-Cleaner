@@ -8,9 +8,11 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 > **English** — O-Cleaner is a portable disk-space analyzer and cleanup assistant
 > for Windows. It runs a local web UI (no installation, no registry writes, no telemetry);
 > the interface itself is bilingual (中文 / English). Full-disk ranking with drill-down,
-> a knowledge base that explains what is safe to remove, Recycle Bin handling, and an
-> optional WizTree (MFT) accelerator. Zero third-party dependencies — standard-library
-> Python only, or use the embeddable-runtime build. Copy the folder to another PC and it
+> a knowledge base that explains what is safe to remove, Recycle Bin handling, and
+> built-in MFT direct-read acceleration (administrator) with optional WizTree
+> integration — the engine is selectable and auto-picks the faster one. Zero
+> third-party dependencies — standard-library Python only, or use the
+> embeddable-runtime build. Copy the folder to another PC and it
 > just works. Quick start: extract to a writable folder, run `启动 O-Cleaner.bat`,
 > the UI opens at `http://127.0.0.1:8770/`. Full user guide in English:
 > [docs/USAGE-en.md](docs/USAGE-en.md).
@@ -29,7 +31,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 2. 运行 `启动 O-Cleaner.bat`；
 3. 浏览器自动打开界面地址（默认 `http://127.0.0.1:8770/`）。
 
-**便携版**（约 300 KB）：要求计算机已安装 Python 3，解压后同样运行 `启动 O-Cleaner.bat`。
+**便携版**（约 650 KB）：要求计算机已安装 Python 3，解压后同样运行 `启动 O-Cleaner.bat`。
 
 命令行窗口为服务进程，运行期间请勿关闭；关闭窗口即停止服务。
 程序未做代码签名，首次运行时 SmartScreen 提示「已保护你的电脑」属正常现象，
@@ -49,7 +51,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 
 | 模块 | 说明 |
 |---|---|
-| 空间占用分析 | 全盘按体积排行，逐层下钻；快速扫描（1 层）定位占地大头，深层目录按需现场扫描；「大文件排行」单独列出全盘最大的单个文件（视频 / 镜像 / 安装包这类真大头）；磁盘概览提供容量、使用率与可清理/建议保留/未识别三类占比，并按盘记录空间变化趋势 |
+| 空间占用分析 | 全盘按体积排行，逐层下钻；快速扫描（1 层）定位占地大头，深层目录按需现场扫描；「大文件排行」单独列出全盘最大的单个文件（视频 / 镜像 / 安装包这类真大头）；磁盘概览提供占比环、容量与可清理/建议保留/未识别三类占比，环右侧组件图表坞三页签可切换：剩余空间趋势（按盘每日快照）、清理记录、类型分布 |
 | 清理执行 | 预定义系统级目标、四组预设（安全 / 深度 / 开发者 / 回收站）、自定义目录三种入口；占用排行内直接勾选，嵌套勾选自动去重（保留最小项，游戏本体整删不拆分）；执行前逐项列出路径、体积与文件数，完成后按项报告结果（含部分删除的残留说明）；每次清理自动留一份逐项回执 JSON（数据目录 `receipts/` 下，历史面板可随时导出） |
 | 识别与释义 | 内置 42 条目录/文件识别规则；每项标注「是什么 / 能否重建 / 删除影响 / 何种情况建议保留」；内置资源包 5 组 172 条可扩展释义与游戏名，支持导入第三方资源包与自定义覆盖 |
 | 游戏库 | 读取 Steam / Epic / GOG 平台清单，列出游戏体积与中文名；删除游戏前自动查询疑似存档位置并二次确认；各平台卸载残留与「很久没玩的大作」统一聚合在「回收建议」，勾选后并入底部「清理选中项」一次删除（行级进度反馈）；检测到残留时首页横幅主动提醒；游戏库一周增长超 15% 会提示；游戏库总体积趋势曲线（hover 显示每日数值）；游戏行内嵌封面缩略图（Steam 读本机客户端缓存，Epic/GOG 与无图标游戏显示统一占位图，可在自定义游戏库分区更换）；排序支持方向切换；游戏清单可一键导出 CSV / Markdown；高频删除可勾选「不再显示长说明」 |
@@ -60,13 +62,16 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 | AI 助手 | 可接入自有 AI 服务解释清理项、生成自定义方案；AI 仅能勾选候选，不能执行删除 |
 | 界面 | 单文件前端；亮 / 暗 / 跟随系统三态主题；界面语言三选（跟随系统 / 中文 / English，右上角切换，偏好本机记忆，中文为源码默认文案、零外部依赖）；窄窗口下左右两栏等比缩小，不换行堆叠；累积清理统计与体积单位换算 |
 
-可选加速：安装 WizTree 后扫描走 MFT 查表（界面内可一键下载便携版）；未安装时自动回退为标准库扫描，功能不受影响，速度较慢。
+扫描加速三选一（工具栏「引擎」下拉，默认「自动」实测择快）：
+**WizTree 查表**（无需管理员，界面内可一键下载便携版）、
+**内置 MFT 直读引擎**（v2.11 起，管理员权限下直接解析 NTFS 主文件表，免第三方组件、无临时文件）、
+或标准库递归扫描（兜底，功能不受影响，速度较慢）。
 
 ## 界面与操作
 
 界面分三栏：**左侧栏**选盘、预设与自定义目录，**中间主区**是清理项卡片与全盘占用排行，**右侧栏**是统计与各类设置（折叠面板）。
 
-- **两个功能页**：顶部「常规清理」与「Steam 游戏库」标签常驻可达，点标签切换，当前页高亮。
+- **两个功能页**：顶部「扫描概览」与「游戏占用概览」按钮常驻可达，点按钮切换，当前页高亮。
 - **面板目录条**：右侧栏顶部列出全部面板标题，点击任意一项展开并滚动到位，不用逐个翻找。
 - **操作主线**：选盘 → 自动扫描 → 勾选要清的项 → 点「清理选中项」→ 确认弹窗逐项核对路径与体积 → 查看实际释放量报告。
 - **看清再删**：每项都有「详情」说明它是什么、能否重建、删除影响；大目录可「细分查看」到子项层级再决定；「建议保留 / 未识别」的行也可以勾选，但确认弹窗会集中红框提醒。

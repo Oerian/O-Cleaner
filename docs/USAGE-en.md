@@ -427,14 +427,17 @@ To add or modify Chinese game names: edit `config/game-names.json` directly; it 
 
 ---
 
-## 4. Scan Speed: Optional WizTree Acceleration
+## 4. Scan Speed: Three Scan Engines
 
-The full-disk scan has two paths; the fast one is used when WizTree is detected:
+The full-disk scan has three paths. The "Engine" dropdown in the toolbar can force one of them; by default it is left to **Auto**:
+**WizTree is tried first**, and the built-in MFT engine takes the lead only when it measures 10% or faster
+(measured timings are kept in the local `config/engine_speed.json` and recalibrated every 14 days in the background):
 
 | | Method | Characteristics |
 |---|---|---|
-| Default | PowerShell recursive traversal | No extra components needed; can scan any directory |
-| Accelerated | Calls WizTree to read the NTFS MFT | NTFS volumes only; time depends on disk type and file count |
+| Recursive (fallback) | PowerShell recursive traversal | No components needed; can scan any directory; slowest |
+| WizTree lookup | Calls WizTree to read the NTFS MFT | NTFS volumes only; no administrator rights required |
+| MFT direct read | Built-in engine parses the NTFS MFT directly | NTFS volumes only; administrator rights required; no third-party components |
 
 Actual time depends on disk type (HDD / SATA SSD / NVMe), file count, and directory depth, so no fixed numbers are given.
 
@@ -445,7 +448,8 @@ Scan progress is reported by **real phases**, not estimated by elapsed time. The
 | Phase | Progress |
 |---|---|
 | Reading the disk MFT details with WizTree | Indeterminate (flowing stripes) |
-| Parsing the exported details | By bytes read: 14% → 70% |
+| Built-in MFT engine reading disk file details (administrator path) | Indeterminate (flowing stripes) |
+| Parsing the exported / direct-read details | By bytes read: 14% → 70% |
 | Expanding the directory tree by size | Fixed 72% (single step, no finer breakdown) |
 | Recursively summing directory sizes (fallback without WizTree) | By node budget: 10% → 72% |
 | Reading Steam library manifests | Indeterminate (flowing stripes) |
@@ -462,12 +466,19 @@ So "percentage frozen, stripes moving" is normal — it means the current step h
 Additionally, the server sets a timeout on PowerShell calls; on timeout it necessarily returns an error and continues with later phases,
 never stalling on the same phase indefinitely.
 
-The principle of the accelerated path is not parsing the MFT itself — that would require administrator rights plus handling USN journals and fragmentation,
-and errors would yield wrong sizes — but calling `WizTree64.exe`'s export parameter and letting it do the work:
+### How the Two Accelerated Paths Work
+
+**WizTree lookup**: the tool does not parse the MFT itself — that would require administrator rights plus handling USN journals and fragmentation,
+and errors would yield wrong sizes — instead it calls `WizTree64.exe`'s export parameter and lets it do the work:
 
 ```
 WizTree64.exe D:\ /export="%TEMP%\oc-wiztree-D-1234.csv"
 ```
+
+**MFT direct read (built-in engine, since v2.11)**: with administrator rights it parses the NTFS Master File Table directly,
+handling fixups (sector-tail repair) and directory-tree rebuilding on its own — no temp files, no external tools;
+the result feeds into the same downstream logic as the WizTree export. Both accelerations share the same timing calibration
+(`config/engine_speed.json`), which the Auto mode uses to pick the faster one.
 
 ### New-User Onboarding and Cross-Device Portability
 
