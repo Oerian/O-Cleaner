@@ -27,6 +27,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import socket
@@ -1883,6 +1884,30 @@ def _eng_speeds_load() -> None:
             _ENGINE_SPEED_FILE.read_text(encoding="utf-8"))
     except Exception:
         _ENGINE_SPEEDS = {}
+    # 跨设备优化：整文件夹拷到另一台电脑时，耗时实测值随文件一起过来，
+    # 但那是旧机器的磁盘速度 —— 「自动」可能据此选中较慢的引擎，且要等
+    # 14 天后台校准才纠正。落盘时记下计算机名（platform.node()，只存在
+    # 本机不出网），发现与记录不一致（含旧版本文件没有 _host 字段）就
+    # 清空各盘实测值（保留用户 _pref），让两引擎从缺省顺序重新开始并
+    # 立即触发后台校准。同机重启则原样保留。
+    try:
+        host = platform.node()
+    except Exception:
+        host = ""
+    if host and _ENGINE_SPEEDS.get("_host") != host:
+        keep: dict = {}
+        p = _ENGINE_SPEEDS.get("_pref")
+        if p in _ENG_PREFS:
+            keep["_pref"] = p
+        keep["_host"] = host
+        _ENGINE_SPEEDS = keep
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            _ENGINE_SPEED_FILE.write_text(
+                json.dumps(_ENGINE_SPEEDS, ensure_ascii=False),
+                encoding="utf-8")
+        except OSError:
+            pass
 
 
 def _eng_speed_record(letter: str, engine: str, secs: float) -> None:
@@ -1896,6 +1921,7 @@ def _eng_speed_record(letter: str, engine: str, secs: float) -> None:
     m = _ENGINE_SPEEDS.setdefault(letter, {})
     m[engine] = round(secs, 2)
     m["at"] = time.time()
+    _ENGINE_SPEEDS["_host"] = platform.node()
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         _ENGINE_SPEED_FILE.write_text(

@@ -895,6 +895,43 @@ def phase1() -> None:
             for k, v in _sv.items():
                 setattr(app, k, v)
 
+        # ---- 跨设备优化（2026-11-04）：engine_speed.json 换了机器 ----
+        # （_host 不一致，含旧版本文件没有 _host 字段）时，加载即清各盘
+        # 实测值、保留用户 _pref；同机则原样保留。全程用临时文件隔离，
+        # 不碰真实 config/engine_speed.json，退出时恢复内存现场。
+        with tempfile.TemporaryDirectory() as _td:
+            _f = Path(_td) / "engine_speed.json"
+            _old_file = app._ENGINE_SPEED_FILE
+            _old_speeds = dict(app._ENGINE_SPEEDS)
+            app._ENGINE_SPEED_FILE = _f
+            try:
+                _host = app.platform.node()
+                # 1) 旧机器数据 → 重置实测值、保留偏好
+                _f.write_text(json.dumps({
+                    "C": {"wiztree": 5.0, "mft": 2.0, "at": 1.0},
+                    "_pref": "wiztree", "_host": "OLD-PC"}),
+                    encoding="utf-8")
+                app._eng_speeds_load()
+                check("引擎耗时跨设备：换机加载即清实测值、保留偏好",
+                      "C" not in app._ENGINE_SPEEDS
+                      and app._ENGINE_SPEEDS.get("_pref") == "wiztree"
+                      and app._ENGINE_SPEEDS.get("_host") == _host,
+                      str(app._ENGINE_SPEEDS)[:100])
+                # 2) 同机数据 → 原样保留（升级安装不丢校准）
+                _f.write_text(json.dumps({
+                    "C": {"wiztree": 5.0, "mft": 2.0, "at": 1.0},
+                    "_pref": "wiztree", "_host": _host}),
+                    encoding="utf-8")
+                app._eng_speeds_load()
+                check("引擎耗时跨设备：同机加载原样保留",
+                      (app._ENGINE_SPEEDS.get("C") or {}).get("wiztree") == 5.0
+                      and app._ENGINE_SPEEDS.get("_host") == _host,
+                      str(app._ENGINE_SPEEDS)[:100])
+            finally:
+                app._ENGINE_SPEED_FILE = _old_file
+                app._ENGINE_SPEEDS.clear()
+                app._ENGINE_SPEEDS.update(_old_speeds)
+
         # ---- 非管理员自动回落链（#61）：落实「未提权时自动改用 WizTree」----
         # 三条断言全部行为级：非管理员→WizTree；管理员但 MFT 失败→WizTree；
         # 两者都不可用→PowerShell 兜底。外部依赖全部 stub，绝不真跑 WizTree/PS。
