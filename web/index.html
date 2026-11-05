@@ -1204,7 +1204,7 @@
 </footer>
 
 <div class="toast" id="toast"></div>
-<div class="mask" id="mask"><div class="modal" id="modal"></div></div>
+<div class="mask" id="mask"><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
 
 <script>
 "use strict";
@@ -3131,6 +3131,35 @@ function confirmDialog() {
   $("mGo").addEventListener("click", doClean);
 }
 function closeModal() { $("mask").classList.remove("on"); }
+
+// P3-3 焦点管理（外部审计可访问性项）：高危确认弹窗打开时把焦点移入
+// 弹窗内第一个按钮（默认落在「取消」上，误按 Enter 不会触发删除）；
+// Tab 循环限制在弹窗内部。观察 mask 的 class 变化即可，无需改动
+// 七八个各自 add("on") 的调用点。
+new MutationObserver(() => {
+  if ($("mask").classList.contains("on")) {
+    const f = $("modal").querySelector("button, [href], input, select, textarea");
+    if (f) f.focus();
+  }
+}).observe($("mask"), { attributes: true, attributeFilter: ["class"] });
+document.addEventListener("keydown", e => {
+  if (e.key !== "Tab" || !$("mask").classList.contains("on")) return;
+  const f = [...$("modal").querySelectorAll("button, [href], input, select, textarea")]
+    .filter(x => !x.disabled && x.offsetParent !== null);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  const cur = document.activeElement;
+  // 只在「边界」拦截：首元素 shift+Tab → 跳到末元素；末元素 Tab → 跳回首
+  // 元素；焦点逃出弹窗 → 拉回。弹窗内部的原生 Tab 移动不干预。
+  if (e.shiftKey && (cur === first || !$("modal").contains(cur))) {
+    last.focus();
+    e.preventDefault();
+  } else if (!e.shiftKey
+             && (cur === last || !$("modal").contains(cur))) {
+    first.focus();
+    e.preventDefault();
+  }
+});
 
 /* ==================== 自定义聚合组 ==================== */
 async function fsGroupOp(op, body) {

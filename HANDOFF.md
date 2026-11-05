@@ -1591,6 +1591,13 @@ SECURITY 该处表述未动。
 - **环呼吸空间（第五轮微调，v2.11 后本地）**：用户反馈「环状图还是有点紧凑」。修法：环 134→**150px**（`::after` inset 17→19px、中心字号 22→24px），`.ovrow` gap 20→24 + 上下 padding、`#fsOverview` margin-top 6px——环上方距进度条 12px、下方距引擎条 18px，不再贴边。
 - **回归**：selftest **580-0-6** 全绿（stub 化后全量 ~2.5 分钟）；CDP **141-0-5**；7 道门禁全过；探针实测：环 150px、本次扫到统计宽 123px（原整行拉伸）、图表坞 769px 宽、13 列柱底边唯一、无横向溢出、`#dwTabs` 全页唯一、页签落在环带内。
 
+**⑮补（2026-11-05 晚）：审计待办处理——P2-4 测量去 PS 化 + unit_test.py + 弹窗焦点陷阱（本地待推送）**——处理 ⑭补记入待办的四项：
+- **P2-4 测量类去 PS 化**（性能）：新增 `_py_walk_files(strict)` / `_py_measure_tree` / `_py_measure_glob` / `_py_dir_kind` / `_py_tree_size` 五个进程内原语（`os.scandir` 的 `DirEntry.stat(follow_symlinks=False)` 直接从 FindFirstFileW 缓冲取大小，零额外系统调用；junction 不跟随与 PS 5.1 一致）。`_measure_existing`（tree/glob）、`analyze_dir_partition` 的 DIR_KIND、两处 Steam 孤儿体积（含临时清单文件方案整体退役 —— 该方案曾触发安全删除钩子配额耗尽杀死请求）全部改走进程内实现。**语义对齐**：MEASURE/GLOB 用 strict 模式（错误→denied 标记，UI 显示权限提示，与 -ErrorAction Stop 一致）；ORPHAN 用宽松模式（SilentlyContinue 语义）。`ps_scripts.py` 四个脚本本体保留（selftest 阶段六直接引用 `app.PS_STEAM_ORPHAN_SIZE` 钉 run_ps 数组契约，app.py 导入不删）。实测：小目录进程内测量 <50ms（对比 PS 冷启动 180-350ms）；临时目录基准对比逐字节一致。
+- **unit_test.py 抽离**：新增 `tools/unit_test.py` —— 24 项纯逻辑断言（入口守卫矩阵 / DPAPI 往返 / fetch_json SSRF 收口 / `_is_unsafe_remote` 矩阵 / 测量原语基准对比 / 引擎校准换机失效 / Junction 护栏 / 版本一致性），零磁盘写副作用、约 2 秒跑完，供开发机高频回归；selftest 全量套件定位不变（权威验证走 CI）。
+- **弹窗焦点陷阱（P3-3 可访问性）**：`#modal` 加 `role="dialog" aria-modal="true"`；MutationObserver 监听 mask class 变化（单点实现，七八个 `add("on")` 调用点零改动）——弹窗打开自动聚焦第一个按钮（默认落在「取消」，误按 Enter 不会触发删除）；Tab 循环只在**边界**拦截（首元素 shift+Tab→末元素、末元素 Tab→首元素、焦点逃逸→拉回），弹窗内部原生移动不干预；禁用按钮跳过。**首版逻辑有缺陷（正向 Tab 在首元素被冻结）已自纠**，实测：开窗聚焦/双向循环/Esc 关闭/跳过 disabled 全过。
+- **P2-1 巨石拆分维持待办**：需独立回合（涉及 selftest `import app`、make_package 打包清单、CI、bat 入口四条兼容线 + 全量人工回归），不适合与行为修复混批。建议下次单独立项：先拆 `ocleaner/` 后端包（app.py 保留 re-export 兼容入口），前端 ES Modules 拆分再往后排。
+- **测试**：unit_test **24-0**；selftest **594-0-6**；CDP **141-0-5**；7 道门禁全过；py_compile 通过。
+
 **⑭补（2026-11-05）：外部审计报告 P1/P2/P3 修复落地（本地待推送）**——用户提供第三方深度审计报告（基线 v2.11 / d356eb5，评级 A-）。逐项对照源码验证后实施，报告的四项 P1 全部属实：
 - **P1-1 HTTP 入口**：`_origin_ok` 白名单含 `""` —— `Origin: null`（sandbox iframe / data: URI 跨站）经 `urlparse("null").hostname=None → ""` 恰好放行；且无 Host 头校验（DNS Rebinding 可同源读写全盘清单）。修复：显式拒绝 "null"、空 hostname 不放行、新增 `_host_ok`（Host 必须回环）并在 do_GET/do_POST/do_DELETE 顶部统一调用 `_entry_guards()`。**实测：恶意 Host/Origin:null/跨站 Origin 全部 403，正常请求 200**。
 - **P1-2 嵌套 Junction**：`clean_target` 子项枚举对重解析点无护栏（CPython 3.8+ rmtree 已不跟随 junction，报告的穿透声明 overstated，但纵深防御廉价）。修复：新增 `_is_reparse_dir()`，clean_target 子项遇到 Junction/目录链接只 `os.rmdir` 摘挂载点；自测断言「链接挂载点被摘、目标内容完好」。
