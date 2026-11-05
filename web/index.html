@@ -1310,7 +1310,7 @@ function renderSchSummary() {
       }${s.drive ? `（${esc(s.drive)}:）` : ""} — ${
       t("sch.sumBody","{time}，清理 {n} 项，释放 {v}{fail}")
         .replace("{time}", esc(s.time))
-        .replace("{n}", s.targets)
+        .replace("{n}", esc(s.targets))
         .replace("{v}", esc(s.freed_h))
         .replace("{fail}", "")}${failPart}</span>
     <button class="tiny ghost" id="schSumOk">${t("sch.sumOk","知道了")}</button>`;
@@ -1741,9 +1741,9 @@ function renderDisk(d) {
   $("diskInfo").innerHTML = `
     <div style="display:flex;align-items:flex-start;gap:8px">
       <div style="flex:1">
-        <div class="stat"><span>${t("disk.total","总容量")}</span><b>${d.total_h}</b></div>
-        <div class="stat"><span>${t("disk.used","已使用")}</span><b>${d.used_h}（${d.percent}%）</b></div>
-        <div class="stat"><span>${t("disk.free","可用")}</span><b class="freed">${d.free_h}</b></div>
+        <div class="stat"><span>${t("disk.total","总容量")}</span><b>${esc(d.total_h)}</b></div>
+        <div class="stat"><span>${t("disk.used","已使用")}</span><b>${esc(d.used_h)}（${esc(d.percent)}%）</b></div>
+        <div class="stat"><span>${t("disk.free","可用")}</span><b class="freed">${esc(d.free_h)}</b></div>
       </div>
       <button id="btnDiskFull" class="tiny ghost" style="flex:none;margin-top:2px"
               title="${t("disk.fullTitle","全盘扫描 {d}: 盘，看占用大头在哪").replace("{d}", esc(STATE.current_drive || drive))}">
@@ -3684,13 +3684,17 @@ async function startFullScan() {
       ? t("fs.progressInd","这一步无法预知总工作量，条纹表示仍在推进")
       : t("fs.progressPct","整体进度 {n}%").replace("{n}", Math.round(p.pct));
   };
+  // P3-3：轮询防重叠 —— 慢速机器上单次 /progress 响应超过 500ms 时，
+  // setInterval 会并发堆积请求；改为递归 setTimeout（上次响应结束后再排下一次）。
+  let pollStopped = false, pollTimer = null;
   const poll = async () => {
     try {
       paint(await apiJSON(`${API}/__oc__/progress`));
     } catch (e) { /* 进度接口失败不影响扫描本身，忽略即可 */ }
+    if (!pollStopped) pollTimer = setTimeout(poll, 500);
   };
   paint(null);
-  const timer = setInterval(poll, 500);
+  poll();
   try {
     const r = await apiJSON(`${API}/__oc__/overview?drive=${drive}`
                                  + `&depth=${depth}&lang=${langParam()}`,
@@ -3715,7 +3719,8 @@ async function startFullScan() {
       t("fs.scanFailHint","可先用命令行确认服务端是否正常：") +
       `<code>python -X utf8 app.py --fullscan-only --drive ${esc(drive)}</code></div>`;
   } finally {
-    clearInterval(timer);
+    pollStopped = true;
+    clearTimeout(pollTimer);
     // 只有当自己仍是「当前扫描」时才清理状态与解禁按钮 —— 被换盘作废的旧扫描
     // 绝不能碰新扫描的面板、进度定时器与按钮状态。
     // 文案必须一并恢复（2026-11-02 用户反馈「一直显示全盘扫描中」）：

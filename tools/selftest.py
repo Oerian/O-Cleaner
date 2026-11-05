@@ -932,6 +932,70 @@ def phase1() -> None:
                 app._ENGINE_SPEEDS.clear()
                 app._ENGINE_SPEEDS.update(_old_speeds)
 
+        # ---- 外部审计修复回归（2026-11-05）：HTTP 入口守卫 / DPAPI / ----
+        # ---- fetch_json 目标收口 / 嵌套重解析点护栏 ----
+        _fake = type("F", (), {"headers": {}})()
+        _fake.headers = {"Host": "127.0.0.1:8770",
+                         "Origin": "http://127.0.0.1:8770"}
+        check("HTTP 入口守卫：合法 Host+Origin 双向放行",
+              app.Handler._host_ok(_fake) and app.Handler._origin_ok(_fake))
+        _cases = [
+            ({"Host": "evil.example.com:8770"}, "DNS Rebinding Host"),
+            ({"Host": "127.0.0.1:8770", "Origin": "null"}, "Origin: null"),
+            ({"Host": "127.0.0.1:8770",
+              "Origin": "http://evil.example.com"}, "跨站 Origin"),
+            ({"Host": ""}, "缺失 Host"),
+        ]
+        for hdr, name in _cases:
+            _fake.headers = hdr
+            check(f"HTTP 入口守卫拒绝：{name}",
+                  (not app.Handler._host_ok(_fake))
+                  or (not app.Handler._origin_ok(_fake)), str(hdr))
+
+        _k = "oc-test-dpapi-" + str(int(time.time()))
+        _enc = app._dpapi_protect(_k)
+        check("DPAPI：加密落盘为 dpapi: 前缀密文（非明文）",
+              _enc.startswith("dpapi:") and _k not in _enc, _enc[:32])
+        check("DPAPI：同机解密往返一致", app._dpapi_unprotect(_enc) == _k)
+        check("DPAPI：畸形密文安全返回空串",
+              app._dpapi_unprotect("dpapi:not-base64!!") == "")
+        check("DPAPI：明文旧值原样返回（兼容既有配置）",
+              app._dpapi_unprotect(_k) == _k)
+
+        _err = app.fetch_json("http://127.0.0.1:9/index.json")[1]
+        check("fetch_json：回环地址在入口被拒（SSRF 收口）",
+              _err and "拒绝" in _err, str(_err))
+        _err2 = app.fetch_json("http://metadata.google.internal/x")[1]
+        check("fetch_json：云元数据地址被拒",
+              _err2 and "拒绝" in _err2, str(_err2))
+
+        # 嵌套 Junction 护栏：外层目录里的链接指向「受保护内容」时，
+        # rm_tree_strict 只摘挂载点、绝不删除目标内容
+        with tempfile.TemporaryDirectory() as _td:
+            _target = Path(_td) / "protected"
+            (_target / "keep").mkdir(parents=True)
+            (_target / "keep" / "marker.txt").write_text("survive",
+                                                         encoding="utf-8")
+            _outer = Path(_td) / "outer"
+            (_outer / "sub").mkdir(parents=True)
+            _link = _outer / "sub" / "j_link"
+            try:
+                import _winapi
+                _winapi.CreateJunction(str(_target), str(_link))
+                _jok = _link.exists()
+            except Exception:
+                _jok = False
+            if _jok:
+                _full, _partial, _note = app.rm_tree_strict(str(_outer))
+                _marker = (_target / "keep" / "marker.txt")
+                check("嵌套 Junction 护栏：挂载点被摘除、目标内容完好",
+                      _full and not _link.exists()
+                      and _marker.exists()
+                      and _marker.read_text(encoding="utf-8") == "survive",
+                      f"full={_full} partial={_partial}")
+            else:
+                skip("嵌套 Junction 护栏", "本机无法创建 junction，跳过")
+
         # ---- 非管理员自动回落链（#61）：落实「未提权时自动改用 WizTree」----
         # 三条断言全部行为级：非管理员→WizTree；管理员但 MFT 失败→WizTree；
         # 两者都不可用→PowerShell 兜底。外部依赖全部 stub，绝不真跑 WizTree/PS。

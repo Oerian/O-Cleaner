@@ -895,6 +895,13 @@ def acquire_wiztree(timeout: int = 300) -> dict:
         result["error"] = (f"解压完成但没找到 WizTree64.exe，"
                            f"请检查 {WIZTREE_PORTABLE_DIR} 的内容")
         return result
+    sig = _authenticode_status(st["path"])
+    if sig != "Valid":
+        result["error"] = (f"解压出的 WizTree64.exe 数字签名校验未通过"
+                           f"（Authenticode 状态：{sig}），为防运行被篡改的"
+                           f"二进制已中止。请从官方地址重新下载后重试")
+        return result
+    result["log"].append("WizTree64.exe 签名校验通过（Authenticode: Valid）")
     result.update(ok=True, path=st["path"], version=st["version"])
     result["log"].append(f"已就绪：{st['path']}")
     return result
@@ -2775,7 +2782,10 @@ def is_system_drive(letter: str) -> bool:
 # ======================================================================
 
 _cache: dict = {}
-_lock = threading.Lock()
+_lock = threading.RLock()
+# 可重入锁：HTTP 路由层（2026-11-05 P2-3）把 config 读-改-写整段
+# 包进 _lock，路由体内嵌套调用的 append_history 等也拿同一把锁 ——
+# threading.Lock 不可重入会当场死锁，必须用 RLock。
 
 
 @contextmanager
@@ -3362,14 +3372,20 @@ _GIST_FILE = "oc-cleaner-sync.json"
 def _sync_cfg() -> dict:
     try:
         d = json.loads(_SYNC_CFG_PATH.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
     except Exception:
         return {}
+    if isinstance(d, dict) and d.get("token"):
+        # P1-4：DPAPI 密文透明解密；换机解密失败 → 空 token（需重填）
+        d["token"] = _dpapi_unprotect(str(d["token"]))
+    return d if isinstance(d, dict) else {}
 
 
 def _sync_save_cfg(cfg: dict) -> None:
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        if cfg.get("token"):
+            # P1-4：令牌 DPAPI 加密落盘，明文不出现在任何文件里
+            cfg["token"] = _dpapi_protect(str(cfg["token"]))
         _atomic_write(_SYNC_CFG_PATH, cfg)
     except OSError:
         pass
@@ -5240,6 +5256,22 @@ def _precheck_locked_files(path: str) -> list[str]:
     return locked
 
 
+def _is_reparse_dir(p: str) -> bool:
+    """目录型重解析点（NTFS Junction / 目录符号链接）。
+
+    外部审计 P1-2：待删目录内部的嵌套链接若被当成普通目录走
+    rename + rmtree，存在穿透隐患。防御纵深：枚举子项时遇到重解析点
+    只摘挂载点本身（os.rmdir 不跟随），绝不进入其目标。CPython 3.8+
+    的 shutil.rmtree 虽已不跟随 junction，这里显式兜住所有下游路径。
+    """
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return False
+    return bool(getattr(st, "st_file_attributes", 0)
+                & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def rm_tree_strict(path: str) -> tuple[bool, bool, str]:
     """三态删除目录：返回 (是否全删, 是否部分删除, 说明)。
 
@@ -5970,7 +6002,19 @@ def clean_target(t: dict, only_paths: list | None = None,
                     result["skipped"].append(os.path.basename(item))
         elif atomic:
             sz = _size_of(item)
-            if os.path.isdir(item) and not os.path.islink(item):
+            if _is_reparse_dir(item):
+                # 外部审计 P1-2：嵌套 Junction / 目录链接 —— 只摘挂载点
+                # 本身（os.rmdir 对重解析点不跟随目标），sz 记 0。
+                try:
+                    os.rmdir(item)
+                    result["deleted"] += 1
+                except OSError as exc:
+                    result["failed"] += 1
+                    if len(result["skipped"]) < 20:
+                        result["skipped"].append(
+                            f"{os.path.basename(item)}"
+                            f"（链接移除失败：{exc.strerror or exc}）")
+            elif os.path.isdir(item) and not os.path.islink(item):
                 # P1-1：目录走三态删除 —— 被占用时先改名失败（零副作用），
                 # 删不干净时如实报「部分删除」，不再静默假装删干净。
                 full, partial, note = rm_tree_strict(item)
@@ -7152,11 +7196,32 @@ def _is_unsafe_remote(u: str) -> str:
     return ""
 
 
+def _authenticode_status(path: str) -> str:
+    """返回 exe 的 Authenticode 签名校验状态（Valid / NotSigned / …）。
+
+    外部审计 P1-3：WizTree 便携包下载解压后会以当前进程权限（往往是
+    管理员）直接执行 —— 此前只查 zip 头与体积，被篡改的包会被照跑。
+    官方发行版带 Antibody Software 的有效签名，签名不对即拒绝执行。
+    """
+    try:
+        out = run_ps("(Get-AuthenticodeSignature -LiteralPath "
+                     + json.dumps(str(path)) + ").Status.ToString()")
+        return str(out or "").strip().strip('"') or "Unknown"
+    except Exception:
+        return "Unknown"
+
+
 def fetch_json(url: str, timeout: int = 20):
-    """取一个 JSON。协议与目标限制见 _is_unsafe_remote。"""
+    """取一个 JSON。协议与目标限制见 _is_unsafe_remote（入口强制校验）。"""
     u = str(url or "").strip()
     if not re.match(r"^https?://", u, re.I):
         return None, "只支持 http/https 地址"
+    # 外部审计 P1-3：docstring 声称有目标限制但此前并未实现 ——
+    # /packs/update 允许请求体写入 remote 后直接 fetch，构成 SSRF 面。
+    # 这里统一收口：回环/链路本地/云元数据一律拒绝。
+    unsafe = _is_unsafe_remote(u)
+    if unsafe:
+        return None, f"拒绝访问该地址：{unsafe}"
     try:
         req = _UrlRequest(u, headers={"User-Agent": APP_UA})
         with _urlopen(req, timeout=timeout) as r:
@@ -7205,6 +7270,72 @@ def packs_update_from_remote() -> dict:
 #   3. **AI 没有任何删除能力**。它最多从「内置判定为可清理」的项里挑出建议清单，
 #      前端拿到的还是一组 id，勾选与否仍由用户决定，删除仍走同一条清理链路。
 # 第 3 条是刻意的：让外部模型影响删除动作，风险不可控。
+def _dpapi_protect(plain: str) -> str:
+    """用当前 Windows 用户的 DPAPI 凭据加密敏感串，存为 "dpapi:<base64>"。
+
+    外部审计 P1-4：ai.json 的 API Key 与 sync.json 的 GitHub Token 此前
+    明文落盘 —— 产品承诺「整个文件夹拷到另一台机器即可用」，拷去公共
+    电脑时凭据随之泄露。DPAPI 绑定当前用户：同机透明解密；拷到别机
+    解密失败返回空串（用户重新填一次即可），零第三方依赖。
+    """
+    if not plain or plain.startswith("dpapi:") or os.name != "nt":
+        return plain
+    try:
+        import base64
+        from ctypes import wintypes
+
+        class _BLOB(ctypes.Structure):
+            _fields_ = [("cbData", wintypes.DWORD),
+                        ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+        raw = plain.encode("utf-8")
+        buf = ctypes.create_string_buffer(raw, len(raw))
+        in_blob = _BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+        out_blob = _BLOB()
+        if not ctypes.windll.crypt32.CryptProtectData(
+                ctypes.byref(in_blob), None, None, None, None, 0x01,
+                ctypes.byref(out_blob)):
+            return plain
+        try:
+            enc = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+            return "dpapi:" + base64.b64encode(enc).decode("ascii")
+        finally:
+            ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+    except Exception:
+        return plain
+
+
+def _dpapi_unprotect(stored: str) -> str:
+    """解密 dpapi: 前缀密文；换机/换用户解密失败安全返回空串。
+    明文旧值原样返回（兼容既有配置，下次保存时自动升级为加密）。"""
+    if not stored or not stored.startswith("dpapi:"):
+        return stored
+    if os.name != "nt":
+        return ""
+    try:
+        import base64
+        from ctypes import wintypes
+
+        class _BLOB(ctypes.Structure):
+            _fields_ = [("cbData", wintypes.DWORD),
+                        ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+        raw = base64.b64decode(stored[6:])
+        buf = ctypes.create_string_buffer(raw, len(raw))
+        in_blob = _BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+        out_blob = _BLOB()
+        if not ctypes.windll.crypt32.CryptUnprotectData(
+                ctypes.byref(in_blob), None, None, None, None, 0x01,
+                ctypes.byref(out_blob)):
+            return ""
+        try:
+            return ctypes.string_at(out_blob.pbData, out_blob.cbData).decode("utf-8")
+        finally:
+            ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+    except Exception:
+        return ""
+
+
 _AI_DEFAULTS = {
     "enabled": False, "base_url": "", "api_key": "", "model": "",
     "temperature": 0.2, "timeout": 60, "extra_prompt": "",
@@ -7218,6 +7349,8 @@ def load_ai_config() -> dict:
         for k in _AI_DEFAULTS:
             if d.get(k) is not None:
                 cfg[k] = d[k]
+    # P1-4：落盘的是 DPAPI 密文，读取时透明解密；明文旧值原样返回
+    cfg["api_key"] = _dpapi_unprotect(str(cfg.get("api_key") or ""))
     return cfg
 
 
@@ -7235,6 +7368,7 @@ def save_ai_config(patch: dict) -> dict:
         cfg["timeout"] = max(5, min(300, int(cfg.get("timeout") or 60)))
     except (TypeError, ValueError):
         cfg["timeout"] = 60
+    cfg["api_key"] = _dpapi_protect(str(cfg.get("api_key") or ""))
     _atomic_write(AI_CONFIG_PATH, cfg)
     return cfg
 
@@ -8072,18 +8206,50 @@ class Handler(BaseHTTPRequestHandler):
     #
     # 规则：写操作若带了 Origin/Referer 且来源不是本机，一律拒绝。
     # 用 curl 等工具不带 Origin 时仍放行（那是本机用户自己的操作）。
+    def _host_ok(self) -> bool:
+        """防御 DNS Rebinding：Host 头必须指向本机回环地址。
+
+        外部审计（2026-11-05 报告 P1-1）指出：服务端此前不校验 Host，
+        恶意域名可通过 DNS Rebinding 重绑定到 127.0.0.1，使攻击脚本与
+        本地服务处于浏览器同源上下文 —— 写操作之外还能读全盘清单。
+        """
+        raw_host = (self.headers.get("Host") or "").strip().lower()
+        if not raw_host:
+            return False
+        # 剥离端口（兼容 IPv4:port 与 [::1]:port）
+        if raw_host.startswith("["):
+            host = raw_host.split("]")[0] + "]"
+        else:
+            host = raw_host.split(":")[0]
+        return host in ("127.0.0.1", "localhost", "::1", "[::1]")
+
     def _origin_ok(self) -> bool:
         for h in ("Origin", "Referer"):
             v = self.headers.get(h)
             if not v:
                 continue
+            # 外部审计（2026-11-05 报告 P1-1）：sandbox iframe / data: URI
+            # 发起的跨站请求带 Origin: null，urlparse("null").hostname 为
+            # None → 旧代码算出空串 "" 恰好命中白名单被放行。显式拒绝
+            # "null"，且空串绝不放行。
+            if v.strip().lower() == "null":
+                return False
             try:
                 host = (urlparse(v).hostname or "").lower()
             except Exception:
                 return False
-            if host not in ("127.0.0.1", "localhost", "::1", ""):
+            if not host or host not in ("127.0.0.1", "localhost", "::1"):
                 return False
         return True
+
+    def _entry_guards(self) -> bool:
+        """HTTP 入口统一守卫（do_GET/do_POST/do_DELETE 顶部调用）。
+        返回 True 表示已拒绝并应直接 return。"""
+        if not self._host_ok():
+            self._json({"error": "拒绝：Host 头不是本机回环地址"
+                                 "（防 DNS Rebinding）"}, 403)
+            return True
+        return False
 
     def _deny_csrf(self) -> bool:
         """跨站写操作直接 403。返回 True 表示已拒绝。"""
@@ -8231,6 +8397,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- 路由 ----------
     def do_GET(self):  # noqa: N802
+        if self._entry_guards():
+            return
         route = self.path.split("?")[0]
         q = self._query()
         if route in ("/", "/index.html"):
@@ -8389,6 +8557,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"error": "not found"}, 404)
 
     def do_DELETE(self):  # noqa: N802
+        if self._entry_guards():
+            return
         if self._deny_csrf():
             return
         route = self.path.split("?")[0]
@@ -8405,6 +8575,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"error": "not found"}, 404)
 
     def do_POST(self):  # noqa: N802
+        if self._entry_guards():
+            return
         if self._deny_csrf():
             return
         route = self.path.split("?")[0]
@@ -8429,44 +8601,45 @@ class Handler(BaseHTTPRequestHandler):
 
         # ---- 用户自定义游戏库（游戏占用概览）：add / remove ----
         if route == "/__oc__/game-libs":
-            op = str(body.get("op") or "")
-            libs = load_game_libs()
-            if op == "add":
-                name = str(body.get("name") or "").strip()
-                raw = str(body.get("path") or "").strip().strip('"')
-                if not name:
-                    return self._json({"error": "名称不能为空"}, 400)
-                if not raw:
-                    return self._json({"error": "目录不能为空"}, 400)
-                p = os.path.normpath(os.path.expandvars(
-                    os.path.expanduser(raw.replace("/", "\\"))))
-                if not os.path.isabs(p):
-                    return self._json({"error": "目录必须是绝对路径"
-                                               f"（收到：{raw}）"}, 400)
-                if not os.path.isdir(p):
-                    return self._json({"error": f"目录不存在：{p}"}, 400)
-                if len(p) <= 3:
-                    # "D:\" / "D:"：把整个盘根当游戏库既量不动也没意义
-                    return self._json({"error": "不能把整个盘根当游戏库"
-                                               "（太大了，也没意义）"}, 400)
-                key = p.lower()
-                libs = [g for g in libs if g["key"] != key]   # 同目录=改名
-                libs.append({"name": name, "path": p, "key": key})
-                if len(libs) > 30:
-                    return self._json({"error": "自定义游戏库最多 30 条"}, 400)
-                save_game_libs(libs)
-                _GAMELIB_CACHE.pop(key, None)   # 改名/重加后强制重测
-            elif op == "remove":
-                raw = str(body.get("path") or "").strip()
-                key = os.path.normpath(raw.replace("/", "\\")).lower()
-                rest = [g for g in libs if g["key"] != key]
-                if len(rest) == len(libs):
-                    return self._json({"error": "找不到该条目"}, 404)
-                libs = rest
-                save_game_libs(libs)
-                _GAMELIB_CACHE.pop(key, None)
-            else:
-                return self._json({"error": "op 必须是 add 或 remove"}, 400)
+            with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
+                op = str(body.get("op") or "")
+                libs = load_game_libs()
+                if op == "add":
+                    name = str(body.get("name") or "").strip()
+                    raw = str(body.get("path") or "").strip().strip('"')
+                    if not name:
+                        return self._json({"error": "名称不能为空"}, 400)
+                    if not raw:
+                        return self._json({"error": "目录不能为空"}, 400)
+                    p = os.path.normpath(os.path.expandvars(
+                        os.path.expanduser(raw.replace("/", "\\"))))
+                    if not os.path.isabs(p):
+                        return self._json({"error": "目录必须是绝对路径"
+                                                   f"（收到：{raw}）"}, 400)
+                    if not os.path.isdir(p):
+                        return self._json({"error": f"目录不存在：{p}"}, 400)
+                    if len(p) <= 3:
+                        # "D:\" / "D:"：把整个盘根当游戏库既量不动也没意义
+                        return self._json({"error": "不能把整个盘根当游戏库"
+                                                   "（太大了，也没意义）"}, 400)
+                    key = p.lower()
+                    libs = [g for g in libs if g["key"] != key]   # 同目录=改名
+                    libs.append({"name": name, "path": p, "key": key})
+                    if len(libs) > 30:
+                        return self._json({"error": "自定义游戏库最多 30 条"}, 400)
+                    save_game_libs(libs)
+                    _GAMELIB_CACHE.pop(key, None)   # 改名/重加后强制重测
+                elif op == "remove":
+                    raw = str(body.get("path") or "").strip()
+                    key = os.path.normpath(raw.replace("/", "\\")).lower()
+                    rest = [g for g in libs if g["key"] != key]
+                    if len(rest) == len(libs):
+                        return self._json({"error": "找不到该条目"}, 404)
+                    libs = rest
+                    save_game_libs(libs)
+                    _GAMELIB_CACHE.pop(key, None)
+                else:
+                    return self._json({"error": "op 必须是 add 或 remove"}, 400)
             out = []
             for g in libs:
                 try:
@@ -8483,56 +8656,57 @@ class Handler(BaseHTTPRequestHandler):
 
         # ---- 用户自定义聚合组（占用树的自由归组，纯显示层）----
         if route == "/__oc__/fsgroups":
-            op = str(body.get("op") or "")
-            groups = load_fs_groups()
-            if op == "add":
-                gid, name, paths = (body.get("id") or ""), (body.get("name") or ""), (body.get("paths") or [])
-                if not isinstance(paths, list) or not paths:
-                    return self._json({"error": "paths 不能为空"}, 400)
-                if not str(name).strip() and not gid:
-                    return self._json({"error": "组名不能为空"}, 400)
-                norm = [str(p).replace("/", "\\").rstrip("\\").strip().lower()
-                        for p in paths if str(p).strip()]
-                if gid:
+            with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
+                op = str(body.get("op") or "")
+                groups = load_fs_groups()
+                if op == "add":
+                    gid, name, paths = (body.get("id") or ""), (body.get("name") or ""), (body.get("paths") or [])
+                    if not isinstance(paths, list) or not paths:
+                        return self._json({"error": "paths 不能为空"}, 400)
+                    if not str(name).strip() and not gid:
+                        return self._json({"error": "组名不能为空"}, 400)
+                    norm = [str(p).replace("/", "\\").rstrip("\\").strip().lower()
+                            for p in paths if str(p).strip()]
+                    if gid:
+                        for g in groups:
+                            if g["id"] == gid:
+                                for p in norm:
+                                    if p not in g["paths"]:
+                                        g["paths"].append(p)
+                                break
+                        else:
+                            return self._json({"error": "找不到该聚合组"}, 404)
+                    else:
+                        if not norm:
+                            return self._json({"error": "paths 不能为空"}, 400)
+                        groups.append({
+                            "id": "grp-" + str(int(time.time() * 1000))[-9:],
+                            "name": str(name).strip(),
+                            "paths": norm,
+                            "created": time.strftime("%Y-%m-%d %H:%M"),
+                        })
+                elif op == "remove":
+                    gid, paths = body.get("id") or "", (body.get("paths") or [])
+                    rest = [g for g in groups if g["id"] != gid] if not paths else groups
+                    if paths:
+                        drop = {str(p).replace("/", "\\").rstrip("\\").strip().lower() for p in paths}
+                        for g in rest:
+                            if g["id"] == gid:
+                                g["paths"] = [p for p in g["paths"] if p not in drop]
+                        rest = [g for g in rest if g["paths"]]
+                    groups = rest
+                elif op == "rename":
+                    gid, name = body.get("id") or "", str(body.get("name") or "").strip()
+                    if not name:
+                        return self._json({"error": "组名不能为空"}, 400)
                     for g in groups:
                         if g["id"] == gid:
-                            for p in norm:
-                                if p not in g["paths"]:
-                                    g["paths"].append(p)
-                            break
-                    else:
-                        return self._json({"error": "找不到该聚合组"}, 404)
+                            g["name"] = name
+                elif op == "delete":
+                    groups = [g for g in groups if g["id"] != (body.get("id") or "")]
                 else:
-                    if not norm:
-                        return self._json({"error": "paths 不能为空"}, 400)
-                    groups.append({
-                        "id": "grp-" + str(int(time.time() * 1000))[-9:],
-                        "name": str(name).strip(),
-                        "paths": norm,
-                        "created": time.strftime("%Y-%m-%d %H:%M"),
-                    })
-            elif op == "remove":
-                gid, paths = body.get("id") or "", (body.get("paths") or [])
-                rest = [g for g in groups if g["id"] != gid] if not paths else groups
-                if paths:
-                    drop = {str(p).replace("/", "\\").rstrip("\\").strip().lower() for p in paths}
-                    for g in rest:
-                        if g["id"] == gid:
-                            g["paths"] = [p for p in g["paths"] if p not in drop]
-                    rest = [g for g in rest if g["paths"]]
-                groups = rest
-            elif op == "rename":
-                gid, name = body.get("id") or "", str(body.get("name") or "").strip()
-                if not name:
-                    return self._json({"error": "组名不能为空"}, 400)
-                for g in groups:
-                    if g["id"] == gid:
-                        g["name"] = name
-            elif op == "delete":
-                groups = [g for g in groups if g["id"] != (body.get("id") or "")]
-            else:
-                return self._json({"error": f"未知操作：{op}"}, 400)
-            save_fs_groups(groups)
+                    return self._json({"error": f"未知操作：{op}"}, 400)
+                save_fs_groups(groups)
             return self._json({"ok": True, "groups": load_fs_groups()})
 
         # ---- 执行清理 ----
@@ -8745,19 +8919,28 @@ class Handler(BaseHTTPRequestHandler):
                 name = os.path.basename(norm)
                 disp, _zh = game_display_name(None, name)
                 before = _size_of_dir(norm)
-                okrm = rm(norm)
-                # 释放量按「前-后」实测而不是「成功就记全量」：rm 用的是
-                # ignore_errors 的 rmtree，部分文件被占用时目录会留下但已删掉
-                # 一部分 —— 按「成功与否」二值记会把真实释放量报成 0，
-                # 累积统计因此偏低失真。
+                # 外部审计 P2-2：与 /__oc__/clean 同款零副作用删除 ——
+                # 旧实现 rm()（ignore_errors rmtree）遇到 Steam / 反作弊
+                # 锁住 .exe/.dll 时会把几十 GB 资源删空只留锁死的二进制，
+                # 游戏既无法运行也无法走官方卸载。先预检（命中即整体中止）
+                # 再走三态删除（改名暂存 + 严格删除 + 断电恢复）。
+                locked = _precheck_locked_files(norm)
+                if locked:
+                    shown = "；".join(os.path.basename(p)
+                                      for p in locked[:_LOCK_PRECHECK_REPORT_MAX])
+                    return self._json({"error": (
+                        f"目标内有 {len(locked)} 个文件正被其他程序占用，"
+                        f"已整体中止、未删除任何内容（请先关闭相关程序）：{shown}"
+                        f"{'…' if len(locked) > _LOCK_PRECHECK_REPORT_MAX else ''}")}, 409)
+                full, partial, note = rm_tree_strict(norm)
                 after = _size_of_dir(norm) if os.path.isdir(norm) else 0
                 freed = max(0, before - after)
-                if okrm:
-                    err = None
-                elif freed > 0:
-                    err = "部分文件未能删除（可能被占用或需要管理员权限），目录还在"
+                if full:
+                    okrm, err = True, None
+                elif partial:
+                    okrm, err = False, note
                 else:
-                    err = "删除失败（文件可能被占用或需要管理员权限）"
+                    okrm, err = False, note
                 letter = norm[:1].upper()
                 result = {
                     "id": f"game-{abs(hash(low)) % 10**8}", "target_id": "game",
@@ -8822,62 +9005,64 @@ class Handler(BaseHTTPRequestHandler):
 
         # ---- 自定义换算单位 ----
         if route == "/__oc__/units":
-            cfg = load_convert()
-            units = list(cfg.get("units", []))
-            # 逐字段校验：以前 id 传数字会 AttributeError 崩成 500，
-            # bytes_per_unit 传字符串会原样写进配置，换算时再炸一次。
-            uid = body.get("id")
-            if not isinstance(uid, str) or not uid.strip():
-                return self._json({"error": "单位 id 必须是非空字符串"}, 400)
-            uid = uid.strip()
-            if len(uid) > 32 or re.search(r'[\\/:*?"<>|]', uid):
-                return self._json(
-                    {"error": "单位 id 最长 32 字符，且不能包含 \\ / : * ? \" < > |"},
-                    400)
-            bpu = body.get("bytes_per_unit", 0)
-            if bpu in (None, ""):
-                bpu = 0
-            if isinstance(bpu, bool) or not isinstance(bpu, (int, float)):
-                return self._json(
-                    {"error": "bytes_per_unit 必须是数字"}, 400)
-            if bpu != bpu or bpu in (float("inf"), float("-inf")):
-                return self._json(
-                    {"error": "bytes_per_unit 必须是有限数字"}, 400)
-            if bpu < 0:
-                return self._json(
-                    {"error": "bytes_per_unit 不能为负数"}, 400)
+            with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
+                cfg = load_convert()
+                units = list(cfg.get("units", []))
+                # 逐字段校验：以前 id 传数字会 AttributeError 崩成 500，
+                # bytes_per_unit 传字符串会原样写进配置，换算时再炸一次。
+                uid = body.get("id")
+                if not isinstance(uid, str) or not uid.strip():
+                    return self._json({"error": "单位 id 必须是非空字符串"}, 400)
+                uid = uid.strip()
+                if len(uid) > 32 or re.search(r'[\\/:*?"<>|]', uid):
+                    return self._json(
+                        {"error": "单位 id 最长 32 字符，且不能包含 \\ / : * ? \" < > |"},
+                        400)
+                bpu = body.get("bytes_per_unit", 0)
+                if bpu in (None, ""):
+                    bpu = 0
+                if isinstance(bpu, bool) or not isinstance(bpu, (int, float)):
+                    return self._json(
+                        {"error": "bytes_per_unit 必须是数字"}, 400)
+                if bpu != bpu or bpu in (float("inf"), float("-inf")):
+                    return self._json(
+                        {"error": "bytes_per_unit 必须是有限数字"}, 400)
+                if bpu < 0:
+                    return self._json(
+                        {"error": "bytes_per_unit 不能为负数"}, 400)
 
-            def _txt(key: str, default: str, limit: int = 80) -> str:
-                v = body.get(key)
-                if not isinstance(v, str):
-                    return default
-                v = v.strip()
-                return v[:limit] if v else default
+                def _txt(key: str, default: str, limit: int = 80) -> str:
+                    v = body.get(key)
+                    if not isinstance(v, str):
+                        return default
+                    v = v.strip()
+                    return v[:limit] if v else default
 
-            if not any(u.get("id") == uid for u in units):
-                label = _txt("label", uid)
-                units.append({
-                    "id": uid,
-                    "label": label,
-                    "plural": _txt("plural", label),
-                    "bytes_per_unit": bpu,
-                    "note": _txt("note", "", 500),
-                    "category": _txt("category", "自定义", 24),
-                })
-            cfg["units"] = units
-            _atomic_write(CONVERT_PATH, cfg)
-            _cache.pop(str(CONVERT_PATH), None)
+                if not any(u.get("id") == uid for u in units):
+                    label = _txt("label", uid)
+                    units.append({
+                        "id": uid,
+                        "label": label,
+                        "plural": _txt("plural", label),
+                        "bytes_per_unit": bpu,
+                        "note": _txt("note", "", 500),
+                        "category": _txt("category", "自定义", 24),
+                    })
+                cfg["units"] = units
+                _atomic_write(CONVERT_PATH, cfg)
+                _cache.pop(str(CONVERT_PATH), None)
             return self._json({"units": resolve_units(units), "stats": history_stats()})
 
         if route == "/__oc__/units/delete":
-            cfg = load_convert()
-            uid = body.get("id")
-            if not isinstance(uid, str) or not uid.strip():
-                return self._json({"error": "单位 id 必须是非空字符串"}, 400)
-            uid = uid.strip()
-            cfg["units"] = [u for u in cfg.get("units", []) if u.get("id") != uid]
-            _atomic_write(CONVERT_PATH, cfg)
-            _cache.pop(str(CONVERT_PATH), None)
+            with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
+                cfg = load_convert()
+                uid = body.get("id")
+                if not isinstance(uid, str) or not uid.strip():
+                    return self._json({"error": "单位 id 必须是非空字符串"}, 400)
+                uid = uid.strip()
+                cfg["units"] = [u for u in cfg.get("units", []) if u.get("id") != uid]
+                _atomic_write(CONVERT_PATH, cfg)
+                _cache.pop(str(CONVERT_PATH), None)
             return self._json({"units": resolve_units(cfg["units"]),
                                "stats": history_stats()})
 
@@ -8916,19 +9101,21 @@ class Handler(BaseHTTPRequestHandler):
                 entry["label_kind"] = body["label_kind"]
             if isinstance(body.get("color"), str) and re.fullmatch(r"#[0-9a-fA-F]{6}", body["color"]):
                 entry["color"] = body["color"].lower()
-            data = load_overrides()
-            if entry:
-                data["targets"][oid] = entry
-            else:
-                data["targets"].pop(oid, None)   # 全部留空 = 恢复默认
-            save_overrides(data)
+            with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
+                data = load_overrides()
+                if entry:
+                    data["targets"][oid] = entry
+                else:
+                    data["targets"].pop(oid, None)   # 全部留空 = 恢复默认
+                save_overrides(data)
             return self._json({"targets": data["targets"]})
 
         if route == "/__oc__/overrides/delete":
             oid = str(body.get("id") or "").strip()
-            data = load_overrides()
-            data["targets"].pop(oid, None)
-            save_overrides(data)
+            with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
+                data = load_overrides()
+                data["targets"].pop(oid, None)
+                save_overrides(data)
             return self._json({"targets": data["targets"]})
 
         # ---- 自定义数据包：换算单位 / 释义覆盖 / 固定项规则 一次导入导出 ----
@@ -8949,13 +9136,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": str(e)}, 400)
             return self._json({"ok": True, "pref": p})
         if route == "/__oc__/sync/save":
-            cfg = _sync_cfg()
-            tok = str(body.get("token") or "").strip()
-            if tok:
-                cfg["token"] = tok          # 令牌是用户显式「保存」才落盘
-            if "gist_id" in body:
-                cfg["gist_id"] = str(body.get("gist_id") or "").strip()
-            _sync_save_cfg(cfg)
+            with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
+                cfg = _sync_cfg()
+                tok = str(body.get("token") or "").strip()
+                if tok:
+                    cfg["token"] = tok          # 令牌是用户显式「保存」才落盘
+                if "gist_id" in body:
+                    cfg["gist_id"] = str(body.get("gist_id") or "").strip()
+                _sync_save_cfg(cfg)
             return self._json({"ok": True,
                                "token_set": bool(str(cfg.get("token") or "").strip()),
                                "gist_id": str(cfg.get("gist_id") or "")})
@@ -8979,54 +9167,55 @@ class Handler(BaseHTTPRequestHandler):
 
         # ---- 自定义规则（勾选固定项 → 命名保存 → 可套用/自动清理）----
         if route == "/__oc__/custom-rules":
-            rules = load_custom_rules()
-            action = body.get("action")
+            with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
+                rules = load_custom_rules()
+                action = body.get("action")
 
-            if action == "add" or action == "update":
-                name = (body.get("name") or "").strip()
-                ids = [str(i) for i in (body.get("ids") or [])]
-                drive = (body.get("drive") or "C").rstrip(":").upper()
-                if not name:
-                    return self._json({"error": "请给规则起一个名字"}, 400)
-                if not ids:
-                    return self._json({"error": "请先勾选至少一个清理项，再保存为规则"}, 400)
-                # 校验：勾选的必须是当前真实存在的目标 id
-                valid = {t["id"] for t in build_targets(drive, body.get("custom_path") or None)}
-                bad = [i for i in ids if i not in valid]
-                if bad:
-                    return self._json({"error": f"有 {len(bad)} 个清理项已不适用于 {drive}: 盘，"
-                                                f"请重新勾选"}, 400)
-                existing = next((r for r in rules if r["name"] == name), None)
-                if existing:
-                    existing["ids"] = ids
-                    existing["drive"] = drive
-                    existing["auto"] = bool(body.get("auto"))
-                    rule = existing
-                else:
-                    rule = {"id": f"rule-{int(time.time() * 1000) % 10**10}",
-                            "name": name, "ids": ids, "drive": drive,
-                            "auto": bool(body.get("auto")),
-                            "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-                    rules.append(rule)
-                save_custom_rules(rules)
-                return self._json({"rules": rules, "saved": rule})
+                if action == "add" or action == "update":
+                    name = (body.get("name") or "").strip()
+                    ids = [str(i) for i in (body.get("ids") or [])]
+                    drive = (body.get("drive") or "C").rstrip(":").upper()
+                    if not name:
+                        return self._json({"error": "请给规则起一个名字"}, 400)
+                    if not ids:
+                        return self._json({"error": "请先勾选至少一个清理项，再保存为规则"}, 400)
+                    # 校验：勾选的必须是当前真实存在的目标 id
+                    valid = {t["id"] for t in build_targets(drive, body.get("custom_path") or None)}
+                    bad = [i for i in ids if i not in valid]
+                    if bad:
+                        return self._json({"error": f"有 {len(bad)} 个清理项已不适用于 {drive}: 盘，"
+                                                    f"请重新勾选"}, 400)
+                    existing = next((r for r in rules if r["name"] == name), None)
+                    if existing:
+                        existing["ids"] = ids
+                        existing["drive"] = drive
+                        existing["auto"] = bool(body.get("auto"))
+                        rule = existing
+                    else:
+                        rule = {"id": f"rule-{int(time.time() * 1000) % 10**10}",
+                                "name": name, "ids": ids, "drive": drive,
+                                "auto": bool(body.get("auto")),
+                                "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                        rules.append(rule)
+                    save_custom_rules(rules)
+                    return self._json({"rules": rules, "saved": rule})
 
-            if action == "delete":
-                rules = [r for r in rules if r.get("id") != body.get("id")]
-                save_custom_rules(rules)
+                if action == "delete":
+                    rules = [r for r in rules if r.get("id") != body.get("id")]
+                    save_custom_rules(rules)
+                    return self._json({"rules": rules})
+
+                if action == "rename":
+                    new_name = (body.get("name") or "").strip()
+                    if not new_name:
+                        return self._json({"error": "规则名不能为空"}, 400)
+                    for r in rules:
+                        if r.get("id") == body.get("id"):
+                            r["name"] = new_name
+                    save_custom_rules(rules)
+                    return self._json({"rules": rules})
+
                 return self._json({"rules": rules})
-
-            if action == "rename":
-                new_name = (body.get("name") or "").strip()
-                if not new_name:
-                    return self._json({"error": "规则名不能为空"}, 400)
-                for r in rules:
-                    if r.get("id") == body.get("id"):
-                        r["name"] = new_name
-                save_custom_rules(rules)
-                return self._json({"rules": rules})
-
-            return self._json({"rules": rules})
 
         # ---- 执行一条自定义规则（勾选固定项的立即清理）----
         if route == "/__oc__/run-rule":
@@ -9136,10 +9325,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True,
                                "packs": load_packs(use_cache=False)["packs"]})
         if route == "/__oc__/packs/update":
-            if body.get("remote"):
-                st = load_packs_state()
-                st["remote"] = str(body["remote"]).strip()
-                save_packs_state(st)
+            with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
+                if body.get("remote"):
+                    st = load_packs_state()
+                    st["remote"] = str(body["remote"]).strip()
+                    save_packs_state(st)
             return self._json(packs_update_from_remote())
 
         # ---- 接入自有 AI（密钥只在服务端使用，不回传）----

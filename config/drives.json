@@ -1,5 +1,5 @@
 {
-  "_comment": "O-Cleaner 盘符配置。profiles 定义每类盘的可清理目标；路径里的 %DRIVE% 会被替换成所选盘符（如 C:），%DRIVE_LETTER% 替换成单字母（如 C）。只有当整个 path 或 glob 里出现 %DRIVE% 时才算『本盘目标』。",
+  "_comment": "O-Cleaner 盘符配置。路径里的 %DRIVE% 会被替换成所选盘符（如 C:），%DRIVE_LETTER% 替换成单字母（如 C）。只有当整个 path 或 glob 里出现 %DRIVE% 时才算『本盘目标』。",
 
   "app": {
     "name": "O-Cleaner",
@@ -13,27 +13,6 @@
     "%APPDATA%\\",
     "%PROGRAMDATA%\\",
     "%USERPROFILE%\\"
-  ],
+  ]
 
-  "profiles": {
-    "system": {
-      "label": "系统盘（含 Windows 与用户缓存）",
-      "detect": ["windows", "users", "programdata", "program files"],
-      "include_files": ["targets.json"],
-      "targets": []
-    },
-
-    "data": {
-      "label": "数据盘 / 其他盘（按盘符定位）",
-      "detect": ["$recycle.bin", "system volume information"],
-      "include_files": ["targets-other.json"],
-      "targets": []
-    },
-
-    "custom": {
-      "label": "自定义目录（扫描已知垃圾文件夹）",
-      "targets_file": "targets-custom.json",
-      "targets": []
-    }
-  }
 }

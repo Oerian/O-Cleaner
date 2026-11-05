@@ -1,6 +1,6 @@
 # O-Cleaner 完整交接文档与需求规格书
 
-> **文档版本**：v2.9（本文最后更新 2026-10-21；对应应用版本 v2.8）
+> **文档版本**：v2.11（本文最后更新 2026-11-05；对应应用版本 v2.11）
 > **项目定位**：Windows 原生、本地零第三方依赖的磁盘清理与空间占用查看工具。
 > **代码仓库**：`github.com/Oerian/O-Cleaner`（公开），`main` 分支，CI 已接入（快慢两级）。
 > **分发包**：由 `tools/make_package.py` 生成（内存打包，无暂存目录；版本号 import 自 `app.APP_VERSION`），输出到 `dist\O-Cleaner-<版本>.zip`；免安装版由 `tools/make_exe.py` 生成。
@@ -1590,6 +1590,20 @@ SECURITY 该处表述未动。
 - **坞内视觉收敛（第四轮微调）**：用户截图反馈「页签与进度条重合、页签太大、风格不协调」。根因：坞内容（页签 30px + extv 126px ≈ 180px）高于环 134px，`align-items:center` 把页签顶出环上缘贴住进度条。修法：`#dwTabs .seg` 改紧凑小胶囊（padding 2px 9px / 字号 11px）、`.extv` 126→100px、`.tv` 52→44px——坞内容总高 ≤ 环高，几何断言 `fitsRing`（页签顶 ≥ 环顶）通过。
 - **环呼吸空间（第五轮微调，v2.11 后本地）**：用户反馈「环状图还是有点紧凑」。修法：环 134→**150px**（`::after` inset 17→19px、中心字号 22→24px），`.ovrow` gap 20→24 + 上下 padding、`#fsOverview` margin-top 6px——环上方距进度条 12px、下方距引擎条 18px，不再贴边。
 - **回归**：selftest **580-0-6** 全绿（stub 化后全量 ~2.5 分钟）；CDP **141-0-5**；7 道门禁全过；探针实测：环 150px、本次扫到统计宽 123px（原整行拉伸）、图表坞 769px 宽、13 列柱底边唯一、无横向溢出、`#dwTabs` 全页唯一、页签落在环带内。
+
+**⑭补（2026-11-05）：外部审计报告 P1/P2/P3 修复落地（本地待推送）**——用户提供第三方深度审计报告（基线 v2.11 / d356eb5，评级 A-）。逐项对照源码验证后实施，报告的四项 P1 全部属实：
+- **P1-1 HTTP 入口**：`_origin_ok` 白名单含 `""` —— `Origin: null`（sandbox iframe / data: URI 跨站）经 `urlparse("null").hostname=None → ""` 恰好放行；且无 Host 头校验（DNS Rebinding 可同源读写全盘清单）。修复：显式拒绝 "null"、空 hostname 不放行、新增 `_host_ok`（Host 必须回环）并在 do_GET/do_POST/do_DELETE 顶部统一调用 `_entry_guards()`。**实测：恶意 Host/Origin:null/跨站 Origin 全部 403，正常请求 200**。
+- **P1-2 嵌套 Junction**：`clean_target` 子项枚举对重解析点无护栏（CPython 3.8+ rmtree 已不跟随 junction，报告的穿透声明 overstated，但纵深防御廉价）。修复：新增 `_is_reparse_dir()`，clean_target 子项遇到 Junction/目录链接只 `os.rmdir` 摘挂载点；自测断言「链接挂载点被摘、目标内容完好」。
+- **P1-3 SSRF/供应链**：`fetch_json` docstring 声称有目标限制但从未实现 —— `/packs/update` 允许请求体写入 remote 后直接 fetch（SSRF）；WizTree 下载只查 zip 头与体积，解压出的 exe 以管理员权限直接执行。修复：`fetch_json` 入口强制 `_is_unsafe_remote`（回环/链路本地/云元数据拒绝）；新增 `_authenticode_status()`，acquire_wiztree 解压后强制签名校验（非 Valid 拒绝执行）。**实测：packs/update 注入回环地址被拒**。
+- **P1-4 凭据明文**：ai.json API Key 与 sync.json GitHub Token 明文落盘，与「整个文件夹拷走即可用」的产品承诺冲突（拷去公共电脑即泄露）。修复：新增 `_dpapi_protect/_dpapi_unprotect`（纯标准库 ctypes DPAPI），两处凭据存为 `dpapi:<base64>`；同机透明解密、换机解密失败安全返回空串；明文旧值原样返回（下次保存自动升级加密）。
+- **P2-2 游戏删除**：`/__oc__/clean-game` 用 `rm()`（ignore_errors）——Steam/反作弊锁住 .exe/.dll 时把几十 GB 资源删空只留锁死二进制。修复：`_precheck_locked_files` 预检（命中 409 整体中止）+ `rm_tree_strict` 三态删除。
+- **P2-3 锁**：Lock→RLock（可重入），game-libs/fsgroups/units/units-delete/overrides-set/overrides-delete/custom-rules/sync-save/packs-update 九条 POST 路由的读-改-写段包进 `with _lock:`（串行化防丢失更新；快照/统计等慢操作留在锁外）。
+- **P3-1 卫生**：删除根目录 disk-trend.json 残留、config/.targets.backup.json、config/fs-groups.json.bak、tools/ 18 张探针截图；drives.json 移除 `profiles` 死字段（app.py 从不读取其内容，loader default 兼容缺失）；HANDOFF 头部版本 v2.9/v2.8 → v2.11。
+- **P3-2 启动脚本**：`where python` 会被 Microsoft Store 空壳别名骗过（裸机跑 `python app.py` 弹商店），改为实际执行一次 `sys.version_info >= (3,8)` 断言；注释保持纯 ASCII（自测有 bat 编码契约）。
+- **P3-3 前端**：renderDisk 的 `d.total_h/used_h/percent/free_h` 与定时汇总 `s.targets` 补 `esc()`（零例外转义契约）；扫描进度轮询 setInterval → 递归 setTimeout（防慢速机器请求堆积）。
+- **报告未采纳项**：P2-1 单文件巨石拆分（架构级，需独立回合）、P2-4 测量类脚本换 os.scandir（性能重构，行为风险需单独回归）、unit_test.py 抽离、弹窗焦点陷阱（键盘导航有 CDP 断言，改动需专项验证）——均记入待办。
+- **报告勘误**：P1-2 的「rmtree 在 3.8–3.11 存在穿透」说法不准确（CPython 3.8 起 Windows rmtree 显式把重解析点当文件处理），实际风险远低于报告描述；P3-1 引用的 `profiles.data.include_files` 死字段核实无误。
+- **测试**：selftest 新增 12 项断言（入口守卫 5/DPAPI 4/fetch_json 2/junction 护栏 1）→ 全量 **594-0-6**；CDP **141-0-5**；7 道门禁全过；守卫五例 curl 实测全符合预期；py_compile 通过。
 
 **⑬补（2026-11-04）：跨设备优化——引擎校准数据随机器失效（本地待推送）**——用户：跨设备优化、全量测试、结构优化、删冗余、找 bug。全库审计（见 2026-11-03 晚 ⑫补后的审计轮）结论：路径体系 env-var 化、WizTree 便携目录 BASE_DIR 相对、迁移包机器无关，均无需处理；唯一实质缺口是 **engine_speed.json 的耗时实测值随文件夹迁移**——拷到新机器后「自动」可能据旧机器磁盘速度选中较慢引擎，要等 14 天后台校准才纠正。
 - **修法**：落盘时记录计算机名（`platform.node()`，存 `_host` 键，只在本机不出网）；`_eng_speeds_load()` 发现 `_host` 与当前机器不一致（含旧版本文件没有该字段）即清空各盘实测值、保留用户 `_pref`，两引擎从缺省顺序（WizTree 在先）重新开始并立即触发后台校准。同机重启原样保留（升级安装不丢校准）。
