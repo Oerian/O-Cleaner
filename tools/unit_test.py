@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.chdir(str(Path(__file__).resolve().parent.parent))
 
-import app  # noqa: E402
+import ocleaner.core as app  # noqa: E402 —— P2-1：实现主体在 ocleaner/core.py，unit_test 的 monkeypatch 目标必须在 core 模块上
 
 _checks: list = []
 

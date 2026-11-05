@@ -30,7 +30,7 @@ from pathlib import Path
 TOOLS_DIR = Path(__file__).resolve().parent
 HERE = TOOLS_DIR.parent                      # O-Cleaner 根目录
 sys.path.insert(0, str(HERE))
-import app  # noqa: E402
+import ocleaner.core as app  # noqa: E402 —— P2-1：实现主体在 ocleaner/core.py，selftest 的 monkeypatch 目标必须在 core 模块上
 
 SANDBOX = Path("C:/_ocleaner_selftest")   # 与测试配置里的 %DRIVE%\_ocleaner_selftest 对应
 REAL_TARGETS = HERE / "config" / "targets.json"
@@ -1825,7 +1825,8 @@ def phase3_http() -> None:
         finally:
             shutil.rmtree(_dd, ignore_errors=True)
         check("状态负载带数据存档目录（界面自检面板展示用）",
-              '"data_dir"' in (HERE / "app.py").read_text(encoding="utf-8"))
+              '"data_dir"' in (HERE / "ocleaner" / "core.py").read_text(
+                  encoding="utf-8"))  # P2-1：实现主体在 ocleaner/core.py
         check("默认扫描层数 1（HTML 选项与记忆逻辑一致）",
               '<option value="1" selected data-i18n="depth.1">' in html
               and 'saved === "quick" ? 1 : saved === "deep" ? 2' in html)
@@ -1835,7 +1836,8 @@ def phase3_http() -> None:
               "FS_CACHE" in html and "FS_CACHE_TTL" in html)
         check("游戏本体整删不拆：排行过滤内部子项（in_game_body）",
               "in_game_body" in html)
-        app_src = (HERE / "app.py").read_text(encoding="utf-8")
+        app_src = (HERE / "ocleaner" / "core.py").read_text(
+            encoding="utf-8")  # P2-1：实现主体在 ocleaner/core.py
         check("快速扫描注入游戏本体（不受扫描深度限制）",
               "补齐游戏本体节点" in app_src
               and "_is_game_body_path" in app_src)

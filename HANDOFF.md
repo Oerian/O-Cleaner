@@ -1591,6 +1591,14 @@ SECURITY 该处表述未动。
 - **环呼吸空间（第五轮微调，v2.11 后本地）**：用户反馈「环状图还是有点紧凑」。修法：环 134→**150px**（`::after` inset 17→19px、中心字号 22→24px），`.ovrow` gap 20→24 + 上下 padding、`#fsOverview` margin-top 6px——环上方距进度条 12px、下方距引擎条 18px，不再贴边。
 - **回归**：selftest **580-0-6** 全绿（stub 化后全量 ~2.5 分钟）；CDP **141-0-5**；7 道门禁全过；探针实测：环 150px、本次扫到统计宽 123px（原整行拉伸）、图表坞 769px 宽、13 列柱底边唯一、无横向溢出、`#dwTabs` 全页唯一、页签落在环带内。
 
+**⑰补（2026-11-05 深夜）：P2-1 完成——实现主体迁入 ocleaner/core.py，app.py 变 21 行兼容入口（本地待推送）**——⑯补的延续，本轮完成整个迁移：
+- **结构**：`ocleaner/core.py`（9469 行，app.py 实现主体**一行未删原样迁入**）+ 根 `app.py` 21 行 shim（docstring + `globals().update(vars(core))` 全符号 re-export——含下划线私有名，`import *` 拿不到）+ `if __name__ == "__main__": main()`。两条修正随迁：`BASE_DIR` 指向仓库根（core 在子目录）、一键提权的重启目标改 `BASE_DIR / "app.py"`（原 `__file__` 在 core 里会指错）。
+- **测试架构兼容（关键）**：selftest / unit_test 改为 `import ocleaner.core as app` —— monkeypatch 目标（`app._wiz_ok` 等约 40 处）必须在 core 模块上才能被实现内调用点看到；selftest 两处字面 `HERE / "app.py"` 源码读取改为 `ocleaner/core.py`。doctor / guard_matrix / lint_rules / make_package 保持 import shim（只读用途，re-export 足够）。
+- **打包**：INCLUDE 加入 `ocleaner/core.py`；**打包冒烟验证 core.py（9469 行）与全部模块进 zip**。`app.py --version` / `--data-dir` 子进程冒烟通过（selftest 覆盖）。
+- **踩坑实录**：①仓库根 app.py 存在**混合换行**（一行 LF 其余 CRLF，源自此前 Python 脚本写入 + fix-encoding 的双重转换），迁入子目录后 `split('\r\n')` 把 LF 留在行内，join 后反斜杠续行被空行打断 —— 全库仅此一处语法暴露（CPython 解析器容忍 `\r\r\n`），core.py 已整体归一纯 CRLF；②ocleaner 导入曾被误插进 ps_scripts 括号导入块内部（SyntaxError），修正到块闭合之后。
+- **后续域拆分模式已解锁**：从 core.py 逐域迁出（store/guard/deleter/engines/games/integrations/server），core 顶部 `from ocleaner.<域> import ...` 保持裸名兼容；selftest 的 monkeypatch 目标在 core 命名空间继续生效（迁出函数经 core 再绑定）。前端单文件维持不拆（产品特性）。
+- **测试**：unit_test **24-0**、selftest **594-0-6**（`import ocleaner.core as app` 兼容线 + 字面路径读取修正）、CDP **141-0-5**、7 道门禁全过、`app.py --version` 与打包冒烟通过。
+
 **⑯补（2026-11-05 晚）：P2-1 巨石拆分第一步——ocleaner/ 包落地（本地待推送）**——处理 ⑮补维持待办的 P2-1。**拆分策略定稿**：叶子模块逐个从 app.py 迁出，app.py 保留在仓库根作启动入口并 re-export 迁出符号——三条兼容线实测不变：`import app`（selftest/tools 下游）、启动脚本、打包清单（make_package.INCLUDE 新增四个条目，make_exe 自动复用；**打包冒烟已验证 ocleaner/ 三模块 + tools/unit_test.py 进 zip**）。
 - **本轮迁出两个叶子模块**：`ocleaner/credentials.py`（`_dpapi_protect/_dpapi_unprotect`，P1-4）与 `ocleaner/measure.py`（`_py_walk_files/_py_measure_tree/_py_measure_glob/_py_dir_kind/_py_tree_size`，P2-4）——纯 stdlib 依赖、零 app 全局耦合，迁出零风险样板。app.py 顶部 `from ocleaner.credentials/measure import ...` 裸名 re-export，全部既有调用点不动。
 - **实施过程踩坑**：ocleaner 导入曾被插进 ps_scripts 多行括号导入块内部（SyntaxError），已修正到块闭合之后。
