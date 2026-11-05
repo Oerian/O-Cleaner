@@ -455,12 +455,23 @@
 
   /* 磁盘卡组件槽（2026-11-03）：剩余空间趋势（类型分布同款竖柱）/
      清理记录 / 类型分布，页签切换，图表在占比环右侧。 */
-  .tv{display:flex;align-items:flex-end;gap:2px;height:44px}
-  .tvcol{flex:1;min-width:2px;height:100%;display:flex;flex-direction:column;
-    justify-content:flex-end;cursor:default}
-  .tvcol i{display:block;width:100%;min-height:2px;border-radius:2px 2px 0 0;
-    background:linear-gradient(180deg,var(--accent),var(--accent2));opacity:.55}
-  .tvcol.last i{opacity:1;outline:1px solid var(--accent);outline-offset:1px}
+  /* 趋势柱状图（2026-11-05 色彩与形态优化）：
+     ① 柱宽上限 40px —— 修复数据点少时 flex:1 把柱子拉成横贯整行的
+        宽色块（用户反馈「色彩不协调」的主因，3 天数据时尤其难看）；
+     ② 满色渐变（与类型分布柱同款）：55% 透明度显得灰淡，与旁边饱满的
+        占比环/进度条不协调；历史柱 72%、今日柱 100% + 基线标记区分；
+     ③ 基线轴线（--line 色）让图表落地；悬停增亮配合 title 提示。 */
+  .tv{display:flex;align-items:flex-end;justify-content:center;gap:6px;height:44px;
+      border-bottom:1px solid var(--line);padding:0 2px 3px}
+  .tvcol{flex:0 1 40px;min-width:3px;height:100%;display:flex;flex-direction:column;
+    justify-content:flex-end;cursor:default;position:relative}
+  .tvcol i{display:block;width:100%;min-height:3px;border-radius:3px 3px 0 0;
+    background:linear-gradient(180deg,var(--accent),var(--accent2));opacity:.72;
+    transition:opacity .13s}
+  .tvcol:hover i{opacity:1}
+  .tvcol.last i{opacity:1}
+  .tvcol.last::after{content:"";position:absolute;left:18%;right:18%;bottom:-5px;
+    height:2px;border-radius:1px;background:var(--accent)}
   .tvlbl{color:var(--dim2);font-size:11px;margin-top:4px}
   .dwlist{display:flex;flex-direction:column;gap:5px;margin-top:4px}
   .dwrow{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim)}
