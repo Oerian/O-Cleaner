@@ -1591,6 +1591,16 @@ SECURITY 该处表述未动。
 - **环呼吸空间（第五轮微调，v2.11 后本地）**：用户反馈「环状图还是有点紧凑」。修法：环 134→**150px**（`::after` inset 17→19px、中心字号 22→24px），`.ovrow` gap 20→24 + 上下 padding、`#fsOverview` margin-top 6px——环上方距进度条 12px、下方距引擎条 18px，不再贴边。
 - **回归**：selftest **580-0-6** 全绿（stub 化后全量 ~2.5 分钟）；CDP **141-0-5**；7 道门禁全过；探针实测：环 150px、本次扫到统计宽 123px（原整行拉伸）、图表坞 769px 宽、13 列柱底边唯一、无横向溢出、`#dwTabs` 全页唯一、页签落在环带内。
 
+**⑱补（2026-11-06 凌晨）：优化方案全批次落地——A/B/C/D 四批完成（本地待推送）**——依据审计报告的修订版方案（用户确认「ABCD 全部开始」）：
+- **批次 A（低成本）**：①fix-encoding 修复「双重 CR 不动点」缺陷（旧归一化对 `\r\r\n` 原样保留 → 污染静默积累；现先剥全部 CR 再补 CRLF，幂等）——这是 core.py 反斜杠续行断裂的根因；②unit_test.py 纳入 CI 快级（每次推送 2 秒纯逻辑回归）；③凭据惰性迁移：main() 启动检测明文 api_key/token 即 DPAPI 加密回写（无需等用户保存）；④DELETE /custom-rules 补锁；⑤make_package 清单完整性校验（ocleaner 包缺模块拒绝出包）。
+- **批次 B（store 域）**：`ocleaner/store.py` —— _atomic_write/_load_json/_cache/_lock(RLock)/_cross_process_lock；字典与锁按对象共享（core 无重绑定已核查），RUNTIME_DIR/IS_WINDOWS 走 `_core` 惰性引用。
+- **批次 C（deleter 域）**：`ocleaner/deleter.py` —— rm/rm_tree_strict/_journal_*/recover_pending_deletes/rm_trash(容量守卫)/_precheck_locked_files/_is_reparse_dir/_long_path 九个原语；scope 分析驱动的外部引用改写经 `_core.` 路由（monkeypatch 可见）；SHFILEOPSTRUCTW 函数内局部类定义的误改写已修正。
+- **批次 D1（integrations 域）**：`ocleaner/integrations.py` —— Gist 云同步八函数/AI 配置与对话/app_update_check/_dpapi_migrate_plaintext/_version_tuple/_APP_REPO/AI_EXPLAIN_SYS/AI_PLAN_SYS/_extract_json；`_SYNC_CFG_PATH` 依赖 CONFIG_DIR 模块级求值 → 常量留 core、函数内 `_core` 引用（循环引用教训）；selftest 的 `_gist_request` stub 目标改 integrations 模块。
+- **批次 D2（games 域）**：`ocleaner/games.py` —— Steam/Epic/GOG 发现（VDF 解析+注册表）/安装根与残留/游戏中文名/自定义库/趋势记录，19 函数+11 常量；GAMENAMES_PATH/GAMELIBS_PATH 同上留 core。
+- **剩余（明确的下一步）**：engines 域（MFT 三段非连续区块 + WizTree，外部依赖最重：DISK_TREE 常量族/_ext_bump_raw/_ft_to_iso/_WIZ_DIRS 状态）——AST 管线与失败模式手册已齐备，建议独立会话执行；server（Handler 路由 ~1400 行）按方案定义留在 core（路由胶水，最后迁）。前端单文件维持不拆。
+- **工具链教训（写回仓库文件必读）**：①Python 脚本改写仓库文件后必须跑 fix-encoding（newline='' 写入 LF / newine='\r\n' 遇 CRCRLF 残留均会翻车）；②bash heredoc 大补丁改用 Write 工具写临时脚本 + 逐项 assert 替换；③多行括号导入块内禁止插入（两次踩坑）；④JSON 类常量含 `CONFIG_DIR` 求值的必须留 core；⑤分析器需收集 ClassDef/ExceptHandler 绑定（SHFILEOPSTRUCTW/e 漏判教训）。
+- **测试**（每批次独立全量回归）：unit_test **24-0** · selftest **594-0-6** · CDP **141-0-5** · 7 道门禁全过 · 打包冒烟通过。
+
 **⑰补（2026-11-05 深夜）：P2-1 完成——实现主体迁入 ocleaner/core.py，app.py 变 21 行兼容入口（本地待推送）**——⑯补的延续，本轮完成整个迁移：
 - **结构**：`ocleaner/core.py`（9469 行，app.py 实现主体**一行未删原样迁入**）+ 根 `app.py` 21 行 shim（docstring + `globals().update(vars(core))` 全符号 re-export——含下划线私有名，`import *` 拿不到）+ `if __name__ == "__main__": main()`。两条修正随迁：`BASE_DIR` 指向仓库根（core 在子目录）、一键提权的重启目标改 `BASE_DIR / "app.py"`（原 `__file__` 在 core 里会指错）。
 - **测试架构兼容（关键）**：selftest / unit_test 改为 `import ocleaner.core as app` —— monkeypatch 目标（`app._wiz_ok` 等约 40 处）必须在 core 模块上才能被实现内调用点看到；selftest 两处字面 `HERE / "app.py"` 源码读取改为 `ocleaner/core.py`。doctor / guard_matrix / lint_rules / make_package 保持 import shim（只读用途，re-export 足够）。
