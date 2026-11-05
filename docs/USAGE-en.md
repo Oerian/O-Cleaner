@@ -1,7 +1,5 @@
 # O-Cleaner Usage Guide
 
-> This guide is the English counterpart of [docs/USAGE.md](USAGE.md) (Chinese).
-
 Complete usage instructions. For the project's positioning, core capabilities, and quick start, see the [README](../README.md).
 
 > This guide is the English counterpart of [docs/USAGE.md](USAGE.md) (Chinese).
@@ -41,21 +39,26 @@ Command-line arguments:
 | `--data-dir D:\oc-data` | Redirect the data directory: history, configuration, scheduled tasks, and other runtime data go to the specified location (the `OC_DATA_DIR` environment variable also works) |
 | `--scan-only` | Only print a text scan report; do not start the service |
 | `--scan-only --drive D` | Scan the specified drive |
+| `--fullscan-only` | Only print a full-disk usage tree; do not start the service (supports `--drive D --depth N`) |
+| `--lint` | Only run the knowledge-base and resource-pack linter (`--strict`); do not start the service |
+| `--version` | Print the current version number and exit |
 
 ### The Data Directory and USB-Drive Portability
 
 History, disk trends, scheduled tasks, `config\` (including custom explanations and resource packs) — **all runtime data** lives in the data directory, whose location is shown in the "Environment Self-Check" (运行环境自检) panel in the right sidebar:
 
-- **Default: same directory as the program** — fully portable. Put the whole O-Cleaner folder on a USB drive or copy it to another machine and the data travels with it; unplug and it's gone, leaving no trace on the system.
+- **Default: same directory as the program** — fully portable. Put the whole O-Cleaner folder on a USB drive or copy it to another machine and the data travels with it; unplug and it's gone, leaving no trace on the system. Local sensitive credentials (`api_key` in `config\ai.json` and `token` in `config\sync.json`) are encrypted at rest via Windows DPAPI bound to your Windows user account — copying the folder to another PC automatically invalidates and clears them so secrets never leak.
 - **Program directory is read-only, or you want to back up data separately**: use `--data-dir <path>` or the `OC_DATA_DIR` environment variable to redirect runtime data to any writable location (USB drive, another disk, etc.). The startup log and the self-check panel will honestly note "redirected".
 - **Migration / backup**: copy the data directory as a whole; after switching machines, put it back in the corresponding location (or point to it with the same `--data-dir`) for a complete restore.
 
-Self-tests (300+ assertions, including real deletions and end-to-end HTTP; the count varies by machine):
+Self-tests and quality gates (fast unit/guard gates plus full end-to-end suite; assertion counts vary by machine):
 
 ```
-python -X utf8 tools\selftest.py
 python -X utf8 tools\lint_rules.py --strict      # rules and resource pack gate
 python -X utf8 tools\_lint_selftest.py           # verifies the previous gate can actually catch defects
+python -X utf8 tools\guard_matrix.py             # 50-case deletion guardrail matrix + rule unit self-check
+python -X utf8 tools\unit_test.py                # 24 fast pure-logic unit tests (<2s, zero disk side effects)
+python -X utf8 tools\selftest.py                 # 590+ full end-to-end assertions (real deletions + HTTP)
 ```
 
 There is also a browser-based check, which requires the service to be running first (uses the system's existing Edge/Chrome, no extra install):
@@ -72,22 +75,20 @@ On startup it automatically scans the current drive (default: a data drive; the 
 
 ### Layout and Navigation
 
-The interface has three columns: **left sidebar** (drive selection, presets, custom directories, disk trends),
-**main area** (cleanup item cards, full-disk usage ranking, Steam game library),
-**right sidebar** (collapsible panels: self-check, resource packs, AI, statistics, rules, history, etc.).
+The interface uses a **top header + two independently scrollable columns + sticky footer** layout:
+- **Top header**: drive selector cards on the right, view switcher (`Scan Overview` / `Game Usage Overview`), theme toggle (`Light / Dark / Auto`), and language toggle (`A / 中 / EN`).
+- **Left main column (`#leftcol`)**: toolbar (rescan, full-disk scan, engine selector, scan depth, largest files, duplicate large files, downloads organizer, compact mode, select all/none, cleanup scope, custom directory), **Disk Overview** (capacity bar, 150px usage ring, and the 3-tab **widget chart dock** to the right of the ring), and the active functional view (**Usage Ranking** or **Game Usage Overview**).
+- **Right sidebar (`aside`)**: collapsible panels for Environment Self-Check, One-Click Presets, Resource Packs, AI Assistant, Cumulative Freed & Conversions, Custom Rules (including GitHub Gist two-way cloud sync and custom bundle import/export), Scheduled Auto-Clean, Recent Cleanups, and Guide.
 
-Two functional pages live as permanent tabs at the top: **Regular Cleanup** and **Steam Game Library**.
-Click a tab to switch; the current page is highlighted — no need to hunt for entries through layers of buttons.
-The right sidebar has many panels (a dozen or more); each collapsible panel can be expanded/collapsed by clicking its title.
-At the top of the sidebar there is a **panel directory** listing all panel titles; clicking any entry expands and scrolls to that panel —
-when you can't find a feature, check the directory bar first instead of expanding panels one by one.
-Pressing `Esc` goes back one level (breakdown views, drill-down levels, etc.); while a scan is running it will tell you to wait.
+Two functional pages live as permanent buttons in the top bar: **Scan Overview** and **Game Usage Overview**.
+Click a button to switch; the current page is highlighted — no need to hunt for entries through layers of buttons.
+At the top of the right sidebar there is a sticky **panel directory bar** listing all panel titles; clicking any entry automatically expands and scrolls to that panel.
+The Usage Ranking supports keyboard navigation (`↑` / `↓` to move focus, `Space` to toggle selection, `Enter` to drill down), and pressing `Esc` goes back one level (closes modal → pops drill-down level → returns to Scan Overview).
 
-The **disk trend** in the left sidebar is a 30-day step line of this drive's free space; each bend is one cleanup.
-Hover near a bend to see that cleanup's time, freed amount, and free space afterwards.
-
-The disk overview (capacity, usage, cleanable/keep/unrecognized shares) appears in exactly one place — the scan overview page;
-Steam library info lives on the Steam Game Library page and the card to its left; each has its own job, without redundant stacking.
+The **widget chart dock** to the right of the usage ring in the Disk Overview offers three switchable tabs:
+1. **Free-space trend**: daily free-space snapshots for the current drive rendered as a vertical bar chart (hover any bar for date and free space);
+2. **Cleanups**: the 5 most recent space-freeing cleanup events on this drive;
+3. **Type distribution**: vertical bar chart of the largest file extensions after a full-disk scan.
 
 ### Themes
 
@@ -646,43 +647,68 @@ If the scheduled time passed while it was closed, a catch-up run happens immedia
 
 ```
 O-Cleaner\
-├─ 启动 O-Cleaner.bat      double-click to start
-├─ app.py                  main program (scan / full-disk scan / API / deletion / conversion / resource packs / AI calls)
+├─ 启动 O-Cleaner.bat      double-click to start (verifies Python 3.8+ runtime)
+├─ app.py                  entry point and backward-compatible symbol export shim
+├─ ps_scripts.py           PowerShell script template constants
+├─ ocleaner\               core standard-library package
+│   ├─ __init__.py         package exports
+│   ├─ core.py             scan engines, identification rules, game libraries, and HTTP routes
+│   ├─ store.py            atomic JSON writes (_atomic_write), mtime-cached reads, and locks
+│   ├─ deleter.py          3-state deletion (rm_tree_strict), lock precheck, reparse guard, recovery
+│   ├─ measure.py          in-process os.scandir measurement primitives (no PowerShell cold-start)
+│   └─ credentials.py      Windows DPAPI credential encryption (prevents secret leaks on folder copy)
 ├─ README.md               project introduction
 ├─ docs\
-│   └─ USAGE.md            this file (full usage guide)
+│   ├─ USAGE.md            full usage guide (Chinese)
+│   ├─ USAGE-en.md         this file (full usage guide in English)
+│   ├─ ROADMAP.md          project roadmap
+│   ├─ CUSTOMIZE.md        custom data bundle specification
+│   └─ DEV-PLAYBOOK.md     development and testing playbook
 ├─ config\
-│   ├─ drives.json         drive letters and app info (port, etc.)
+│   ├─ drives.json         app info and default port
 │   ├─ targets.json        cleanup target definitions + one-click presets
-│   ├─ filetypes.json      auto-identification knowledge base (the full-disk scan uses it to explain every item)
+│   ├─ filetypes.json      auto-identification knowledge base (42 rules)
+│   ├─ kb-en.json          English translations for knowledge-base and resource-pack long texts
 │   ├─ game-names.json     Chinese game name mapping (display only, freely extendable)
 │   ├─ convert.json        conversion unit table (includes an expression example)
 │   ├─ custom-rules.json   your saved custom rules (generated after running)
-│   ├─ ai.json             your own AI API configuration (generated after running; contains the API Key; gitignored)
-│   └─ packs-user\         your imported resource packs (generated after running; gitignored)
+│   ├─ custom-overrides.json your saved custom explanation & badge overrides (generated after running)
+│   ├─ fs-groups.json      custom aggregation groups (generated after running)
+│   ├─ game-libs.json      custom game library paths (generated after running)
+│   ├─ engine_speed.json   measured scan engine speed cache (auto-invalidated across PCs)
+│   ├─ ai.json             your own AI API configuration (API Key encrypted via DPAPI; gitignored)
+│   ├─ sync.json           GitHub Gist cloud sync configuration (Token encrypted via DPAPI; gitignored)
+│   └─ packs-user\         your imported/updated resource packs (generated after running; gitignored)
 ├─ packs\
 │   ├─ README.md           resource pack format, matching semantics, and safety boundaries
 │   ├─ index.json          pack manifest ("Check updates from GitHub" downloads according to it)
-│   └─ *.json              built-in packs: windows-system / games-platform / games-titles / apps-common
+│   └─ *.json              5 built-in packs: windows-system / games-platform / games-titles / apps-common / explanations
 ├─ web\
-│   └─ index.html          the interface (HTML + CSS + JS all in this one file)
+│   └─ index.html          the interface (HTML + CSS + JS + bilingual dictionary all in one file)
 ├─ tools\
-│   ├─ selftest.py         functional self-tests (300+ assertions)
 │   ├─ lint_rules.py       rules and resource pack linter (safety gate before release/contribution)
-│   ├─ _lint_selftest.py   reverse defect-injection self-test for the linter itself (knowledge base 15 classes + resource packs 20 classes + script templates 5 classes)
-│   ├─ cdp_check.js        real-browser rendering check (uses system Edge/Chrome, zero install)
+│   ├─ _lint_selftest.py   reverse defect-injection self-test for the linter itself (44 cases)
+│   ├─ guard_matrix.py     50-case deletion guardrail matrix + rule unit self-check
+│   ├─ unit_test.py        fast pure-logic unit tests (24 cases, <2s)
+│   ├─ selftest.py         full functional self-tests (590+ assertions)
+│   ├─ cdp_check.js        real-browser rendering check (140+ assertions, uses system Edge/Chrome)
 │   ├─ doctor.py           environment self-check for new devices
 │   ├─ fix-encoding.ps1    the single canonical tool for the encoding and line-ending contract
-│   ├─ make_package.py     package into a copyable zip (in-memory packaging, no staging directory)
-│   ├─ sync_packs.py       consistency check and sync between the main repo's packs/ and the public distribution repo
+│   ├─ make_package.py     package portable zip (in-memory packaging with module integrity check)
+│   ├─ make_exe.py         build standalone zip embedding official Python runtime
+│   ├─ sync_packs.py       consistency check and sync between main repo packs/ and public packs repo
 │   └─ local-cases.json.example   clean template for real local cases
-├─ data\history.json            cleanup history and cumulative statistics (generated after running)
-├─ schedule.json           schedule settings (generated after running)
+├─ data\                   runtime data directory (generated after running)
+│   ├─ history.json        cleanup history and cumulative statistics
+│   ├─ schedule.json       schedule settings
+│   ├─ disk-trend.json     daily free-space trend snapshots per drive
+│   ├─ game-history.json   daily game-library total size snapshots
+│   ├─ pending-deletes.json  staging journal for interrupted deletions (restored on next startup)
+│   └─ receipts\           itemized JSON receipts for every cleanup
 └─ LICENSE / CONTRIBUTING.md / SECURITY.md / HANDOFF.md
 ```
 
-`data\history.json`, `schedule.json`, and `config/custom-rules.json` are runtime data;
-to reset to factory state, just delete them (the program is unaffected).
+The entire `data\` directory holds runtime state; to reset to factory state, simply delete `data\` and user-generated files in `config\` (the program itself is unaffected).
 
 > The repository also contains `.github\workflows\ci.yml` (CI's three jobs) and `.gitattributes`
 > (the declaration of the line-ending and encoding contract). The former only runs on GitHub; the latter decides which line endings files must use.
@@ -736,7 +762,7 @@ The following deletion targets are hard-rejected, even if `config/targets.json` 
 Things never suggested for cleanup include: user documents, pictures, desktop files, installed program bodies, downloaded AI models
 (like `.ollama\models`), and the `Windows\Installer` and `WinSxS` component stores.
 
-Deletion is a direct delete, not through the Recycle Bin. A confirmation dialog lists the exact paths and sizes before execution.
+Deletion is tiered by risk level: low/medium-risk caches are deleted directly; high-risk items are moved to the Recycle Bin by default (you can uncheck this in the confirmation dialog, or purge only the newly trashed items from the result dialog afterwards); user-selected personal/program data directories are **forced into the Recycle Bin** as a safety net. A confirmation dialog lists the exact paths, sizes, and file counts before execution.
 For the full guardrail list and the corresponding regression assertions, see [SECURITY.md](../SECURITY.md).
 
 ### The Parsing Layer's Contract: Return As-Is, Don't Guess Shapes for Callers
@@ -772,5 +798,5 @@ then it recovers automatically. This is the only side effect; it does not damage
 No. All `config\*.json` changes take effect by refreshing the page.
 
 **Q: How to fully reset?**
-Delete `data\history.json`, `schedule.json`, and `config\custom-rules.json`,
+Delete the `data\` directory (which holds `history.json`, `schedule.json`, `disk-trend.json`, `receipts\`, etc.) and `config\custom-rules.json` / `config\custom-overrides.json`,
 then restore `config\convert.json` to its default contents — that's a brand-new state.

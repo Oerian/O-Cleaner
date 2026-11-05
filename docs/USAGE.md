@@ -44,6 +44,9 @@ cd /d "你的 O-Cleaner 目录"
 | `--data-dir D:\oc-data` | 数据存档目录重定向：历史记录、配置、定时任务等运行数据放到指定位置（也可用环境变量 `OC_DATA_DIR`） |
 | `--scan-only` | 只打印一份文字版扫描清单，不开服务 |
 | `--scan-only --drive D` | 扫描指定盘 |
+| `--fullscan-only` | 只打印一份磁盘占用树，不开服务（可配合 `--drive D --depth N`） |
+| `--lint` | 只运行知识库与资源包规则 linter（`--strict`），不开服务 |
+| `--version` | 打印当前版本号后退出 |
 
 ### 数据存档目录与 U 盘携带
 
@@ -51,19 +54,21 @@ cd /d "你的 O-Cleaner 目录"
 运行数据**都在数据存档目录里，界面右栏「运行环境自检」会显示它的位置：
 
 - **默认跟程序同目录**：绿色便携，整个 O-Cleaner 文件夹放进 U 盘或拷到
-  别的电脑，数据跟着走；拔下即带走，不留系统痕迹。
+  别的电脑，数据跟着走；拔下即带走，不留系统痕迹。其中本机敏感凭据（`config\ai.json` 的 AI 密钥与 `config\sync.json` 的 Gist 令牌）经 Windows DPAPI 绑定当前用户加密落盘，拷到别的电脑会自动失效清空，不会泄露。
 - **程序目录只读或想单独备份数据**：用 `--data-dir <路径>` 或环境变量
   `OC_DATA_DIR` 把运行数据重定向到任意可写位置（U 盘、别的硬盘都行），
   启动日志与自检面板会如实标注「已重定向」。
 - **迁移 / 备份**：把数据存档目录整个拷走即可；换机后放回对应位置（或用
   同样的 `--data-dir` 指过去）即完整还原。
 
-自测（300+ 项断言，含真实删除与 HTTP 端到端；条数依机器环境浮动）：
+自测与门禁（含秒级快检与全量端到端自测；条数依机器环境浮动）：
 
 ```
-python -X utf8 tools\selftest.py
 python -X utf8 tools\lint_rules.py --strict      # 规则与资源包门禁
 python -X utf8 tools\_lint_selftest.py           # 验证上一道门禁确实能检出缺陷
+python -X utf8 tools\guard_matrix.py             # 删除护栏 50 项对抗矩阵 + 规则单元自检
+python -X utf8 tools\unit_test.py                # 24 项纯逻辑快速单测（2 秒内跑完，无磁盘写副作用）
+python -X utf8 tools\selftest.py                 # 590+ 项全量自测（含真实删除与 HTTP 端到端）
 ```
 
 还有一道浏览器检查，需要先启动服务（用系统已装的 Edge/Chrome，无需额外安装）：
@@ -80,22 +85,22 @@ node tools\cdp_check.js http://127.0.0.1:8770
 
 ### 界面布局与导航
 
-界面分三栏：**左侧栏**（盘符选择、预设、自定义目录、磁盘趋势），
-**中间主区**（清理项卡片、全盘占用排行、Steam 游戏库），
-**右侧栏**（自检、资源包、AI、统计、规则、历史等折叠面板）。
+界面采用**顶栏 + 左右双栏独立滚动 + 常驻底栏**设计：
+- **顶栏**：右侧是盘符卡片（点击切盘），中间是功能视图导航、主题切换（`亮 / 暗 / 随`）与界面语言切换（`A / 中 / EN`）。
+- **左侧主区（`#leftcol`）**：自上而下依次为工具栏（重新扫描、全盘扫描、引擎偏好、扫描层数、大文件排行、重复大文件、下载整理、紧凑模式、全选/全不选、清理范围、自定义目录）、**磁盘概览**（含容量条、150px 占比环及环右侧三页签**组件图表坞**）以及当前功能视图（**占用排行** 或 **游戏占用概览**）。
+- **右侧栏（`aside`）**：运行环境自检、一键预设、资源包、AI 助手、累积清理与换算、自定义规则（含 GitHub Gist 云端同步与数据包导入导出）、定时自动清理、最近清理记录与说明（共 9 个可折叠面板）。
 
-两个功能页常驻在顶部标签里：**常规清理** 与 **Steam 游戏库**，
-点标签即切换，当前页高亮；不需要在多层按钮里找入口。
-右侧栏面板较多（十余个），每个折叠面板可点标题展开 / 收起；
-侧栏顶部有一条**面板目录**，列出全部面板标题，点击任意一项会展开并滚动到那个面板——
+两个功能页常驻在顶部导航条里：**扫描概览** 与 **游戏占用概览**，
+点按钮即切换，当前页高亮；不需要在多层按钮里找入口。
+右侧栏每个折叠面板可点标题展开 / 收起（折叠状态本机记忆）；
+侧栏顶部有一条吸顶的**面板目录条**，列出全部面板标题，点击任意一项会自动展开并滚动到那个面板——
 找不到功能时先看目录条，不用逐个展开翻找。
-按 `Esc` 可返回上一级（细分查看、下钻层级等），扫描进行中会提示稍后再退。
+占用排行支持键盘操作（`↑` / `↓` 移动焦点行、`Space` 勾选/取消、`Enter` 下钻进入子目录），按 `Esc` 可逐级返回上一级（关闭弹窗 → 退回上一层目录 → 返回扫描概览），扫描进行中会提示稍后再退。
 
-左侧栏的**磁盘趋势**是本盘近 30 天的可用空间阶梯折线，每个转折点就是一次清理；
-鼠标放到转折点附近，会显示那次清理的时间、释放容量与清理后的可用空间。
-
-磁盘概览（容量、使用率、可清理/保留/未识别占比）只出现在扫描概览页一处；
-Steam 库信息在 Steam 游戏库页与其左侧卡片，两处各司其职，不重复堆叠。
+磁盘概览中的**组件图表坞**（全盘扫描后位于占比环右侧）提供三个可切换页签：
+1. **剩余空间趋势**：按盘每日记录可用空间快照，以竖向柱状图呈现最近波动，悬停显示当日日期与剩余容量；
+2. **清理记录**：列出本盘最近 5 次释放空间的清理时间与释放量；
+3. **类型分布**：全盘扫描后按扩展名聚合展示占用最大的文件类型柱状图。
 
 ### 主题
 顶部导航旁有「亮 / 暗 / 随」三个小按钮：白天模式、黑夜模式、跟随系统。
@@ -649,40 +654,62 @@ D:\某缓存目录                  → 17.9 GB
 
 ```
 O-Cleaner\
-├─ 启动 O-Cleaner.bat      双击启动
-├─ app.py                  主程序（扫描 / 全盘扫描 / API / 删除 / 换算 / 资源包 / AI 调用）
+├─ 启动 O-Cleaner.bat      双击启动（含 Python 3.8+ 运行时校验）
+├─ app.py                  启动入口与向后兼容符号导出层
+├─ ps_scripts.py           PowerShell 脚本模板常量
+├─ ocleaner\               核心业务标准库包
+│   ├─ __init__.py         包导出声明
+│   ├─ core.py             扫描引擎、识别规则、游戏库与 HTTP 路由主实现
+│   ├─ store.py            原子写（_atomic_write）、带缓存 JSON 读取与进程内/跨进程锁
+│   ├─ deleter.py          三态删除（rm_tree_strict）、占用预检、重解析点保护与中断恢复
+│   ├─ measure.py          进程内 os.scandir 测量原语（免 PowerShell 冷启动）
+│   └─ credentials.py      Windows DPAPI 凭据加密（防拷机泄露密钥）
 ├─ README.md               项目简介
 ├─ docs\
-│   └─ USAGE.md            本文件（完整使用指南）
+│   ├─ USAGE.md            本文件（完整使用指南）
+│   ├─ USAGE-en.md         英文完整使用指南
+│   ├─ ROADMAP.md          近期 / 中期 / 远期路线图
+│   ├─ CUSTOMIZE.md        自定义数据包格式规范
+│   └─ DEV-PLAYBOOK.md     开发与测试工作规范
 ├─ config\
-│   ├─ drives.json         盘符与应用信息（端口等）
+│   ├─ drives.json         应用信息与默认端口
 │   ├─ targets.json        清理目标定义 + 一键预设
-│   ├─ filetypes.json      自动识别知识库（全盘扫描用它解释每一项）
+│   ├─ filetypes.json      自动识别知识库（42 条规则，全盘扫描用它解释每一项）
+│   ├─ kb-en.json          内置知识库与资源包长文本的英文译文
 │   ├─ game-names.json     游戏中文译名映射（纯显示，可自由扩充）
 │   ├─ convert.json        换算单位表（含表达式范例）
 │   ├─ custom-rules.json   你保存的自定义规则（运行后生成）
-│   ├─ ai.json             你自己的 AI 接口配置（运行后生成，含 API Key，已 gitignore）
-│   └─ packs-user\         你导入的资源包（运行后生成，已 gitignore）
+│   ├─ custom-overrides.json 你保存的自定义释义与徽章覆盖（运行后生成）
+│   ├─ fs-groups.json      自定义聚合组（运行后生成）
+│   ├─ game-libs.json      自定义游戏库目录（运行后生成）
+│   ├─ engine_speed.json   本机扫描引擎实测速度缓存（运行后生成，换机自动失效）
+│   ├─ ai.json             自有 AI 接口配置（运行后生成，API Key 经 DPAPI 加密，已 gitignore）
+│   ├─ sync.json           GitHub Gist 云同步配置（运行后生成，Token 经 DPAPI 加密，已 gitignore）
+│   └─ packs-user\         你导入或更新的资源包（运行后生成，已 gitignore）
 ├─ packs\
 │   ├─ README.md           资源包格式、匹配语义与安全边界
 │   ├─ index.json          包清单（「从 GitHub 检查更新」按它逐个下载）
-│   └─ *.json              内置包：windows-system / games-platform / games-titles / apps-common
+│   └─ *.json              内置 5 组资源包：windows-system / games-platform / games-titles / apps-common / explanations
 ├─ web\
-│   └─ index.html          界面（HTML + CSS + JS 全在这一个文件里）
+│   └─ index.html          界面（HTML + CSS + JS + 双语词典全在这一个文件里）
 ├─ tools\
-│   ├─ selftest.py         功能自测（300+ 项断言）
 │   ├─ lint_rules.py       规则与资源包 linter（发布/贡献前的安全闸门）
-│   ├─ _lint_selftest.py   linter 自身的反向缺陷注入自测（知识库 15 类 + 资源包 20 类 + 脚本模板 5 类）
-│   ├─ cdp_check.js        真实浏览器渲染检查（用系统 Edge/Chrome，零安装）
+│   ├─ _lint_selftest.py   linter 自身的反向缺陷注入自测（44 项）
+│   ├─ guard_matrix.py     删除护栏 50 项对抗矩阵 + 规则单元自检
+│   ├─ unit_test.py        快速纯逻辑单元测试（24 项，2 秒内跑完）
+│   ├─ selftest.py         全量功能自测（590+ 项断言，含真实删除与 HTTP 端到端）
+│   ├─ cdp_check.js        真实浏览器渲染检查（140+ 项断言，用系统 Edge/Chrome，零安装）
 │   ├─ doctor.py           新设备环境自检
 │   ├─ fix-encoding.ps1    编码与换行契约的唯一规范化工具
-│   ├─ make_package.py     打包成可拷贝的 zip（内存打包，无暂存目录）
+│   ├─ make_package.py     打包便携版 zip（内存打包，带模块完整性校验）
+│   ├─ make_exe.py         构建内嵌官方 Python 运行时的免安装版 zip
 │   ├─ sync_packs.py       主仓 packs/ 与公开分发仓的一致性校验与同步
 │   └─ local-cases.json.example   本机真实用例的干净模板
 ├─ data\                   运行数据（运行后生成，整目录即全部历史状态）
 │   ├─ history.json        清理历史与累计统计
 │   ├─ schedule.json       定时设置
-│   ├─ disk-trend.json     各盘用量趋势快照
+│   ├─ disk-trend.json     各盘剩余空间每日趋势快照
+│   ├─ game-history.json   游戏库总体积每日趋势快照
 │   ├─ pending-deletes.json  删除中断时的暂存日志（启动时据此还原）
 │   └─ receipts\           每次清理的逐项回执
 └─ LICENSE / CONTRIBUTING.md / SECURITY.md / HANDOFF.md
@@ -744,7 +771,7 @@ linter 会做八项检查：结构校验、资源包结构、语义自相矛盾�
 不列入清理建议的内容包括：用户文档、图片、桌面文件、已安装程序本体、已下载的 AI 模型
 （如 `.ollama\models`）、`Windows\Installer` 与 `WinSxS` 组件存储。
 
-删除为直接删除，不经过回收站。执行前会弹出确认窗口，列出确切的路径与大小。
+删除按风险分级执行：中/低风险缓存类为直接删除；高风险项默认移入系统回收站（可在确认弹窗取消勾选，清理完成后也可在结果弹窗一键精确清除本次移入回收站的条目）；用户显式勾选的个人数据或程序数据目录整删时**强制移入回收站**兜底。执行前会弹出确认窗口，列出确切的路径、大小与文件数。
 完整的护栏清单与对应的回归断言见 [SECURITY.md](../SECURITY.md)。
 
 ### 解析层的契约：原样返回，不替调用方猜形状

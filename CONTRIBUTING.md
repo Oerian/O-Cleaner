@@ -97,9 +97,12 @@ python -X utf8 tools/lint_rules.py --strict     # 第 [2/8] 节专门检查资�
 ### 运行测试
 
 ```
-python -X utf8 tools/selftest.py              # 580+ 项断言，含真实删除与 HTTP 端到端
 python -X utf8 tools/lint_rules.py --strict   # 规则与资源包门禁（8 项检查，警告计为失败）
 python -X utf8 tools/_lint_selftest.py        # 验证 linter 有检出能力（知识库 15 类 + 资源包 20 类 + 脚本模板 5 类注入，共 44 项）
+python -X utf8 tools/guard_matrix.py          # 删除护栏 50 项对抗矩阵 + 规则单元自检（秒级，动护栏必跑）
+python -X utf8 tools/unit_test.py             # 纯逻辑快速单元测试（24 项，无磁盘写副作用，2 秒内跑完）
+python -m pyflakes app.py ps_scripts.py ocleaner tools   # Python 静态死导入与未定义符号检查
+python -X utf8 tools/selftest.py              # 590+ 项断言，含真实删除与 HTTP 端到端
 node tools/cdp_check.js "http://127.0.0.1:8770"   # 真实浏览器渲染与交互检查（140+ 项断言）
 ```
 
@@ -115,8 +118,8 @@ CI 分成两级，别指望每次推送都能立刻拿到完整结论：
 
 | 级别 | 作业 | 触发条件 | 耗时量级 |
 |---|---|---|---|
-| 快 | `规则 linter`（编码契约 + .py/JS 语法 + linter + 缺陷注入） | 每次推送、PR、手动 | 十秒级 |
-| 慢 | `自测`、`界面渲染检查` | 每晚定时、或手动触发（推荐） | 分钟级 / 十分钟级 |
+| 快 | `规则 linter`（编码契约 + .py/JS 语法 + linter + 缺陷注入 + 删除护栏矩阵 `guard_matrix.py` + 快速单测 `unit_test.py`） | 每次推送、PR、手动 | 十秒级 |
+| 慢 | `自测`（`selftest.py`）、`界面渲染检查`（`cdp_check.js`） | 每晚定时、或手动触发（推荐） | 分钟级 / 十分钟级 |
 
 慢的那级之所以慢，主要成本是全盘扫描：CI 机器的系统盘塞满十万级小文件，
 一次扫描要十分钟以上，而界面作业必须等它（超时按环境条件记「跳过」）。
@@ -141,11 +144,12 @@ gh workflow run ci.yml --repo <owner>/<repo> --ref main
   而函数已改名为 `renderCumulative`，于是这条断言静默失去保护作用，却依然「通过」
 - 新增功能时，同时加一条能证伪它的断言
 
-### 前端约定
+### 前后端架构约定
 
-- `web/index.html` 是单文件（HTML + CSS + JS），不引入构建步骤、不引第三方库
-- 保持零运行时依赖：只用 Python 标准库 + 系统自带的 PowerShell/Edge
-- 危险操作（删除）必须有确认弹窗，列出确切路径与大小
+- **后端模块化（`app.py` + `ocleaner/`）**：根目录 `app.py` 保持为启动入口与向后兼容导出层（re-export `ocleaner.core` 全部符号），核心实现位于 `ocleaner/` 标准库子包（`core.py`、`store.py`、`deleter.py`、`measure.py`、`credentials.py` 等）。新增子模块时必须同步加入 `tools/make_package.py` 的 `INCLUDE` 清单。
+- **前端单文件（`web/index.html`）**：HTML + CSS + JS + 双语词典集中于单文件，不引入构建步骤、不引第三方库；所有动态插入 `innerHTML` 的字段必须经过 `esc()` 转义；新增渲染函数需注册到 `setLang()` 的语言切换重绘列表中。
+- **零运行时依赖**：只用 Python 标准库 + 系统自带的 PowerShell / Win32 API / Edge。
+- **确认与焦点约束**：危险操作（删除）必须有确认弹窗，列出确切路径与大小，且弹窗开启时焦点默认落于安全按钮（「取消」）。
 
 ### 编码与换行（必须遵守）
 
@@ -165,9 +169,13 @@ PowerShell 5.1 在中文 Windows 上会把没有 BOM 的文件按 GBK 读取，�
 
 ## 三、提交前自查清单
 
+- [ ] `powershell -NoProfile -ExecutionPolicy Bypass -File tools/fix-encoding.ps1 -Check` 通过
+- [ ] `python -m pyflakes app.py ps_scripts.py ocleaner tools` 0 告警
 - [ ] `tools/lint_rules.py --strict` 通过
 - [ ] `tools/_lint_selftest.py` 通过（linter 有检出能力）
-- [ ] `tools/selftest.py` 通过
+- [ ] `tools/guard_matrix.py` 通过（删除护栏 50 项矩阵 + 规则单元自检）
+- [ ] `tools/unit_test.py` 通过（24 项快速纯逻辑单测）
+- [ ] `tools/selftest.py` 通过（或受宿主删除配额限制时由 CI 权威验证）
 - [ ] 新增/修改的规则我亲手验证过识别结果符合预期
 - [ ] 如果我改了断言，是因为代码确实对了，而不是为了让它变绿
 - [ ] 危险组合（高风险 + 可清理）已登记豁免并写明理由

@@ -109,17 +109,17 @@
 `packs/index.json` 是本目录的清单：
 
 ```json
-{ "version": 1, "updated": "2026-10-12",
+{ "version": 1, "updated": "2026-10-13",
   "packs": ["windows-system.json", "apps-common.json",
-            "games-platform.json", "games-titles.json"] }
+            "games-platform.json", "games-titles.json",
+            "explanations.json"] }
 ```
 
 界面上的「从 GitHub 检查更新」会按这个清单逐个下载并导入。
 默认远端是**独立的公开仓库 [`O-Cleaner-packs`](https://github.com/Oerian/O-Cleaner-packs)**
-（与本目录保持同内容），任何人都可以更新；远端地址也可在界面上改成自己的。
+（与本目录保持同内容），任何人都可以更新；远端地址也可在界面上改成自己的（所有远端抓取均经过 `_is_unsafe_remote` 安全校验）。
 
-> 历史说明：主仓库是私有的，raw 链接对外不可访问，2026-10-12 起改为
-> 单独公开仓分发。本目录与公开仓内容一致，更新包时两边同步提交 ——
+> 同步说明：主仓库（[`Oerian/O-Cleaner`](https://github.com/Oerian/O-Cleaner)）与独立资源包分发仓 [`O-Cleaner-packs`](https://github.com/Oerian/O-Cleaner-packs) 的 `packs/` 目录保持同内容，更新包时两边同步提交 ——
 > 同步用 `python tools/sync_packs.py check|push`（check 只读比对，push 走
 > GitHub Contents API），改完包跑一次 check 确认两边一致。
 

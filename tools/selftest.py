@@ -1127,8 +1127,12 @@ def phase1() -> None:
             # 不发真实网络请求、不碰真实 config/sync.json（指到临时文件）；
             # 拉取合并的落盘动作 stub 掉 —— 它的合并语义已由 bundle 导入测试覆盖。
             _sync_sv = {k: getattr(app, k) for k in
-                        ("_gist_request", "_export_bundle", "_import_bundle",
+                        ("_export_bundle", "_import_bundle",
                          "_SYNC_CFG_PATH")}
+            # _gist_request 已随 P2-1 迁入 ocleaner/integrations.py ——
+            # monkeypatch 目标必须在 integrations 模块上（core 命名空间不可见）
+            import ocleaner.integrations as _integ
+            _gist_orig = _integ._gist_request
             try:
                 import tempfile as _tmpmod
                 app._SYNC_CFG_PATH = Path(_tmpmod.gettempdir()) / \
@@ -1149,7 +1153,7 @@ def phase1() -> None:
                                 ensure_ascii=False)}}}
                     raise RuntimeError(f"unexpected method {method}")
 
-                app._gist_request = _fake_gist
+                _integ._gist_request = _fake_gist
                 app._export_bundle = lambda: {
                     "kind": "ocleaner-custom", "version": 1,
                     "units": [], "overrides": {}, "rules": []}
@@ -1188,6 +1192,7 @@ def phase1() -> None:
                 _tmp_sync_cfg = app._SYNC_CFG_PATH   # 此刻指向测试临时文件
                 for k, v in _sync_sv.items():
                     setattr(app, k, v)
+                _integ._gist_request = _gist_orig    # 恢复 integrations 侧 stub
                 try:                                 # 只删临时文件，绝不动真实配置
                     Path(str(_tmp_sync_cfg)).unlink(missing_ok=True)
                 except Exception:
