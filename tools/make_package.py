@@ -127,6 +127,19 @@ def syntax_check_app() -> None:
 
 
 def build_zip(out_path: Path, ver: str) -> None:
+    # 清单完整性治理（批次 A5）：ocleaner/ 包随域拆分持续新增模块，
+    # 漏登记 = 发行包缺模块（启动级故障，import app 直接崩）。
+    # 以源码树为准做完整性校验，缺一个都拒绝出包。
+    for _p in sorted((ROOT / "ocleaner").glob("*.py")):
+        _rel = f"ocleaner/{_p.name}"
+        if _rel not in INCLUDE:
+            fail(f"清单缺漏：{_rel} 在源码树中但不在 INCLUDE "
+                 f"（请登记后重新打包）")
+    _py_tools = sorted((ROOT / "tools").glob("unit_test.py"))
+    for _p in _py_tools:
+        _rel = f"tools/{_p.name}"
+        if _rel not in INCLUDE:
+            fail(f"清单缺漏：{_rel} 在源码树中但不在 INCLUDE")
     payloads: list[tuple[str, bytes]] = []
     for rel in INCLUDE:
         p = ROOT / rel

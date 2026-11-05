@@ -32,6 +32,22 @@ HERE = TOOLS_DIR.parent                      # O-Cleaner 根目录
 sys.path.insert(0, str(HERE))
 import ocleaner.core as app  # noqa: E402 —— P2-1：实现主体在 ocleaner/core.py，selftest 的 monkeypatch 目标必须在 core 模块上
 
+def _impl_src() -> str:
+    """P2-1 拆分后的实现源码合集：core.py + ocleaner 包其余模块。
+
+    源码文本断言原来读 app.py 单文件；实现主体迁入 ocleaner/ 后，
+    断言对象改为「全部实现模块的拼接」，对后续域拆分免疫。
+    """
+    import glob as _glob
+    _base = os.path.dirname(app.__file__)
+    _parts = [open(app.__file__, encoding="utf-8").read()]
+    for _f in sorted(_glob.glob(os.path.join(_base, "*.py"))):
+        _bn = os.path.basename(_f)
+        if _bn in ("core.py", "__init__.py"):
+            continue          # core.py 已在首位；__init__ 只有 docstring
+        _parts.append(open(_f, encoding="utf-8").read())
+    return "\n".join(_parts)
+
 SANDBOX = Path("C:/_ocleaner_selftest")   # 与测试配置里的 %DRIVE%\_ocleaner_selftest 对应
 REAL_TARGETS = HERE / "config" / "targets.json"
 # 备份放进 gitignore 的运行数据目录：仓库 config/ 不再多出临时文件
@@ -326,8 +342,8 @@ def phase1() -> None:
     # 参数用 SW_HIDE=0；pythonw 缺失（嵌入式发行版）时退回 python.exe，
     # 靠 SW_HIDE 压住窗口 —— 两条路都不应再出现黑色命令行。
     check("一键提权重启无控制台窗口（pythonw 优先 + SW_HIDE）",
-          'with_name("pythonw.exe")' in open(app.__file__, encoding="utf-8").read()
-          and "SW_HIDE" in open(app.__file__, encoding="utf-8").read())
+          'with_name("pythonw.exe")' in _impl_src()
+          and "SW_HIDE" in _impl_src())
 
     # 运行数据统一收进 data/ 子目录（2026-10-29）：程序根目录不再散落 json
     check("运行数据统一收进 data/ 子目录",
@@ -1683,28 +1699,28 @@ def phase3_http() -> None:
         check("结果弹窗如实区分回收站项（不虚报释放量）",
               "→ 回收站" in html and "r.trashed > 0" in html)
         check("后端回收站删除带容量守卫（防静默转永久删除）",
-              "def rm_trash" in open(app.__file__, encoding="utf-8").read()
-              and "FOF_ALLOWUNDO" in open(app.__file__, encoding="utf-8").read()
-              and "超过该盘回收站容量上限" in open(app.__file__, encoding="utf-8").read())
+              "def rm_trash" in _impl_src()
+              and "FOF_ALLOWUNDO" in _impl_src()
+              and "超过该盘回收站容量上限" in _impl_src())
         # 删除游戏前的存档查询：新端点 + 前端异步回填的容器与「疑似」措辞
         check("删除游戏前会查询本地存档（端点 + 弹窗回填）",
-              "/__oc__/game-saves" in open(app.__file__, encoding="utf-8").read()
+              "/__oc__/game-saves" in _impl_src()
               and 'id="saveScan"' in html and "疑似本地存档" in html)
         # Epic/GOG 残留目录 2026-10-29 起聚合进「残留中心」（stOrphanPanel），
         # 跨平台勾选批量删；后端检测函数不变
         check("Epic/GOG 残留目录有检测与统一删除入口",
-              "def platform_install_roots" in open(app.__file__, encoding="utf-8").read()
+              "def platform_install_roots" in _impl_src()
               and "GAMES.platforms" in html and "allOrphans" in html
               and "recycleSel" in html)
         # 游戏占用趋势三件套（照磁盘趋势的快照/端点/折线模式）
         check("游戏占用趋势有三件套（快照/端点/折线）",
-              "def record_game_history" in open(app.__file__, encoding="utf-8").read()
-              and "/__oc__/game-history" in open(app.__file__, encoding="utf-8").read()
+              "def record_game_history" in _impl_src()
+              and "/__oc__/game-history" in _impl_src()
               and 'id="gameTrendCv"' in html and "function drawGameTrend" in html)
         # 封面缩略图：服务端从 Steam librarycache 只读取图（appid 纯数字校验）
         check("游戏封面端点有路径安全校验且前端有缩略图",
-              '"/__oc__/game-cover"' in open(app.__file__, encoding="utf-8").read()
-              and "appid 必须是数字" in open(app.__file__, encoding="utf-8").read()
+              '"/__oc__/game-cover"' in _impl_src()
+              and "appid 必须是数字" in _impl_src()
               and 'class="gcover"' in html)
         # 回收建议折叠面板（建议卡已并入）+ 库分区页签已随合盘展示移除
         check("回收建议折叠面板就位且页签条已移除（独立建议卡已删）",
@@ -1741,7 +1757,7 @@ def phase3_http() -> None:
               and html.count('if (view !== "steam") switchView("full")') == 2)
         # 默认占位图：GET 恒 200（自定义图优先、内置 SVG 兜底）+ POST 校验
         # （dataURL、magic bytes、2MB 上限、reset），前端 onerror 链到该端点
-        _appsrc = open(app.__file__, encoding="utf-8").read()
+        _appsrc = _impl_src()
         check("占位图端点有内置兜底与上传校验，前端 onerror 已接入",
               "COVER_PLACEHOLDER_PATH" in _appsrc
               and "_PLACEHOLDER_SVG" in _appsrc
@@ -1755,8 +1771,8 @@ def phase3_http() -> None:
               and "dgRiskRestore" in html and 'localStorage.setItem(RISK_KEY, "1")' in html)
         # 磁盘趋势：快照落盘（每天每盘一条）+ 端点 + 前端 canvas 折线
         check("磁盘空间趋势有三件套（快照/端点/组件槽渲染）",
-              "def record_disk_snapshot" in open(app.__file__, encoding="utf-8").read()
-              and "/__oc__/disk-trend" in open(app.__file__, encoding="utf-8").read()
+              "def record_disk_snapshot" in _impl_src()
+              and "/__oc__/disk-trend" in _impl_src()
               and 'id="dwBody"' in html and 'id="dwTabs"' in html
               and "function drawDiskTrend" in html)
         check("磁盘卡组件槽（2026-11-03）：三组件可切换并记忆选择，双宿主（卡内/环右坞）",
@@ -1773,7 +1789,7 @@ def phase3_http() -> None:
         check("详情弹窗有「定位」与「复制路径」按钮",
               'id="dLocate"' in html and 'id="dCopy"' in html
               and 'select: !!select' in html
-              and "/select," in open(app.__file__, encoding="utf-8").read())
+              and "/select," in _impl_src())
         # 释义增强包：清单收录（linter 也会查），并有两仓同步工具
         idx = json.loads((HERE / "packs" / "index.json").read_text(encoding="utf-8"))
         check("释义增强包已收录进清单且有同步工具",
@@ -2473,7 +2489,7 @@ def phase4_repo() -> None:
     check("User-Agent 由版本常量派生（不再各写各的）",
           app.APP_UA == f"O-Cleaner/{app.APP_VERSION}"
           and '"User-Agent": "O-Cleaner/' not in
-          (app.__file__ and open(app.__file__, encoding="utf-8").read()),
+          (app.__file__ and _impl_src()),
           app.APP_UA)
 
     # 仓库专用文件：分发包里不该有 .gitattributes / .github，

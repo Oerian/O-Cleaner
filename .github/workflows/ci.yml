@@ -79,6 +79,18 @@ jobs:
       - name: 删除护栏矩阵（必须拒绝 / 必须放行 / 规则单元自检）
         run: python -X utf8 tools/guard_matrix.py
 
+      # 快速单元测试（24 项纯逻辑断言，约 2 秒）：入口守卫 / DPAPI /
+      # SSRF 收口 / 测量原语 / 引擎校准换机失效 / Junction 护栏。
+      # 多数推送不带 [ci] 只跑快级 —— 这 2 秒让纯逻辑回归每次推送都有兜底。
+      - name: 快速单元测试（纯逻辑回归）
+        run: python -X utf8 tools/unit_test.py
+
+      # 快速单元测试（24 项纯逻辑断言，约 2 秒）：入口守卫 / DPAPI /
+      # SSRF 收口 / 测量原语 / 引擎校准换机失效 / Junction 护栏。
+      # 多数推送不带 [ci] 只跑快级 —— 这 2 秒让纯逻辑回归每次推送都有兜底。
+      - name: 快速单元测试（纯逻辑回归）
+        run: python -X utf8 tools/unit_test.py
+
       # 必须检查**全部** script 块：旧版用 [regex]::Match 只取第一个匹配，
       # 而 index.html 的第一个 script 块只有 400 多字节（一小段初始化），
       # 真正 200 KB+ 的应用主体是第二个块 —— 主脚本写坏语法，这道闸门照样绿。

@@ -81,11 +81,17 @@ Get-ChildItem -LiteralPath $Root -Recurse -File | ForEach-Object {
 
     $crlf = ([regex]::Matches($text, "`r`n")).Count
     $loneLf = ([regex]::Matches($text, "(?<!`r)`n")).Count
+    # 双重 CR（CR CR LF）：此前 Python 脚本 newline='' 写入与本项目归一化
+    # 组合出的「不动点」—— 旧归一化对它原样保留，CPython 解析器又容忍
+    # 它，导致污染静默积累；唯一暴露点是反斜杠续行（ocleaner/core.py
+    # 迁移时实测断过一次）。检测 + 归一一起补上。
+    $doubleCr = ([regex]::Matches($text, "`r`r")).Count
     $nonAscii = 0
     foreach ($b in $bytes) { if ($b -gt 127) { $nonAscii++ } }
 
     $need = @()
     if ($loneLf -gt 0) { $need += "LF->CRLF ($loneLf)" }
+    if ($doubleCr -gt 0) { $need += "CR->CRLF ($doubleCr)" }
     if ($rule.Encoding -eq 'utf8bom' -and -not $hasBom) { $need += 'add BOM' }
     if ($rule.Encoding -eq 'utf8' -and $hasBom) { $need += 'remove BOM' }
     if ($rule.Encoding -eq 'ascii' -and $nonAscii -gt 0) { $need += "non-ASCII ($nonAscii bytes)" }
@@ -101,8 +107,9 @@ Get-ChildItem -LiteralPath $Root -Recurse -File | ForEach-Object {
         return
     }
 
-    # normalize line endings
-    $body = ($text -replace "`r`n", "`n") -replace "`n", "`r`n"
+    # normalize line endings: strip ALL CR first then re-add CRLF so the
+    # pass is idempotent (a CR-CR-LF sequence is truly collapsed, not kept)
+    $body = ($text -replace "`r", "") -replace "`n", "`r`n"
     if ($body.Length -gt 0 -and $body[0] -eq [char]0xFEFF) { $body = $body.Substring(1) }
 
     if ($rule.Encoding -eq 'ascii') {

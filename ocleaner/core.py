@@ -67,6 +67,12 @@ from ps_scripts import (PS_BIG_FILES, PS_DIR_KIND, PS_LOCK_HOLDERS,
 from ocleaner.credentials import _dpapi_protect, _dpapi_unprotect
 from ocleaner.measure import (_py_walk_files, _py_measure_tree,
                               _py_measure_glob, _py_dir_kind, _py_tree_size)
+from ocleaner.store import (_cache, _lock, _cross_process_lock,
+                            _load_json, _atomic_write)
+from ocleaner.deleter import (rm, rm_tree_strict, _journal_stage,
+                              _journal_done, recover_pending_deletes,
+                              rm_trash, _precheck_locked_files,
+                              _is_reparse_dir, _long_path)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -283,29 +289,6 @@ def _guarded_zone(parts: list[str]) -> str:
     return ""
 
 
-def _long_path(p: str) -> str:
-    """把 8.3 短名（PROGRA~1）展开成长名，失败时原样返回。
-
-    Windows 每个目录都有一个 8.3 短名别名，短名和长名指向同一个目录。
-    护栏是按路径**分段名**比对的，短名 `PROGRA~1` 不会命中 `program files`
-    这条规则 —— 也就是说 `C:\\PROGRA~1\\xxx` 可以绕过整张名单。
-    这里用 GetLongPathNameW 把短名展开后再走同一套检查。
-    """
-    if not IS_WINDOWS or "~" not in p:
-        return p
-    try:
-        import ctypes
-        from ctypes import wintypes
-        get_long = ctypes.windll.kernel32.GetLongPathNameW
-        get_long.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
-        get_long.restype = wintypes.DWORD
-        buf = ctypes.create_unicode_buffer(32768)
-        n = get_long(p, buf, 32768)
-        if n and buf.value:
-            return buf.value
-    except Exception:
-        pass
-    return p
 
 CREATE_NO_WINDOW = 0x08000000
 IS_WINDOWS = os.name == "nt"
@@ -2032,7 +2015,36 @@ def _eng_calibrate_mft(letter: str, root: str) -> None:
         _ENG_CALIB_LOCK.release()
 
 
-_eng_speeds_load()
+def _dpapi_migrate_plaintext() -> None:
+    """P1-4 收尾（批次 A3）：启动时检测到明文凭据即静默加密回写。
+
+    DPAPI 升级此前依赖「用户下次保存」——但用户可能永不触发保存，
+    换机防泄露的迁移目标应尽早生效。只重写「文件里确为明文」的凭据，
+    已是 dpapi: 密文的不动（避免每次启动无谓重写文件）。
+    凭据读写函数（load/save_ai_config 等）定义在本文件后段，
+    所以本函数只由 main() 在全量初始化完成后调用。
+    """
+    try:
+        _ai_raw = {}
+        if AI_CONFIG_PATH.exists():
+            _ai_raw = json.loads(AI_CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(_ai_raw, dict) and str(_ai_raw.get("api_key") or "").strip() \
+                and not str(_ai_raw["api_key"]).startswith("dpapi:"):
+            save_ai_config(load_ai_config())   # load 解密/明文原样 → save 加密落盘
+    except Exception:
+        pass
+    try:
+        _sy_raw = {}
+        if _SYNC_CFG_PATH.exists():
+            _sy_raw = json.loads(_SYNC_CFG_PATH.read_text(encoding="utf-8"))
+        if isinstance(_sy_raw, dict) and str(_sy_raw.get("token") or "").strip() \
+                and not str(_sy_raw["token"]).startswith("dpapi:"):
+            _cfg = _sync_cfg()
+            _cfg["token"] = _sy_raw["token"]   # 明文原样传入，保存时加密
+            _sync_save_cfg(_cfg)
+    except Exception:
+        pass
+
 
 
 def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dict:
@@ -2792,71 +2804,6 @@ def is_system_drive(letter: str) -> bool:
 #  配置加载
 # ======================================================================
 
-_cache: dict = {}
-_lock = threading.RLock()
-# 可重入锁：HTTP 路由层（2026-11-05 P2-3）把 config 读-改-写整段
-# 包进 _lock，路由体内嵌套调用的 append_history 等也拿同一把锁 ——
-# threading.Lock 不可重入会当场死锁，必须用 RLock。
-
-
-@contextmanager
-def _cross_process_lock(name: str, timeout: float = 3.0):
-    """跨进程互斥（同一份数据被两个实例同时改写时用）。
-
-    为什么需要：`_lock` 只在**本进程**内有效。用户双开两个实例（各自端口）
-    时，两边的 append_history 都是「读 history.json → 改 → 写回」，
-    交错执行就会丢记录 —— 而且丢的是清理凭据，事后无法追溯删了什么。
-
-    Windows 用 msvcrt 的字节区间锁，其他平台用 fcntl.flock。锁文件常驻
-    数据目录（只创建不删除，避免触发本项目的安全删除钩子）。
-
-    超时后**放行**而不是报错：宁可极小概率丢一条历史，也不能因为别人
-    持锁就把用户的清理卡死。
-    """
-    path = RUNTIME_DIR / f".oc-{name}.lock"
-    fh = None
-    locked = False
-    try:
-        try:
-            RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-            fh = open(path, "a+b")
-        except OSError:
-            yield          # 连锁文件都建不了（只读目录）：降级为无锁
-            return
-        deadline = time.time() + timeout
-        while True:
-            try:
-                if IS_WINDOWS:
-                    import msvcrt
-                    fh.seek(0)
-                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                locked = True
-                break
-            except OSError:
-                if time.time() >= deadline:
-                    break
-                time.sleep(0.02)
-        yield
-    finally:
-        if fh is not None:
-            if locked:
-                try:
-                    if IS_WINDOWS:
-                        import msvcrt
-                        fh.seek(0)
-                        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-                    else:
-                        import fcntl
-                        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-                except OSError:
-                    pass
-            try:
-                fh.close()
-            except OSError:
-                pass
 # WizTree 探测结果（None = 还没探测过）
 _WIZ_CACHE: dict | None = None
 # 最近一次 WizTree 导出的目录体积表：盘符 → {"dirs": {path:size}, "at": 时间戳}
@@ -2871,23 +2818,6 @@ def _wiz_table(letter: str) -> dict:
     return _WIZ_DIRS.get(letter, {}).get("table", {}) or {}
 
 
-def _load_json(path: Path, default, use_cache: bool = True):
-    """读 JSON。utf-8-sig 容错记事本保存的 BOM；带 mtime 缓存。"""
-    key = str(path)
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
-        return default
-    if use_cache and _cache.get(key, (None, None))[1] == mtime:
-        return _cache[key][0]
-    try:
-        with open(path, "r", encoding="utf-8-sig") as fh:
-            data = json.load(fh)
-    except Exception:
-        return default
-    if use_cache:
-        _cache[key] = (data, mtime)
-    return data
 
 
 def load_targets() -> dict:
@@ -3541,51 +3471,6 @@ def _bundle_unit_bytes(u: dict) -> int | None:
     return None
 
 
-def _atomic_write(path: Path, data) -> None:
-    """原子写 JSON：先写临时文件再 os.replace，避免读到半个文件。
-
-    临时文件名必须唯一（带 pid + 线程 id + 随机串），不能用固定的 `.tmp` 后缀：
-    并发写同一个目标文件时，两个线程会同时打开**同一个** tmp 并互相覆盖，
-    随后 os.replace 争抢同一个源路径，Windows 上直接抛
-    PermissionError: [WinError 5] 拒绝访问。实测并发 POST /__oc__/schedule
-    20 路时有 3 路 500（调用点虽然持了 _lock，但 _atomic_write 还被
-    append_history 等其他路径调用，锁不住所有组合）。
-
-    os.replace 在 Windows 上偶发共享冲突（杀软/索引器短暂持有目标文件），
-    这里做几次短重试 —— 写配置失败是绝对不可接受的。
-    """
-    tmp = path.with_name(
-        f"{path.name}.{os.getpid()}.{threading.get_ident()}."
-        f"{uuid.uuid4().hex[:8]}.tmp")
-    try:
-        # 父目录不存在就先建：用户用 --data-dir 指向一个全新空目录
-        # （数据迁移场景）时，第一次保存配置不该因为「config/ 还没建」
-        # 而抛 FileNotFoundError。以前这里直接 open 会失败。
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
-        last: Exception | None = None
-        for attempt in range(4):
-            try:
-                os.replace(tmp, path)
-                return
-            except PermissionError as exc:   # WinError 5 / 32：被短暂占用
-                last = exc
-                time.sleep(0.02 * (attempt + 1))
-        raise last if last else RuntimeError("os.replace 失败")
-    finally:
-        # 成功时 tmp 已被 replace 掉；失败时清理残留，避免在仓库里堆垃圾
-        # （本项目的安全删除钩子会把这类残留当删除目标拦下，见 HANDOFF）
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
-        except SystemExit:
-            pass
 
 
 def load_history() -> list:
@@ -5177,26 +5062,6 @@ def check_deletable(path: str, kind: str = "tree",
     return True, ""
 
 
-def rm(path: str) -> bool:
-    """删除单个文件或目录，失败返回 False。"""
-    try:
-        if os.path.isdir(path) and not os.path.islink(path):
-            shutil.rmtree(path, ignore_errors=True)
-            return not os.path.exists(path)
-        os.remove(path)
-        return True
-    except FileNotFoundError:
-        return True
-    except (PermissionError, OSError):
-        try:
-            os.chmod(path, 0o700)
-            if os.path.isdir(path):
-                shutil.rmtree(path, ignore_errors=True)
-                return not os.path.exists(path)
-            os.remove(path)
-            return True
-        except Exception:
-            return False
 
 
 # ---- P1-1 修复（外部审计 2026-10-13）：删除前的占用预检与「部分删除」治理 ----
@@ -5222,156 +5087,17 @@ _LOCK_OWNER_HINTS = {
 }
 
 
-def _precheck_locked_files(path: str) -> list[str]:
-    """删除前预检：目录内是否有**确定被占用**的文件。返回被占用文件列表。
-
-    只统计 locked=True 的确定结论；权限不足（无法判定）不算占用 ——
-    那是「探测不到」而不是「被占用」，不能反过来当成中止删除的理由。
-    优先探测 .exe/.dll（运行中的软件锁住的正是它们）。
-    """
-    locked: list[str] = []
-    probed = 0
-    for root, _dirs, files in os.walk(path):
-        files.sort(key=lambda n: 0 if n.lower().endswith((".exe", ".dll")) else 1)
-        for f in files:
-            if probed >= _LOCK_PRECHECK_BUDGET or len(locked) >= _LOCK_PRECHECK_REPORT_MAX:
-                return locked
-            probed += 1
-            fp = os.path.join(root, f)
-            pr = probe_locked(fp)
-            if pr.get("locked") is True:
-                locked.append(fp)
-    return locked
 
 
-def _is_reparse_dir(p: str) -> bool:
-    """目录型重解析点（NTFS Junction / 目录符号链接）。
-
-    外部审计 P1-2：待删目录内部的嵌套链接若被当成普通目录走
-    rename + rmtree，存在穿透隐患。防御纵深：枚举子项时遇到重解析点
-    只摘挂载点本身（os.rmdir 不跟随），绝不进入其目标。CPython 3.8+
-    的 shutil.rmtree 虽已不跟随 junction，这里显式兜住所有下游路径。
-    """
-    try:
-        st = os.lstat(p)
-    except OSError:
-        return False
-    return bool(getattr(st, "st_file_attributes", 0)
-                & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
 
-def rm_tree_strict(path: str) -> tuple[bool, bool, str]:
-    """三态删除目录：返回 (是否全删, 是否部分删除, 说明)。
-
-    全删 = 目录已不存在；部分删除 = 已从原位置移除、内部有删不掉的文件
-    残留在 .oc-deleting-* 暂存目录；两者都失败 = 原目录原封不动。
-
-    改名暂存前先落一条「待恢复」日志：改名和递归删除之间不是原子的，
-    这中间进程被杀（宿主安全钩子抛 SystemExit、用户关掉窗口、断电），
-    用户看到的就是「我的 Adobe 文件夹不见了，多了一个
-    Adobe.oc-deleting-05462600」。下次启动时按日志改回原名
-    （见 recover_pending_deletes）。
-    """
-    staging = path.rstrip("\\/") + f".oc-deleting-{time.time_ns() % 10**8:08d}"
-    _journal_stage(path, staging)
-    try:
-        os.rename(path, staging)
-    except OSError as exc:
-        _journal_done(staging)
-        return False, False, (f"目录被占用或无法移动，未删除任何内容"
-                              f"（{exc.strerror or exc}）")
-    errs: list[str] = []
-
-    def _onerr(func, p, _excinfo):
-        try:
-            os.chmod(p, 0o700)
-            func(p)
-        except Exception:
-            errs.append(p)
-
-    try:
-        shutil.rmtree(staging, onerror=_onerr)
-    except Exception:
-        pass
-    if not errs and not os.path.exists(staging):
-        _journal_done(staging)
-        return True, False, ""
-    # 部分残留：日志保留，下次启动会把剩下的内容改回原名交还给用户
-    # （残缺但位置正确，比「名字怪异的孤儿目录」好处理）。
-    tail = staging if len(staging) <= 80 else "…" + staging[-77:]
-    return False, True, (f"已从原位置移除，但内部有删不掉的文件，"
-                         f"残留在 {tail}（确认相关程序已退出后可手动删除）")
 
 
 # ---- 改名暂存的中断恢复 ----
-def _journal_stage(original: str, staging: str) -> None:
-    """登记一条「即将改名删除」，供下次启动恢复。失败不影响删除本身。"""
-    try:
-        with _lock:
-            data = _load_json(PENDING_DELETES_PATH, [], use_cache=False)
-            if not isinstance(data, list):
-                data = []
-            data.append({"original": original, "staging": staging,
-                         "ts": time.time()})
-            _atomic_write(PENDING_DELETES_PATH, data[-200:])
-    except Exception:
-        pass
 
 
-def _journal_done(staging: str) -> None:
-    """删除已了结（成功或彻底失败），把这条登记去掉。"""
-    try:
-        with _lock:
-            data = _load_json(PENDING_DELETES_PATH, [], use_cache=False)
-            if not isinstance(data, list):
-                return
-            left = [d for d in data
-                    if not (isinstance(d, dict) and d.get("staging") == staging)]
-            if len(left) != len(data):
-                _atomic_write(PENDING_DELETES_PATH, left)
-    except Exception:
-        pass
 
 
-def recover_pending_deletes() -> list[dict]:
-    """启动时把上次中断留下的暂存目录改回原名。
-
-    只在「暂存存在、原名不存在」时动手 —— 两个都在说明用户自己新建了同名
-    目录，这时候贸然覆盖就是第二次伤害。
-    """
-    out: list[dict] = []
-    try:
-        data = _load_json(PENDING_DELETES_PATH, [], use_cache=False)
-    except Exception:
-        return out
-    if not isinstance(data, list) or not data:
-        return out
-    keep: list = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        orig, stage = str(item.get("original") or ""), str(item.get("staging") or "")
-        if not orig or not stage:
-            continue
-        try:
-            if os.path.exists(stage) and not os.path.exists(orig):
-                os.rename(stage, orig)
-                out.append({"restored": orig, "from": stage})
-                continue
-            if os.path.exists(stage) and os.path.exists(orig):
-                # 两个都在：保留暂存，但不再自动处理，交给用户
-                keep.append(item)
-                out.append({"skipped": orig, "reason": "原路径已被占用"})
-                continue
-            # 暂存不存在 = 上次已删干净，登记作废
-        except OSError as exc:
-            keep.append(item)
-            out.append({"failed": orig, "error": str(exc)})
-    try:
-        _atomic_write(PENDING_DELETES_PATH, keep)
-    except Exception:
-        pass
-    return out
 
 
 # ---- 删进回收站（可恢复）----
@@ -5412,37 +5138,6 @@ def _recycle_capacity_bytes(drive_root: str) -> int:
         return 2 * 1024 * 1024 * 1024   # 兜底 2 GB
 
 
-def rm_trash(path: str) -> tuple[bool, str]:
-    """把文件/目录移入回收站。返回 (是否成功, 失败原因)。"""
-    import ctypes
-    from ctypes import wintypes
-    path = os.path.abspath(path)
-    if not os.path.exists(path):
-        return True, ""
-    root = os.path.splitdrive(path)[0] + "\\"
-    cap = _recycle_capacity_bytes(root)
-    size = _size_of(path)
-    if size > cap:
-        return False, (f"体积 {human(size)} 超过该盘回收站容量上限（约 {human(cap)}），"
-                       f"移入回收站会被系统转为永久删除，已拒绝。"
-                       f"可直接删除，或在回收站设置里调大上限后再试。")
-    class SHFILEOPSTRUCTW(ctypes.Structure):
-        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT),
-                    ("pFrom", wintypes.LPCWSTR), ("pTo", wintypes.LPCWSTR),
-                    ("fFlags", wintypes.WORD), ("fAnyOperationsAborted",
-                                                wintypes.BOOL),
-                    ("hNameMappings", wintypes.LPVOID),
-                    ("lpszProgressTitle", wintypes.LPCWSTR)]
-    op = SHFILEOPSTRUCTW()
-    op.hwnd = None
-    op.wFunc = 3                       # FO_DELETE
-    op.pFrom = path + "\0"             # 双 \0 结尾由 ctypes 自动补一个
-    op.fFlags = (_FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT
-                 | _FOF_NOERRORUI)
-    code = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
-    if code == 0 and not op.fAnyOperationsAborted:
-        return True, ""
-    return False, f"系统回收站操作失败（错误码 {code}）"
 
 
 # ---- 按原始路径精确清除回收站条目（2026-10-13）----
@@ -8492,7 +8187,8 @@ class Handler(BaseHTTPRequestHandler):
                 _atomic_write(HISTORY_PATH, [])
             return self._json({"ok": True})
         if route == "/__oc__/custom-rules":
-            save_custom_rules([])
+            with _lock:   # P2-3 补漏：清空规则同样是读-改-写（整表覆盖）
+                save_custom_rules([])
             return self._json({"ok": True})
         return self._json({"error": "not found"}, 404)
 
@@ -9307,6 +9003,7 @@ def pick_port(preferred: int) -> int:
 
 
 def main() -> None:
+    _dpapi_migrate_plaintext()   # 批次 A3：明文凭据惰性迁移（加密回写）
     if IS_WINDOWS:
         try:
             sys.stdout.reconfigure(encoding="utf-8")
