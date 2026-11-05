@@ -71,3 +71,4 @@ pending-deletes.json
 config/engine_speed.json
 # 云同步配置（GitHub 令牌，绝不进版本库）
 config/sync.json
+tools/_tmp_*.py
