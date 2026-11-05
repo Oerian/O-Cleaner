@@ -57,6 +57,11 @@ from ps_scripts import (PS_BIG_FILES, PS_DIR_KIND, PS_LOCK_HOLDERS,
                         PS_MEASURE_GLOB, PS_MEASURE_TREE, PS_RECYCLE,
                         PS_STEAM, PS_STEAM_ORPHAN_SIZE, PS_TREE_WALK,
                         PS_UTF8_PREAMBLE)
+# P2-1 巨石拆分（2026-11-05 起步）：叶子模块迁入 ocleaner/ 包，
+# app.py re-export 保持 `import app` 下游与裸名调用全部兼容。
+from ocleaner.credentials import _dpapi_protect, _dpapi_unprotect
+from ocleaner.measure import (_py_walk_files, _py_measure_tree,
+                              _py_measure_glob, _py_dir_kind, _py_tree_size)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -609,109 +614,6 @@ def measure_target(t: dict, drive: str | None = None) -> dict:
         return {"size": 0, "files": 0, "error": "拒绝访问（权限不足或受系统保护）"}
     except Exception as exc:  # noqa: BLE001
         return {"size": 0, "files": 0, "error": f"{type(exc).__name__}: {exc}"}
-
-
-def _py_walk_files(path: str, strict: bool) -> tuple[int, int, bool]:
-    """递归累加目录下的文件体积。返回 (size, files, denied)。
-
-    P2-4：替代 PS_MEASURE_TREE / PS_STEAM_ORPHAN_SIZE 的进程内实现 ——
-    每次冷启动 powershell.exe 有 180–350ms 固定开销，测量类小目标
-    （几十个崩溃转储、几 MB 日志）进程开销远超磁盘 I/O 本身。
-    strict=True：任何访问错误立即抛 PermissionError（对应 PS 的
-    -ErrorAction Stop，调用方据此把「读不到」与「空目录」区分开）；
-    strict=False：跳过出错的条目继续（对应 SilentlyContinue）。
-    junction/symlink 一律不跟随（follow_symlinks=False），与 PS 5.1
-    Get-ChildItem -Recurse 的行为一致。
-    """
-    total = 0
-    count = 0
-    denied = False
-    stack = [path]
-    while stack:
-        cur = stack.pop()
-        try:
-            with os.scandir(cur) as it:
-                entries = list(it)
-        except OSError:
-            if strict:
-                raise PermissionError(cur)
-            denied = True
-            continue
-        for e in entries:
-            try:
-                if e.is_file(follow_symlinks=False):
-                    total += e.stat(follow_symlinks=False).st_size
-                    count += 1
-                elif e.is_dir(follow_symlinks=False):
-                    stack.append(e.path)
-            except OSError:
-                if strict:
-                    raise PermissionError(e.path)
-                denied = True
-    return total, count, denied
-
-
-def _py_measure_tree(path: str) -> dict:
-    """PS_MEASURE_TREE 的进程内替代：递归测量，带 denied 标记。"""
-    try:
-        total, count, denied = _py_walk_files(path, strict=True)
-        return {"size": total, "files": count, "denied": denied}
-    except PermissionError:
-        return {"size": 0, "files": 0, "denied": True}
-
-
-def _py_measure_glob(path: str, pattern: str) -> dict:
-    """PS_MEASURE_GLOB 的进程内替代：非递归、按通配符过滤文件求和。"""
-    total = 0
-    count = 0
-    denied = False
-    try:
-        with os.scandir(path) as it:
-            for e in it:
-                try:
-                    if e.is_file(follow_symlinks=False) \
-                            and fnmatch.fnmatch(e.name, pattern):
-                        total += e.stat(follow_symlinks=False).st_size
-                        count += 1
-                except OSError:
-                    denied = True
-    except OSError:
-        denied = True
-    return {"size": total, "files": count, "denied": denied}
-
-
-def _py_dir_kind(path: str) -> dict:
-    """PS_DIR_KIND 的进程内替代：单层清单（跳过重解析点目录）。"""
-    dirs: list = []
-    files: list = []
-    try:
-        with os.scandir(path) as it:
-            entries = list(it)
-    except OSError:
-        return {"denied": True, "dirs": [], "files": []}
-    for e in entries:
-        try:
-            st = e.stat(follow_symlinks=False)
-        except OSError:
-            continue
-        if getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
-            continue          # 与 PS 脚本一致：Junction/链接目录不列入
-        modified = time.strftime("%Y-%m-%d", time.localtime(st.st_mtime))
-        if stat.S_ISDIR(st.st_mode):
-            dirs.append({"name": e.name, "path": e.path, "modified": modified})
-        else:
-            files.append({"name": e.name, "path": e.path,
-                          "size": int(st.st_size), "modified": modified})
-    return {"denied": False, "dirs": dirs, "files": files}
-
-
-def _py_tree_size(path: str) -> int:
-    """PS_STEAM_ORPHAN_SIZE 的进程内替代：宽松递归测量（错误跳过）。"""
-    try:
-        total, _count, _denied = _py_walk_files(path, strict=False)
-        return total
-    except OSError:
-        return 0
 
 
 def _measure_existing(t: dict, path: str, drive: str | None) -> dict:
@@ -7351,72 +7253,6 @@ def packs_update_from_remote() -> dict:
 #   3. **AI 没有任何删除能力**。它最多从「内置判定为可清理」的项里挑出建议清单，
 #      前端拿到的还是一组 id，勾选与否仍由用户决定，删除仍走同一条清理链路。
 # 第 3 条是刻意的：让外部模型影响删除动作，风险不可控。
-def _dpapi_protect(plain: str) -> str:
-    """用当前 Windows 用户的 DPAPI 凭据加密敏感串，存为 "dpapi:<base64>"。
-
-    外部审计 P1-4：ai.json 的 API Key 与 sync.json 的 GitHub Token 此前
-    明文落盘 —— 产品承诺「整个文件夹拷到另一台机器即可用」，拷去公共
-    电脑时凭据随之泄露。DPAPI 绑定当前用户：同机透明解密；拷到别机
-    解密失败返回空串（用户重新填一次即可），零第三方依赖。
-    """
-    if not plain or plain.startswith("dpapi:") or os.name != "nt":
-        return plain
-    try:
-        import base64
-        from ctypes import wintypes
-
-        class _BLOB(ctypes.Structure):
-            _fields_ = [("cbData", wintypes.DWORD),
-                        ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-        raw = plain.encode("utf-8")
-        buf = ctypes.create_string_buffer(raw, len(raw))
-        in_blob = _BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
-        out_blob = _BLOB()
-        if not ctypes.windll.crypt32.CryptProtectData(
-                ctypes.byref(in_blob), None, None, None, None, 0x01,
-                ctypes.byref(out_blob)):
-            return plain
-        try:
-            enc = ctypes.string_at(out_blob.pbData, out_blob.cbData)
-            return "dpapi:" + base64.b64encode(enc).decode("ascii")
-        finally:
-            ctypes.windll.kernel32.LocalFree(out_blob.pbData)
-    except Exception:
-        return plain
-
-
-def _dpapi_unprotect(stored: str) -> str:
-    """解密 dpapi: 前缀密文；换机/换用户解密失败安全返回空串。
-    明文旧值原样返回（兼容既有配置，下次保存时自动升级为加密）。"""
-    if not stored or not stored.startswith("dpapi:"):
-        return stored
-    if os.name != "nt":
-        return ""
-    try:
-        import base64
-        from ctypes import wintypes
-
-        class _BLOB(ctypes.Structure):
-            _fields_ = [("cbData", wintypes.DWORD),
-                        ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-        raw = base64.b64decode(stored[6:])
-        buf = ctypes.create_string_buffer(raw, len(raw))
-        in_blob = _BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
-        out_blob = _BLOB()
-        if not ctypes.windll.crypt32.CryptUnprotectData(
-                ctypes.byref(in_blob), None, None, None, None, 0x01,
-                ctypes.byref(out_blob)):
-            return ""
-        try:
-            return ctypes.string_at(out_blob.pbData, out_blob.cbData).decode("utf-8")
-        finally:
-            ctypes.windll.kernel32.LocalFree(out_blob.pbData)
-    except Exception:
-        return ""
-
-
 _AI_DEFAULTS = {
     "enabled": False, "base_url": "", "api_key": "", "model": "",
     "temperature": 0.2, "timeout": 60, "extra_prompt": "",

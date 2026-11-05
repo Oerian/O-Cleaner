@@ -39,6 +39,10 @@ ROOT = HERE.parent
 INCLUDE = [
     "app.py",
     "ps_scripts.py",
+    "ocleaner/__init__.py",
+    "ocleaner/credentials.py",
+    "ocleaner/measure.py",
+    "tools/unit_test.py",
     "启动 O-Cleaner.bat",
     "README.md",
     "docs/USAGE.md",

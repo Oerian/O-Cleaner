@@ -1591,6 +1591,12 @@ SECURITY 该处表述未动。
 - **环呼吸空间（第五轮微调，v2.11 后本地）**：用户反馈「环状图还是有点紧凑」。修法：环 134→**150px**（`::after` inset 17→19px、中心字号 22→24px），`.ovrow` gap 20→24 + 上下 padding、`#fsOverview` margin-top 6px——环上方距进度条 12px、下方距引擎条 18px，不再贴边。
 - **回归**：selftest **580-0-6** 全绿（stub 化后全量 ~2.5 分钟）；CDP **141-0-5**；7 道门禁全过；探针实测：环 150px、本次扫到统计宽 123px（原整行拉伸）、图表坞 769px 宽、13 列柱底边唯一、无横向溢出、`#dwTabs` 全页唯一、页签落在环带内。
 
+**⑯补（2026-11-05 晚）：P2-1 巨石拆分第一步——ocleaner/ 包落地（本地待推送）**——处理 ⑮补维持待办的 P2-1。**拆分策略定稿**：叶子模块逐个从 app.py 迁出，app.py 保留在仓库根作启动入口并 re-export 迁出符号——三条兼容线实测不变：`import app`（selftest/tools 下游）、启动脚本、打包清单（make_package.INCLUDE 新增四个条目，make_exe 自动复用；**打包冒烟已验证 ocleaner/ 三模块 + tools/unit_test.py 进 zip**）。
+- **本轮迁出两个叶子模块**：`ocleaner/credentials.py`（`_dpapi_protect/_dpapi_unprotect`，P1-4）与 `ocleaner/measure.py`（`_py_walk_files/_py_measure_tree/_py_measure_glob/_py_dir_kind/_py_tree_size`，P2-4）——纯 stdlib 依赖、零 app 全局耦合，迁出零风险样板。app.py 顶部 `from ocleaner.credentials/measure import ...` 裸名 re-export，全部既有调用点不动。
+- **实施过程踩坑**：ocleaner 导入曾被插进 ps_scripts 多行括号导入块内部（SyntaxError），已修正到块闭合之后。
+- **后续迁出顺序建议**（每轮 1-2 个模块 + 全量回归）：store（`_atomic_write/_load_json/_cache/_lock/DPAPI 落盘集成`）→ guard（`check_deletable` 护栏链）→ deleter（三态删除/断电恢复）→ engines/mft → engines/wiztree → games → integrations → server（路由表）。前端单文件拆分**维持不拆**：单文件前端是产品明确特性（README/HANDOFF 多处声明），拆分反而违背定位。
+- **测试**：unit_test **24-0**、selftest **594-0-6**（`import app` 兼容线验证）、CDP **141-0-5**、7 道门禁全过、打包冒烟通过。
+
 **⑮补（2026-11-05 晚）：审计待办处理——P2-4 测量去 PS 化 + unit_test.py + 弹窗焦点陷阱（本地待推送）**——处理 ⑭补记入待办的四项：
 - **P2-4 测量类去 PS 化**（性能）：新增 `_py_walk_files(strict)` / `_py_measure_tree` / `_py_measure_glob` / `_py_dir_kind` / `_py_tree_size` 五个进程内原语（`os.scandir` 的 `DirEntry.stat(follow_symlinks=False)` 直接从 FindFirstFileW 缓冲取大小，零额外系统调用；junction 不跟随与 PS 5.1 一致）。`_measure_existing`（tree/glob）、`analyze_dir_partition` 的 DIR_KIND、两处 Steam 孤儿体积（含临时清单文件方案整体退役 —— 该方案曾触发安全删除钩子配额耗尽杀死请求）全部改走进程内实现。**语义对齐**：MEASURE/GLOB 用 strict 模式（错误→denied 标记，UI 显示权限提示，与 -ErrorAction Stop 一致）；ORPHAN 用宽松模式（SilentlyContinue 语义）。`ps_scripts.py` 四个脚本本体保留（selftest 阶段六直接引用 `app.PS_STEAM_ORPHAN_SIZE` 钉 run_ps 数组契约，app.py 导入不删）。实测：小目录进程内测量 <50ms（对比 PS 冷启动 180-350ms）；临时目录基准对比逐字节一致。
 - **unit_test.py 抽离**：新增 `tools/unit_test.py` —— 24 项纯逻辑断言（入口守卫矩阵 / DPAPI 往返 / fetch_json SSRF 收口 / `_is_unsafe_remote` 矩阵 / 测量原语基准对比 / 引擎校准换机失效 / Junction 护栏 / 版本一致性），零磁盘写副作用、约 2 秒跑完，供开发机高频回归；selftest 全量套件定位不变（权威验证走 CI）。
