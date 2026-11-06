@@ -6359,7 +6359,6 @@ def _watch_bigfiles(prog_file: str, stop: threading.Event) -> None:
 DUP_FLOOR_MB = 100
 DUP_MAX_GROUPS = 30
 DUP_MAX_PER_GROUP = 50
-_DUPFILES_LOCK = threading.Lock()
 
 
 def _sample_hash(path: str, chunk: int = 1 << 20) -> str | None:
