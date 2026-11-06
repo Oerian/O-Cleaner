@@ -7574,6 +7574,48 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json({"error": str(e)}, 400)
             return self._json({"ok": True, "pref": p})
+        if route == "/__oc__/delete-paths":
+            # 批量移入回收站（重复大文件等场景）：逐个走完整护栏链
+            # check_deletable，任一被拦截只跳过该项，绝不静默转永久删除。
+            paths_in = body.get("paths") or []
+            if not isinstance(paths_in, list) or not paths_in:
+                return self._json({"error": "paths 不能为空"}, 400)
+            paths_in = [str(x).strip() for x in paths_in if str(x).strip()]
+            if len(paths_in) > 50:
+                return self._json({"error": "单次最多 50 个路径"}, 400)
+            if getattr(self.server, "busy", False):
+                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
+            self.server.busy = True
+            try:
+                results = []
+                for pth in paths_in:
+                    item = {"path": pth, "ok": False, "trashed": False,
+                            "error": None}
+                    try:
+                        norm = os.path.normpath(os.path.expandvars(
+                            os.path.expanduser(pth.replace("/", "\\"))))
+                        item["path"] = norm
+                        if not os.path.isabs(norm) or not os.path.exists(norm):
+                            item["error"] = "路径无效或不存在"
+                        else:
+                            ok, why = check_deletable(norm)
+                            if not ok:
+                                item["error"] = why or "护栏拦截"
+                            else:
+                                ok2, why2 = rm_trash(norm)
+                                item["ok"] = ok2
+                                item["trashed"] = ok2
+                                if not ok2:
+                                    item["error"] = why2 or "移入回收站失败"
+                    except Exception as exc:  # noqa: BLE001
+                        item["error"] = f"{type(exc).__name__}: {exc}"
+                    results.append(item)
+                done = sum(1 for r in results if r["ok"])
+                return self._json({"ok": done == len(results), "done": done,
+                                   "total": len(results), "results": results})
+            finally:
+                self.server.busy = False
+
         if route == "/__oc__/sync/save":
             with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
                 cfg = _sync_cfg()

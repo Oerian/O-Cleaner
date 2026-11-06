@@ -1163,6 +1163,8 @@
 
     <div class="panel acc" data-acc="history">
       <h3><span data-i18n="pane.history">最近清理记录</span>
+        <input type="text" id="histSearch" data-i18n-ph="hist.searchPh"
+               placeholder="搜索目录名 / 时间…" style="max-width:150px">
         <button id="btnClearLog" class="tiny ghost" data-i18n="unit.clearAll">清空全部</button></h3>
       <div class="ab"><div id="history"></div></div>
     </div>
@@ -1576,7 +1578,27 @@ function renderAI() {
 
 /* 接口预设快速填充 + 拉取模型列表（自动识别可用模型，用户可自选或手填） */
 document.querySelectorAll("[data-aipreset]").forEach(b =>
-  b.addEventListener("click", () => { $("aiBase").value = b.dataset.aipreset; }));
+  b.addEventListener("click", async () => {
+    $("aiBase").value = b.dataset.aipreset;
+    // 二轮审计方向 4：Ollama（本机）一键自检 —— 探测本机模型列表，
+    // 连通就直接填第一个模型；未启动给明确指引。前端直连本机 11434，
+    // Ollama 默认放行 localhost 来源，零数据出网。
+    if (!b.dataset.aipreset.includes("11434")) return;
+    try {
+      const rr = await fetch(b.dataset.aipreset + "/models",
+                             { signal: AbortSignal.timeout(2500) });
+      const jj = await rr.json();
+      const first = (jj.data || [])[0] && jj.data[0].id;
+      if (first) {
+        $("aiModel").value = first;
+        toast(t("ai.ollamaOk", "已连接本机 Ollama（离线可用，零数据出网），模型：") + first);
+      } else {
+        toast(t("ai.ollamaEmpty", "本机 Ollama 已连通，但还没有可用模型（先 ollama pull 一个）"));
+      }
+    } catch (_) {
+      toast(t("ai.ollamaDown", "本机 11434 未响应：Ollama 可能未启动，启动后重新点击即可"));
+    }
+  }));
 
 async function aiFetchModels() {
   const btn = $("btnAiModels");
@@ -2999,16 +3021,35 @@ function renderSchedule() {
   info.innerHTML = `${t("sch.next","下次：")}${esc(next)}<br>${t("sch.last","上次：")}${esc(last)}`;
 }
 
+let _histFilter = "";
+$("histSearch").addEventListener("input", e => {
+  _histFilter = e.target.value.trim().toLowerCase();
+  renderHistory();
+});
 function renderHistory() {
   const hist = STATE.history || [];
   if (!hist.length) { $("history").innerHTML = `<div class="empty">${t("hist.none","暂无记录")}</div>`; return; }
-  $("history").innerHTML = hist.map(h => {
+  // 二轮审计方向 1：按目录名 / 时间 / 触发方式过滤（回答「上周删没删过某文件夹」）
+  const kw = _histFilter;
+  const shown = kw ? hist.filter(h =>
+    (h.time || "").toLowerCase().includes(kw)
+    || (h.trigger || "").toLowerCase().includes(kw)
+    || (h.results || []).some(r =>
+        (r.label || "").toLowerCase().includes(kw)
+        || (r.path || "").toLowerCase().includes(kw))) : hist;
+  if (!shown.length) {
+    $("history").innerHTML = `<div class="empty">${t("hist.searchNone", "没有匹配「{kw}」的清理记录").replace("{kw}", esc(kw))}</div>`;
+    return;
+  }
+  $("history").innerHTML = shown.map(h => {
     const names = (h.results || []).filter(r => r.freed > 0).map(r => r.label);
     const fails = (h.results || []).filter(r => r.failed > 0)
       .map(r => t("hist.lockedN","{label}（{n} 项被占用）").replace("{label}", r.label).replace("{n}", r.failed));
     return `<div class="logrow">
       <div class="t"><span>${esc(h.time)} · ${esc(h.trigger || "")}</span>
         <span class="freed">${t("hist.freed","释放 {v}").replace("{v}", esc(h.freed_h || fmt(h.freed)))}</span>
+        <a href="javascript:void(0)" class="rcpt" data-d="${esc(h.time)}"
+           title="${t("hist.detailTitle","逐项查看这次清理删了什么")}">📋 ${t("hist.detailBtn","明细")}</a>
         <a href="javascript:void(0)" class="rcpt" data-t="${esc(h.time)}"
            title="${t("hist.receipt","导出本次清理的逐项回执（JSON）")}">⬇ ${t("hist.receiptBtn","回执")}</a></div>
       <div class="d">${names.length ? esc(names.join("、")) : t("hist.nothing","没有可清理的内容")}</div>
@@ -3016,7 +3057,37 @@ function renderHistory() {
     </div>`;
   }).join("");
   [...document.querySelectorAll("#history .rcpt")].forEach(a =>
-    a.addEventListener("click", () => exportReceipt(a.dataset.t)));
+    a.addEventListener("click", () =>
+      a.dataset.d ? openHistoryDetail(a.dataset.d) : exportReceipt(a.dataset.t)));
+}
+
+/* 二轮审计方向 1：清理记录明细弹窗 —— 逐项可读表格，回答「到底删没删某个文件夹」 */
+async function openHistoryDetail(timeStr) {
+  $("modal").innerHTML = `<h2>${t("hist.detailTitle2", "清理明细")}</h2>
+    <div class="mbody"><div class="empty"><span class="spin"></span>${t("dup.loading", "加载中…")}</div></div>`;
+  $("mask").classList.add("on");
+  let e;
+  try {
+    const hist = await apiJSON(`${API}/__oc__/history`);
+    e = (Array.isArray(hist) ? hist : []).find(x => x.time === timeStr);
+  } catch (err) { e = { error: String(err) }; }
+  const rows = (e && e.results || []);
+  const tr = v => v ? `<span style="color:var(--ok-fg)">${t("hist.toTrash", "回收站")}</span>` : "";
+  $("modal").innerHTML = `<h2>${t("hist.detailTitle2", "清理明细")}
+      <span class="hint">${esc(timeStr)} · ${t("hist.freed","释放 {v}").replace("{v}", esc(e && e.freed_h || ""))}</span></h2>
+    <div class="mbody">${rows.length ? rows.map(r => `
+      <div class="logrow">
+        <div class="t"><b>${esc(r.label || "")}</b>
+          <span class="freed">${r.freed > 0 ? fmt(r.freed) : ""}</span>
+          ${r.trashed ? tr(1) : ""}</div>
+        <div class="d" style="word-break:break-all">${esc(r.path || "")}</div>
+        ${r.error ? `<div class="d failed">${esc(r.error)}</div>` : ""}
+        ${(r.skipped || []).length ? `<div class="d failed">${t("hist.skipped","跳过：")}${esc((r.skipped || []).join("、"))}</div>` : ""}
+      </div>`).join("")
+      : `<div class="empty">${t("hist.receiptNone", "找不到这条记录的完整数据")}</div>`}
+    <div style="text-align:right;padding-top:10px">
+      <button class="tiny" id="hdClose">${t("cc.close", "关闭")}</button></div></div>`;
+  $("hdClose").addEventListener("click", closeModal);
 }
 
 /* 导出清理回执：从服务端取完整记录（界面只带最近 10 条），前端生成 JSON 文件 */
@@ -5403,25 +5474,54 @@ async function openDupFiles() {
     return;
   }
   const g2 = (r.groups || []);
+  // 二轮审计方向 2：每组标一个「保留基准」（路径最短的一份，加锁不可勾），
+  // 其余副本提供勾选框；勾选后走 /__oc__/delete-paths 批量移入回收站
+  // （逐个过 check_deletable 护栏链，默认回收站，绝不静默永久删除）。
+  const baseline = g => (g.files || []).reduce((a, b) =>
+    (b.path || "").length < (a.path || "").length ? b : a);
   $("modal").innerHTML = `<h2>${t("dup.title", "重复大文件")}
       <span class="hint">${t("dup.n", "{n} 组 · 门槛 {v}")
         .replace("{n}", g2.length)
         .replace("{v}", fmt((r.floor_mb || 100) * 1024 * 1024))}</span></h2>
-    <div class="mbody">${g2.length ? g2.map((g, i) => `
+    <div class="mbody">${g2.length ? g2.map((g, i) => {
+      const base = baseline(g);
+      return `
       <div class="logrow">
         <div class="t"><b>${i + 1}</b>. <span>${t("dup.sameSize", "{n} 个互为副本，每个 {v}")
           .replace("{n}", g.dup_count).replace("{v}", g.size_h)}</span>
           <span class="freed">${t("dup.wasted", "可回收 {v}").replace("{v}", g.wasted_h)}</span></div>
-        ${g.files.filter(f => f.dup).map(f => `
-        <div class="d" style="word-break:break-all">· ${esc(f.path)}
+        ${g.files.map(f => {
+          if (f === base || f.path === base.path) {
+            return `<div class="d" style="word-break:break-all">🔒 <b>${t("dup.keep", "保留基准")}</b> · ${esc(f.path)}</div>`;
+          }
+          return `<div class="d" style="word-break:break-all">
+          <label style="cursor:pointer"><input type="checkbox" class="dupChk" data-p="${esc(f.path)}">
+          ${esc(f.path)}</label>
           <a href="javascript:void(0)" class="rcpt" data-p="${esc(f.path)}"
-             style="margin-left:6px">${t("bf.reveal", "在资源管理器中打开位置")}</a></div>`).join("")}
-      </div>`).join("")
+             style="margin-left:6px">${t("bf.reveal", "在资源管理器中打开位置")}</a></div>`;
+        }).join("")}
+      </div>`;
+    }).join("")
       : `<div class="empty">${t("dup.empty", "没有发现互为副本的大文件（≥ {v} 且内容一致）")
           .replace("{v}", fmt((r.floor_mb || 100) * 1024 * 1024))}</div>`}
     <div style="text-align:right;padding-top:10px">
+      ${g2.length ? `<button class="go" id="dupGo">${t("dup.go", "清理选中项（移入回收站）")}</button>` : ""}
       <button class="tiny" id="dupClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("dupClose").addEventListener("click", closeModal);
+  const goBtn = $("dupGo");
+  if (goBtn) goBtn.addEventListener("click", async () => {
+    const picked = [...document.querySelectorAll("#modal .dupChk:checked")]
+      .map(x => x.dataset.p);
+    if (!picked.length) { toast(t("dup.none", "请先勾选要清理的副本")); return; }
+    if (!confirm(t("dup.confirm", "把选中的 {n} 个副本移入回收站？（可随时还原）").replace("{n}", picked.length))) return;
+    goBtn.disabled = true; goBtn.textContent = t("dup.working", "正在移入回收站…");
+    const rr = await apiJSON(`${API}/__oc__/delete-paths`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths: picked }) });
+    if (rr.error) { toast(rr.error); goBtn.disabled = false; goBtn.textContent = t("dup.go", "清理选中项（移入回收站）"); return; }
+    toast(t("dup.done", "已移入回收站 {n}/{total} 个").replace("{n}", rr.done).replace("{total}", rr.total));
+    openDupFiles();   // 重新拉取，剩余副本刷新
+  });
   [...document.querySelectorAll("#modal .rcpt")].forEach(a =>
     a.addEventListener("click", () => {
       apiJSON(`${API}/__oc__/reveal`, {
@@ -6511,6 +6611,21 @@ const I18N_EN = {
   "hist.freed": "Released {v}", "hist.nothing": "Nothing cleanable", "hist.skipped": "Skipped: ",
   "hist.receiptBtn": "receipt", "hist.receiptNone": "Full record for this entry not found",
   "hist.receipt": "Export per-item receipt (JSON) for this cleanup",
+  "hist.searchPh": "Search folder / time…",
+  "hist.detailBtn": "Details",
+  "hist.detailTitle": "Per-item view of what was deleted",
+  "hist.detailTitle2": "Cleanup details",
+  "hist.toTrash": "Recycle Bin",
+  "hist.searchNone": "No cleanup records matching “{kw}”",
+  "ai.ollamaOk": "Connected to local Ollama (offline, zero data leaves the machine). Model: ",
+  "ai.ollamaEmpty": "Local Ollama is reachable but has no models yet (ollama pull one first)",
+  "ai.ollamaDown": "Local port 11434 not responding: Ollama may not be running. Start it and click again",
+  "dup.keep": "Keep (baseline)",
+  "dup.go": "Clean selected (move to Recycle Bin)",
+  "dup.none": "Select the copies to clean first",
+  "dup.confirm": "Move the selected {n} copies to the Recycle Bin? (restorable anytime)",
+  "dup.working": "Moving to Recycle Bin…",
+  "dup.done": "Moved {n}/{total} copies to the Recycle Bin",
   "foot.afterClean": "after cleaning {drive}: would have about",
   "stat.runs": "{n} runs recorded",
   "stat.empty": "No cleaning history yet. After the first clean, this shows the cumulative release converted into everyday units.",
