@@ -18,4 +18,4 @@ globals().update({k: v for k, v in vars(_core).items()
                   if not k.startswith("__")})
 
 if __name__ == "__main__":
-    main()
+    _core.main()

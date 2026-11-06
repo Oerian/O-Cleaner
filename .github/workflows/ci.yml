@@ -85,11 +85,11 @@ jobs:
       - name: 快速单元测试（纯逻辑回归）
         run: python -X utf8 tools/unit_test.py
 
-      # 快速单元测试（24 项纯逻辑断言，约 2 秒）：入口守卫 / DPAPI /
-      # SSRF 收口 / 测量原语 / 引擎校准换机失效 / Junction 护栏。
-      # 多数推送不带 [ci] 只跑快级 —— 这 2 秒让纯逻辑回归每次推送都有兜底。
-      - name: 快速单元测试（纯逻辑回归）
-        run: python -X utf8 tools/unit_test.py
+      # 静态未定义名检查（F821）：批次 D 迁出后曾出现两处 NameError
+      # （保存 AI 配置 / 检查更新），靠这个门禁在提交前拦截。
+      # 只选 F821：re-export 垫片的「imported but unused」属预期，不拦截。
+      - name: 跨模块符号完整性检查（防域拆分漏 re-export）
+        run: python -X utf8 tools/check_undefined.py
 
       # 必须检查**全部** script 块：旧版用 [regex]::Match 只取第一个匹配，
       # 而 index.html 的第一个 script 块只有 400 多字节（一小段初始化），

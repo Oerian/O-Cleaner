@@ -45,73 +45,73 @@ import tempfile
 import threading
 import time
 import traceback
-import uuid
 import webbrowser
 from array import array
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError as _HTTPError
+from urllib.error import HTTPError as _HTTPError  # noqa: F401 integrations 经 _core 引用
 from urllib.parse import urlparse
 from urllib.request import Request as _UrlRequest, urlopen as _urlopen
 # PS_MEASURE_TREE/PS_MEASURE_GLOB/PS_DIR_KIND/PS_STEAM_ORPHAN_SIZE 的
 # 测量职责已由进程内 os.scandir 实现（P2-4），脚本本体保留：
 # selftest 阶段六仍直接引用 app.PS_STEAM_ORPHAN_SIZE 钉 run_ps 数组契约。
-from ps_scripts import (PS_BIG_FILES, PS_DIR_KIND, PS_LOCK_HOLDERS,
-                        PS_MEASURE_GLOB, PS_MEASURE_TREE, PS_RECYCLE,
-                        PS_STEAM, PS_STEAM_ORPHAN_SIZE, PS_TREE_WALK,
-                        PS_UTF8_PREAMBLE)
-# P2-1 巨石拆分（2026-11-05 起步）：叶子模块迁入 ocleaner/ 包，
-# app.py re-export 保持 `import app` 下游与裸名调用全部兼容。
-from ocleaner.credentials import _dpapi_protect, _dpapi_unprotect
-from ocleaner.measure import (_py_walk_files, _py_measure_tree,
-                              _py_measure_glob, _py_dir_kind, _py_tree_size)
-from ocleaner.store import (_cache, _lock, _cross_process_lock,
-                            _load_json, _atomic_write)
-from ocleaner.deleter import (rm, rm_tree_strict, _journal_stage,
-                              _journal_done, recover_pending_deletes,
-                              rm_trash, _precheck_locked_files,
-                              _is_reparse_dir, _long_path)
-from ocleaner.games import (discover_steam, _parse_vdf, steam_common_dirs,
-                           game_install_dirs, platform_install_roots,
-                           _epic_game_from_manifest, _gog_game_from_values,
-                           _platform_orphans, discover_epic, discover_gog,
-                           discover_games, game_display_name, gamelib_snapshot,
-                           load_game_libs, save_game_libs, load_game_names,
-                           record_game_history, _in_game_install,
-                           _gamelib_children, GAME_INSTALL_MARKERS,
-                           _GAMELIB_CACHE, _GAMELIB_CACHE_TTL, _GAMELIBS_LOCK,
-                           _GAME_DIRS_CACHE,
-                           _STEAM_COMMON_CACHE, _ORPHAN_ROOTS_CACHE,
-                           _ORPHAN_NAME_EXCLUDES, STEAM_STATE_FLAGS)
-from ocleaner.integrations import (_sync_cfg, _sync_save_cfg,
-                              _sync_token, _gist_request, _sync_push,
-                              _sync_fetch, _sync_pull, _sync_two_way,
-                              load_ai_config, save_ai_config,
-                              ai_public_config, ai_list_models, ai_chat,
-                              ai_test, ai_explain, ai_plan,
-                              app_update_check, _dpapi_migrate_plaintext)
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-
-def _argv_data_dir() -> str:
-    """启动参数里找 --data-dir（须在模块常量定值前生效，故在 import 期预扫）。"""
-    for i, v in enumerate(sys.argv):
-        if v == "--data-dir" and i + 1 < len(sys.argv):
-            return sys.argv[i + 1]
-        if v.startswith("--data-dir="):
-            return v.split("=", 1)[1]
-    return ""
-
-
-# 数据存档目录：config/ 与 history.json、schedule.json、disk-trend.json 等
-# 全部运行数据都落在这里。默认跟程序同目录（绿色便携：整个文件夹拷走 =
-# 数据一起迁移，U 盘携带即插即用）；程序目录只读或想把数据单独存放时，
-# 用 --data-dir <路径> 或环境变量 OC_DATA_DIR 重定向到任意可写位置。
-DATA_DIR = Path(os.environ.get("OC_DATA_DIR") or _argv_data_dir() or BASE_DIR)
-# 数据目录可写性的进程内缓存（None = 尚未探测），见 data_dir_writable()
+# PS_DIR_KIND/PS_MEASURE_GLOB/PS_MEASURE_TREE/PS_STEAM 的职责已迁
+# ocleaner/measure.py（P2-4）；此处仅保留仍在用的脚本常量。
+from ps_scripts import (PS_BIG_FILES, PS_LOCK_HOLDERS, PS_RECYCLE, PS_STEAM,  # noqa: F401 re-export
+                        PS_STEAM_ORPHAN_SIZE, PS_TREE_WALK,  # noqa: F401 re-export
+                        PS_UTF8_PREAMBLE)  # noqa: F401 selftest 引用钉契约
+# P2-1 巨石拆分（2026-11-05 起步）：叶子模块迁入 ocleaner/ 包，  # noqa: F401 re-export
+# app.py re-export 保持 `import app` 下游与裸名调用全部兼容。  # noqa: F401 re-export
+from ocleaner.credentials import _dpapi_protect, _dpapi_unprotect  # noqa: F401 re-export
+from ocleaner.measure import (_py_walk_files, _py_measure_tree,  # noqa: F401 re-export
+                              _py_measure_glob, _py_dir_kind, _py_tree_size)  # noqa: F401 re-export
+from ocleaner.store import (_cache, _lock, _cross_process_lock,  # noqa: F401 re-export
+                            _load_json, _atomic_write)  # noqa: F401 re-export
+from ocleaner.deleter import (rm, rm_tree_strict, _journal_stage,  # noqa: F401 re-export
+                              _journal_done, recover_pending_deletes,  # noqa: F401 re-export
+                              rm_trash, _precheck_locked_files,  # noqa: F401 re-export
+                              _is_reparse_dir, _long_path)  # noqa: F401 re-export
+from ocleaner.games import (discover_steam, _parse_vdf, steam_common_dirs,  # noqa: F401 re-export
+                           game_install_dirs, platform_install_roots,  # noqa: F401 re-export
+                           _epic_game_from_manifest, _gog_game_from_values,  # noqa: F401 re-export
+                           _platform_orphans, discover_epic, discover_gog,  # noqa: F401 re-export
+                           discover_games, game_display_name, gamelib_snapshot,  # noqa: F401 re-export
+                           load_game_libs, save_game_libs, load_game_names,  # noqa: F401 re-export
+                           record_game_history, _in_game_install,  # noqa: F401 re-export
+                           _gamelib_children, GAME_INSTALL_MARKERS,  # noqa: F401 re-export
+                           _GAMELIB_CACHE, _GAMELIB_CACHE_TTL, _GAMELIBS_LOCK,  # noqa: F401 re-export
+                           _GAME_DIRS_CACHE,  # noqa: F401 re-export
+                           _STEAM_COMMON_CACHE, _ORPHAN_ROOTS_CACHE,  # noqa: F401 re-export
+                           _ORPHAN_NAME_EXCLUDES, STEAM_STATE_FLAGS)  # noqa: F401 re-export
+from ocleaner.integrations import (_sync_cfg, _sync_save_cfg,  # noqa: F401 re-export
+                              _sync_token, _gist_request, _sync_push,  # noqa: F401 re-export
+                              _sync_fetch, _sync_pull, _sync_two_way,  # noqa: F401 re-export
+                              load_ai_config, save_ai_config,  # noqa: F401 re-export
+                              ai_public_config, ai_list_models, ai_chat,  # noqa: F401 re-export
+                              ai_test, ai_explain, ai_plan,  # noqa: F401 re-export
+                              app_update_check, _dpapi_migrate_plaintext,  # noqa: F401 re-export
+                              _AI_DEFAULTS)  # ai/config 路由过滤用  # noqa: F401 re-export
+  # noqa: F401 re-export
+BASE_DIR = Path(__file__).resolve().parent.parent  # noqa: F401 re-export
+  # noqa: F401 re-export
+  # noqa: F401 re-export
+def _argv_data_dir() -> str:  # noqa: F401 re-export
+    """启动参数里找 --data-dir（须在模块常量定值前生效，故在 import 期预扫）。"""  # noqa: F401 re-export
+    for i, v in enumerate(sys.argv):  # noqa: F401 re-export
+        if v == "--data-dir" and i + 1 < len(sys.argv):  # noqa: F401 re-export
+            return sys.argv[i + 1]  # noqa: F401 re-export
+        if v.startswith("--data-dir="):  # noqa: F401 re-export
+            return v.split("=", 1)[1]  # noqa: F401 re-export
+    return ""  # noqa: F401 re-export
+  # noqa: F401 re-export
+  # noqa: F401 re-export
+# 数据存档目录：config/ 与 history.json、schedule.json、disk-trend.json 等  # noqa: F401 re-export
+# 全部运行数据都落在这里。默认跟程序同目录（绿色便携：整个文件夹拷走 =  # noqa: F401 re-export
+# 数据一起迁移，U 盘携带即插即用）；程序目录只读或想把数据单独存放时，  # noqa: F401 re-export
+# 用 --data-dir <路径> 或环境变量 OC_DATA_DIR 重定向到任意可写位置。  # noqa: F401 re-export
+DATA_DIR = Path(os.environ.get("OC_DATA_DIR") or _argv_data_dir() or BASE_DIR)  # noqa: F401 re-export
+# 数据目录可写性的进程内缓存（None = 尚未探测），见 data_dir_writable()  # noqa: F401 re-export
 _DATA_DIR_WRITABLE: bool | None = None
 CONFIG_DIR = DATA_DIR / "config"
 WEB_DIR = BASE_DIR / "web"

@@ -598,7 +598,7 @@
             line-height:1.25}
   .pbox.good{border-color:var(--ok-bd);background:var(--ok-bg)}
   .pbox.good .pv{color:var(--ok-fg)}
-  .pbox.bad{border-color:var(--warn-bd);background:#241c0e}
+  .pbox.bad{border-color:var(--warn-bd);background:var(--warn-bg)}
   .pbox.bad .pv{color:var(--warn-fg)}
   .prow{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:7px;
         border:1px solid var(--line);background:var(--panel-hover);margin-top:5px;font-size:12.5px}
@@ -2016,7 +2016,9 @@ function drawGameTrend() {
   }
   cv.onmousemove = ev => {
     const rect = cv.getBoundingClientRect();
-    const mx = ev.clientX - rect.left;   // X() 是逻辑坐标，不要乘 dpr
+    // 窄窗口下 main 有 CSS zoom：getBoundingClientRect 返回的是
+    // 缩放后的视觉宽度，须按 W/rect.width 归一回逻辑坐标（P3 审计项）
+    const mx = (ev.clientX - rect.left) * (W / Math.max(1, rect.width));
     let bi = 0, bd = Infinity;
     for (let i = 0; i < pts.length; i++) {
       const d = Math.abs(X(ts[i]) - mx);
@@ -3132,16 +3134,43 @@ function confirmDialog() {
 }
 function closeModal() { $("mask").classList.remove("on"); }
 
-// P3-3 焦点管理（外部审计可访问性项）：高危确认弹窗打开时把焦点移入
-// 弹窗内第一个按钮（默认落在「取消」上，误按 Enter 不会触发删除）；
-// Tab 循环限制在弹窗内部。观察 mask 的 class 变化即可，无需改动
-// 七八个各自 add("on") 的调用点。
+// P3-3 焦点管理 v2（二轮审计 3.1：修三处边界问题）：
+// ① 开窗自动聚焦「安全按钮」（取消/关闭类优先），杜绝回车误触删除；
+// ② 弹窗内二次切换视图（详情→确认清理等）时 mask 的 class 不变、
+//    class 观察器不触发 → 追加 #modal childList 观察器补触发；
+// ③ 关闭时把焦点还给打开弹窗前的触发元素（键盘用户 Esc 关窗不丢焦点）；
+// ④ Tab 循环只在边界拦截，弹窗内部的原生移动不干预。
+let _lastModalTrigger = null;
+function _focusSafeModalControl() {
+  if (!$("mask").classList.contains("on")) return;
+  const modal = $("modal");
+  const safe = modal.querySelector(
+    "#mCancel, #dgCancel, #dClose, #dClose2, #mDone, #ovCancel, "
+    + "#grpClose, #bfClose, #dupClose, #dlClose");
+  if (safe && !safe.disabled) { safe.focus(); return; }
+  const f = modal.querySelector(
+    "input[type=text], textarea, select, button:not(.go):not(.res-err)");
+  if (f) f.focus();
+}
+function closeModal() {
+  $("mask").classList.remove("on");
+  if (_lastModalTrigger && typeof _lastModalTrigger.focus === "function") {
+    try { _lastModalTrigger.focus(); } catch (_) {}
+  }
+  _lastModalTrigger = null;
+}
 new MutationObserver(() => {
   if ($("mask").classList.contains("on")) {
-    const f = $("modal").querySelector("button, [href], input, select, textarea");
-    if (f) f.focus();
+    if (!_lastModalTrigger || $("modal").contains(_lastModalTrigger)) {
+      _lastModalTrigger = document.activeElement;
+    }
+    _focusSafeModalControl();
   }
 }).observe($("mask"), { attributes: true, attributeFilter: ["class"] });
+// 弹窗已开时就地替换内容（mask class 不变）：靠这个观察器补聚焦
+new MutationObserver(() => {
+  if ($("mask").classList.contains("on")) _focusSafeModalControl();
+}).observe($("modal"), { childList: true });
 document.addEventListener("keydown", e => {
   if (e.key !== "Tab" || !$("mask").classList.contains("on")) return;
   const f = [...$("modal").querySelectorAll("button, [href], input, select, textarea")]

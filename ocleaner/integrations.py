@@ -286,7 +286,7 @@ def _version_tuple(v: str) -> tuple[int, ...] | None:
 
 
 def app_update_check() -> dict:
-    """从 GitHub Releases 读取最新版本并与 APP_VERSION 比较。
+    """从 GitHub Releases 读取最新版本并与 _core.APP_VERSION 比较。
 
     只读不改：是否下载、是否升级永远由用户自己点；网络不可达时如实报错，
     绝不静默当作「已是最新」。版本比较按数字逐段比，无法解析时如实说明。
@@ -297,15 +297,15 @@ def app_update_check() -> dict:
         with _core._urlopen(req, timeout=10) as r:
             data = json.loads(r.read().decode("utf-8", "replace"))
     except Exception as e:
-        return {"ok": False, "current": APP_VERSION,
+        return {"ok": False, "current": _core.APP_VERSION,
                 "error": f"无法连接 GitHub（{e}）；也可以直接到仓库 Releases 页查看"}
     tag = str(data.get("tag_name") or "").lstrip("vV")
     latest = _version_tuple(tag)
-    cur = _version_tuple(APP_VERSION)
+    cur = _version_tuple(_core.APP_VERSION)
     assets = [a for a in (data.get("assets") or []) if isinstance(a, dict)]
     download = next((a.get("browser_download_url") for a in assets
                      if str(a.get("name") or "").lower().endswith(".zip")), "")
-    return {"ok": True, "current": APP_VERSION, "latest": tag or None,
+    return {"ok": True, "current": _core.APP_VERSION, "latest": tag or None,
             "newer": bool(latest and cur and latest > cur),
             "parse_note": None if (latest and cur) else "版本号无法解析，请自行到发布页核对",
             "name": data.get("name") or "",

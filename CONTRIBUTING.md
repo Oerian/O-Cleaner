@@ -146,7 +146,7 @@ gh workflow run ci.yml --repo <owner>/<repo> --ref main
 
 ### 前后端架构约定
 
-- **后端模块化（`app.py` + `ocleaner/`）**：根目录 `app.py` 保持为启动入口与向后兼容导出层（re-export `ocleaner.core` 全部符号），核心实现位于 `ocleaner/` 标准库子包（`core.py`、`store.py`、`deleter.py`、`measure.py`、`credentials.py` 等）。新增子模块时必须同步加入 `tools/make_package.py` 的 `INCLUDE` 清单。
+- **后端模块化（`app.py` + `ocleaner/`）**：根目录 `app.py` 保持为启动入口与向后兼容导出层（re-export `ocleaner.core` 全部符号），核心实现位于 `ocleaner/` 标准库子包（`core.py`、`store.py`、`deleter.py`、`measure.py`、`credentials.py`、`games.py`、`integrations.py`）。新增子模块时必须同步加入 `tools/make_package.py` 的 `INCLUDE` 清单。
 - **前端单文件（`web/index.html`）**：HTML + CSS + JS + 双语词典集中于单文件，不引入构建步骤、不引第三方库；所有动态插入 `innerHTML` 的字段必须经过 `esc()` 转义；新增渲染函数需注册到 `setLang()` 的语言切换重绘列表中。
 - **零运行时依赖**：只用 Python 标准库 + 系统自带的 PowerShell / Win32 API / Edge。
 - **确认与焦点约束**：危险操作（删除）必须有确认弹窗，列出确切路径与大小，且弹窗开启时焦点默认落于安全按钮（「取消」）。

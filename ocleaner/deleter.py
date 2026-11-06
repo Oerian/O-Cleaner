@@ -47,8 +47,6 @@ def _long_path(p: str) -> str:
     if not _core.IS_WINDOWS or "~" not in p:
         return p
     try:
-        import ctypes
-        from ctypes import wintypes
         get_long = ctypes.windll.kernel32.GetLongPathNameW
         get_long.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
         get_long.restype = wintypes.DWORD
@@ -104,8 +102,6 @@ def _precheck_locked_files(path: str) -> list[str]:
 
 def rm_trash(path: str) -> tuple[bool, str]:
     """把文件/目录移入回收站。返回 (是否成功, 失败原因)。"""
-    import ctypes
-    from ctypes import wintypes
     path = os.path.abspath(path)
     if not os.path.exists(path):
         return True, ""

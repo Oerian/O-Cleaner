@@ -128,7 +128,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 |---|---|
 | `启动 O-Cleaner.bat` | 启动脚本（内置 Python 3.8+ 真实运行时校验） |
 | `app.py` | 启动入口与向后兼容导出层（CLI 参数分发、服务启动） |
-| `ocleaner\` | 核心业务标准库包（`core.py` 主逻辑、`store.py` 原子存取与锁、`deleter.py` 三态删除与占用预检、`measure.py` 进程内 `os.scandir` 测量、`credentials.py` Windows DPAPI 凭据加密等） |
+| `ocleaner\` | 核心业务标准库包（`core.py` 主逻辑、`store.py` 原子存取与锁、`deleter.py` 三态删除与占用预检、`measure.py` 进程内 `os.scandir` 测量、`credentials.py` Windows DPAPI 凭据加密、`games.py` 全平台游戏库发现与趋势、`integrations.py` 自有 AI / Gist 云同步 / 版本更新检查） |
 | `ps_scripts.py` | PowerShell 脚本模板常量（全盘树回退、进程占用候选枚举、Steam 清单等） |
 | `web/index.html` | Web 界面（单文件 HTML + CSS + JS，内置中英双语词典） |
 | `config/targets.json` | 预定义清理目标与一键预设（可自行增删条目） |

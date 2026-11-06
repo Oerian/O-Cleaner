@@ -659,11 +659,13 @@ O-Cleaner\
 ├─ ps_scripts.py           PowerShell 脚本模板常量
 ├─ ocleaner\               核心业务标准库包
 │   ├─ __init__.py         包导出声明
-│   ├─ core.py             扫描引擎、识别规则、游戏库与 HTTP 路由主实现
+│   ├─ core.py             扫描引擎、识别规则与 HTTP 路由主实现
 │   ├─ store.py            原子写（_atomic_write）、带缓存 JSON 读取与进程内/跨进程锁
 │   ├─ deleter.py          三态删除（rm_tree_strict）、占用预检、重解析点保护与中断恢复
 │   ├─ measure.py          进程内 os.scandir 测量原语（免 PowerShell 冷启动）
-│   └─ credentials.py      Windows DPAPI 凭据加密（防拷机泄露密钥）
+│   ├─ credentials.py      Windows DPAPI 凭据加密（防拷机泄露密钥）
+│   ├─ games.py            Steam / Epic / GOG 游戏库发现、残留检测与体积趋势
+│   └─ integrations.py     自有 AI 助手、GitHub Gist 云同步与 GitHub Releases 更新检查
 ├─ README.md               项目简介
 ├─ docs\
 │   ├─ USAGE.md            本文件（完整使用指南）

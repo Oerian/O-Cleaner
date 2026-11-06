@@ -652,11 +652,13 @@ O-Cleaner\
 ├─ ps_scripts.py           PowerShell script template constants
 ├─ ocleaner\               core standard-library package
 │   ├─ __init__.py         package exports
-│   ├─ core.py             scan engines, identification rules, game libraries, and HTTP routes
+│   ├─ core.py             scan engines, identification rules, and HTTP routes
 │   ├─ store.py            atomic JSON writes (_atomic_write), mtime-cached reads, and locks
 │   ├─ deleter.py          3-state deletion (rm_tree_strict), lock precheck, reparse guard, recovery
 │   ├─ measure.py          in-process os.scandir measurement primitives (no PowerShell cold-start)
-│   └─ credentials.py      Windows DPAPI credential encryption (prevents secret leaks on folder copy)
+│   ├─ credentials.py      Windows DPAPI credential encryption (prevents secret leaks on folder copy)
+│   ├─ games.py            Steam / Epic / GOG game discovery, orphan detection, and size trends
+│   └─ integrations.py     bring-your-own AI assistant, GitHub Gist sync, and release update check
 ├─ README.md               project introduction
 ├─ docs\
 │   ├─ USAGE.md            full usage guide (Chinese)
