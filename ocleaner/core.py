@@ -5394,6 +5394,11 @@ def junction_move(src: str, dst: str, merge: bool = False,
         return {"error": "目标必须在不同盘符（同盘直接移动即可，无需搬家）"}
     if os.path.exists(dst) and not merge:
         return {"error": "目标已存在（勾选「合并」可并入现有目录）"}
+    # 护栏链前置（三轮审计补强）：受保护目录/个人数据域/盘根等一律拒绝
+    # ——搬家虽不删数据，但给 C:\Windows 建映射等于破坏系统。
+    ok, why = check_deletable(src)
+    if not ok:
+        return {"error": why or "护栏拦截"}
     locked = _precheck_locked_files(src)
     if locked:
         return {"error": "源目录存在被占用的文件，搬家已中止",
@@ -5401,7 +5406,10 @@ def junction_move(src: str, dst: str, merge: bool = False,
     # 1) 拷贝（支持合并 + 冲突自动重命名）
     file_count = [0]
     byte_count = [0]
-    dst.mkdir(parents=True, exist_ok=True) if isinstance(dst, Path) else Path(dst).mkdir(parents=True, exist_ok=True)
+    try:
+        Path(dst).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return {"error": f"无法在目标位置创建目录（权限不足或路径非法）：{exc}"}
     for root, dirs, files in os.walk(src):
         rel = os.path.relpath(root, src)
         target_root = os.path.normpath(
@@ -6938,7 +6946,8 @@ class Handler(BaseHTTPRequestHandler):
                 r"SOFTWARE\WOW6432Node\Microsoft\Windows"
                 r"\CurrentVersion\Uninstall")
             if not reg_key or not any(
-                    reg_key.startswith(p) for p in ok_prefixes):
+                    reg_key.startswith(p) for p in ok_prefixes)                     or ".." in reg_key.split("\\"):
+                # 前缀白名单 + 拒绝任何 .. 段（防穿越出 Uninstall 子树）
                 return self._json({"error": "reg_key 非法"}, 400)
             if not IS_WINDOWS:
                 return self._json({"error": "仅 Windows"}, 400)
@@ -7283,6 +7292,30 @@ def pick_port(preferred: int) -> int:
     raise SystemExit(f"{preferred} 起连续 30 个端口都不可用")
 
 
+def _open_app_window(url: str) -> None:
+    """Edge --app 无边框窗口（v3.0 原生体验方向）：零依赖实现桌面化外观。
+
+    找 Edge（稳定版优先，其次 Beta/Dev/Canary 与 Chrome 兜底——同为
+    Chromium，--app 行为一致）；找不到就回退默认浏览器。
+    """
+    candidates = [
+        os.path.expandvars(r"%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\\Microsoft\\Edge\\Application\\msedge.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\\Microsoft\\Edge Application\\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe"),
+    ]
+    for exe in candidates:
+        if os.path.isfile(exe):
+            try:
+                subprocess.Popen([exe, f"--app={url}"],
+                                 creationflags=CREATE_NO_WINDOW)
+                return
+            except OSError:
+                continue
+    webbrowser.open(url)   # 兜底：默认浏览器
+
+
 def run_auto_clean(drive: str) -> dict:
     """无头单次清理（v2.15 CLI Automation，配任务计划程序用）。
 
@@ -7337,6 +7370,9 @@ def main() -> None:
                     help="打印版本号后退出（排障/打包核对用，版本单点定义在 APP_VERSION）")
     ap.add_argument("--drive", default=None, help="命令行扫描时指定盘符，如 D")
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--app", action="store_true",
+                    help="用 Edge 无边框应用窗口打开界面（v3.0 原生桌面体验，"
+                         "配 pythonw.exe 可无黑窗常驻）")
     ap.add_argument("--scan-only", action="store_true")
     ap.add_argument("--fullscan-only", action="store_true",
                     help="命令行扫描磁盘占用树并打印，不开服务")
@@ -7467,7 +7503,10 @@ def main() -> None:
     print("  关闭此窗口即停止服务。")
     print()
     if not args.no_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        if getattr(args, "app", False):
+            threading.Timer(0.8, lambda: _open_app_window(url)).start()
+        else:
+            threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

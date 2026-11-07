@@ -1591,6 +1591,13 @@ SECURITY 该处表述未动。
 - **环呼吸空间（第五轮微调，v2.11 后本地）**：用户反馈「环状图还是有点紧凑」。修法：环 134→**150px**（`::after` inset 17→19px、中心字号 22→24px），`.ovrow` gap 20→24 + 上下 padding、`#fsOverview` margin-top 6px——环上方距进度条 12px、下方距引擎条 18px，不再贴边。
 - **回归**：selftest **580-0-6** 全绿（stub 化后全量 ~2.5 分钟）；CDP **141-0-5**；7 道门禁全过；探针实测：环 150px、本次扫到统计宽 123px（原整行拉伸）、图表坞 769px 宽、13 列柱底边唯一、无横向溢出、`#dwTabs` 全页唯一、页签落在环带内。
 
+**㉒补（2026-11-07 中午）：engines + guard 域迁出——P2-1 模块化拆分全面收官（本地待推送）**——两个提交（`eeb1178` engines、`7c8f96c` guard），ocleaner 包达 **10 模块**：
+- **engines.py**（23 span）：11 个 MFT 直读函数 + 12 个 WizTree 函数 + 11 组 WIZTREE_*/MFT_* 常量 + `_WIZ_CACHE`（随域迁移——`global` 重绑定语句与定义同模块自洽）。`_WIZ_DIRS` 留 core（扫描编排/dupfiles/快照钩子三方读写，引擎内经 `_core` 引用同一字典对象）。
+- **guard.py**（20 span）：check_deletable 九层护栏链 + _guarded_zone 分区判定 + 已安装程序/浏览器档案识别 + _override_key 覆盖存取 + 12 组签名常量（BROWSER_CACHE_DIRS 随迁组合出 ZONE_CACHE_EXEMPT——**模块级求值常量随消费方迁**）。guard_matrix 50 项护栏矩阵直接落本模块。
+- **管线经验补充**：①嵌套函数名（read_chunks）会被「外部引用改写」误改——分析器 bound 集必须收集嵌套 FunctionDef；②模块级求值常量（依赖 BASE_DIR/CONFIG_DIR）一律随**消费方留 core**（WIZTREE_PORTABLE_DIR 教训，与 _SYNC_CFG_PATH/GAMENAMES_PATH 同款）；③脚本写文件铁律再犯两次——**统一 `newline=''` 写 LF + fix-encoding 收尾**，绝不组合 `.replace('\n','\r\n')` 与 `newline='\r\n'`；④多行导入锚点用 strip 匹配（缩进数漂移两次踩坑）。
+- **测试**：unit_test **24-0** · selftest **594-0-6** · CDP **141-0-5** · guard_matrix **50-0** · check_undefined **61 符号可达** · 打包冒烟 **10 模块** · 7 道门禁 · CI 全绿。
+- **v2.15「拆分收官」完成**：ocleaner 包 = core（路由编排层）+ engines/guard/deleter/store/measure/credentials/games/integrations 九个域模块。剩余仅 v3.0 生态项（代码签名/winget/资源包签名分级——需外部资质与仓库基建）。
+
 **㉑补（2026-11-07 上午）：v2.15 功能批全部落地（本地待推送）**——远景规划中期阶段功能收官：
 - **① 应用专清视图**（`/__oc__/appclean/scan` + 工具栏「应用专清」）：10 类签名（微信/企业微信/QQ NT/剪映/Docker vhdx/HuggingFace/Ollama/pip/npm/Steam 着色器），逐子项测体积并标 **cache（可清）/data（按需）/core（锁定警示）** 三类语义；cache 项一键移入回收站（走 delete-paths 护栏链），data 项给官方处理建议（如 Docker 的 `wsl --shutdown` + `Optimize-VHD`、Ollama 的 `ollama rm`）；core 项（聊天数据库）永远锁定。签名库可经代码内 `_APPCLEAN_APPS` 扩展。
 - **② Treemap 矩形树图**（`/__oc__/treemap` + 工具栏「树图」）：纯 Canvas 简化 Squarified 布局，数据来自扫描缓存零额外读盘；点击色块下钻（栈式返回上一级），色块带名称/体积标签，坐标按 zoom 归一。
