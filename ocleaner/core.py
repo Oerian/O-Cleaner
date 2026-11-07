@@ -6903,6 +6903,156 @@ def junction_restore(src: str) -> dict:
 
 
 
+# ---- 应用专清（v2.15 方向三）：国民级大软件与开发者缓存结构化拆解 ----
+# kind 语义：cache=纯缓存可放心清；data=用户数据按需处理；core=核心不可动
+_APPCLEAN_APPS = [
+    {"id": "wechat", "name": "微信",
+     "bases": ["%APPDATA%\\Tencent\\WeChat",
+               "%USERPROFILE%\\Documents\\WeChat Files"],
+     "items": [
+         {"sub": "FileStorage\\Cache", "kind": "cache", "label": "图片/缩略图缓存"},
+         {"sub": "FileStorage\\MsgAttach", "kind": "cache", "label": "聊天图片缓存"},
+         {"sub": "FileStorage\\Video", "kind": "data", "label": "聊天视频（按需清理）"},
+         {"sub": "FileStorage\\File", "kind": "data", "label": "接收的文件（按月归档）"},
+         {"sub": "FileStorage\\BackupFiles", "kind": "data", "label": "旧备份"},
+         {"sub": "Msg", "kind": "core", "label": "聊天数据库（绝对不能删）"}]},
+    {"id": "wxwork", "name": "企业微信",
+     "bases": ["%APPDATA%\\WXWork"],
+     "items": [
+         {"sub": "Cache", "kind": "cache", "label": "缓存"},
+         {"sub": "File\\Cache", "kind": "cache", "label": "文件缓存"}]},
+    {"id": "qq", "name": "QQ（NT 版）",
+     "bases": ["%LOCALAPPDATA%\\Packages\\*Tencent*QQ*\\LocalCache",
+               "%USERPROFILE%\\Documents\\Tencent Files"],
+     "items": [
+         {"sub": "nt_qq*\\FileStorage", "kind": "cache", "label": "消息图片缓存"}]},
+    {"id": "jianying", "name": "剪映",
+     "bases": ["%LOCALAPPDATA%\\JianyingPro"],
+     "items": [
+         {"sub": "User Data\\Cache", "kind": "cache", "label": "草稿缓存"},
+         {"sub": "User Data\\Cache\\user_texture_cache", "kind": "cache", "label": "贴纸/素材缓存"}]},
+    {"id": "docker", "name": "Docker Desktop（WSL2 虚拟磁盘）",
+     "bases": ["%LOCALAPPDATA%\\Docker"],
+     "items": [
+         {"sub": "wsl\\data\\ext4.vhdx", "kind": "data", "label": "虚拟磁盘镜像"
+          , "advice": "镜像文件不能直接删。先 wsl --shutdown，再用 "
+                      "Optimize-VHD -Path <此文件> -Mode Full 压缩回收空间"}]},
+    {"id": "huggingface", "name": "HuggingFace 模型缓存",
+     "bases": ["%USERPROFILE%\\.cache\\huggingface"],
+     "items": [
+         {"sub": "hub", "kind": "cache", "label": "已下载模型"}]},
+    {"id": "ollama", "name": "Ollama 本地模型",
+     "bases": ["%USERPROFILE%\\.ollama"],
+     "items": [
+         {"sub": "models", "kind": "cache", "label": "已拉取模型"
+          , "advice": "建议用 ollama rm <模型名> 精确卸载，而不是手删"}]},
+    {"id": "pip", "name": "pip 包缓存",
+     "bases": ["%LOCALAPPDATA%\\pip"],
+     "items": [
+         {"sub": "cache", "kind": "cache", "label": "下载缓存"
+          , "advice": "也可 pip cache purge"}]},
+    {"id": "npm", "name": "npm / pnpm 缓存",
+     "bases": ["%LOCALAPPDATA%\\npm-cache", "%LOCALAPPDATA%\\pnpm-cache"],
+     "items": [
+         {"sub": "", "kind": "cache", "label": "包缓存"
+          , "advice": "也可 npm cache clean --force"}]},
+    {"id": "shader", "name": "Steam 着色器缓存",
+     "bases": ["%PROGRAMFILES(x86)%\\Steam\\steamapps\\shadercache"],
+     "items": [
+         {"sub": "", "kind": "cache", "label": "着色器缓存（删后首次进游戏会重建）"}]},
+]
+
+
+def appclean_scan(drive: str | None = None) -> dict:
+    """应用专清扫描（v2.15 方向三）：对每个已知应用逐子项测体积，
+    标注 cache/data/core 三类语义 —— 「哪些删了只清缓存、哪些是接收的
+    文件、哪些绝对不能碰」一目了然。只读不删；清理走 delete-paths。"""
+    out = []
+    for app in _APPCLEAN_APPS:
+        base_found = None
+        for b in app.get("bases", []):
+            cand = os.path.normpath(os.path.expandvars(b))
+            if any(cand.upper().startswith(drive_prefix)
+                   for drive_prefix in [f"{drive}:"]
+                   ) if drive else True:
+                if glob_has_dir(cand):
+                    base_found = cand
+                    break
+        if not base_found:
+            continue
+        items = []
+        total = 0
+        for it in app.get("items", []):
+            ipath = os.path.normpath(os.path.expandvars(
+                os.path.join(base_found, it["sub"])))
+            if it["sub"] and "*" in it["sub"]:
+                hits = glob_dirs(ipath)
+            else:
+                hits = [ipath] if os.path.isdir(ipath) or os.path.isfile(ipath) else []
+            sz = sum((_dir_size(h, shallow=True) if os.path.isdir(h)
+                      else (os.path.getsize(h) if os.path.isfile(h) else 0))
+                     for h in hits)
+            if not hits or sz == 0:
+                continue
+            total += sz
+            items.append({"label": it["label"], "kind": it["kind"],
+                          "path": hits[0], "paths": hits,
+                          "size": sz, "size_h": human(sz),
+                          "advice": it.get("advice", "")})
+        if items:
+            out.append({"id": app["id"], "name": app["name"],
+                        "base": base_found, "total": total,
+                        "total_h": human(total), "items": items})
+    out.sort(key=lambda a: -a["total"])
+    return {"ok": True, "apps": out}
+
+
+def glob_has_dir(pattern: str) -> bool:
+    """通配符路径是否存在匹配目录（无通配符时直接判存在）。"""
+    import glob as _glob
+    return bool(_glob.glob(pattern))
+
+
+def glob_dirs(pattern: str) -> list:
+    """通配符展开出的目录清单（如 QQ 多账号包目录）。"""
+    import glob as _glob
+    return [g for g in _glob.glob(pattern) if os.path.isdir(g)]
+
+
+# ---- Treemap 数据源（v2.15 方向六）：扫描缓存的某目录一级子项 ----
+def treemap_data(drive: str, parent: str = "") -> dict:
+    """返回 parent 的一级子项清单（目录 + 文件聚合），供 Canvas 树图。
+
+    parent 为空 = 盘根。数据来自 WizTree/MFT 扫描缓存（零额外读盘）。
+    """
+    letter = (drive or "C").rstrip(":").upper()
+    cached = _WIZ_DIRS.get(letter)
+    if not cached or not cached.get("table"):
+        return {"error": f"请先对 {letter}: 盘做一次全盘扫描", "nodes": []}
+    parent_n = os.path.normcase(os.path.normpath(parent or f"{letter}:\\"))
+    prefix = parent_n + "\\"
+    dirs = cached["table"].get("dirs") or {}
+    agg: dict[str, float] = {}
+    for path, size in dirs.items():
+        pn = os.path.normcase(path)
+        if pn.startswith(prefix) and "\\" not in pn[len(prefix):]:
+            agg[path] = agg.get(path, 0) + size
+    files_agg = 0
+    for parent_key, items in (cached["table"].get("files") or {}).items():
+        if os.path.normcase(parent_key) == parent_n:
+            for _name, sz, _full in items:
+                files_agg += sz
+    nodes = [{"name": os.path.basename(k) or k, "path": k, "size": v,
+              "kind": "dir"} for k, v in agg.items()]
+    nodes.append({"name": "（散落文件）", "path": parent, "size": files_agg,
+                  "kind": "files"})
+    nodes.sort(key=lambda x: -x["size"])
+    for n0 in nodes:
+        n0["size_h"] = human(n0["size"])
+    return {"ok": True, "parent": parent or f"{letter}:\\",
+            "nodes": nodes[:60]}
+
+
 def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
     """在扫描缓存里找「体积相同且首尾采样一致」的大文件组。
 
@@ -7036,6 +7186,10 @@ def downloads_advice(limit_names: int = 3) -> dict:
             slot["cleanable"] = True
         if len(slot["names"]) < limit_names:
             slot["names"].append(e.name)
+        if len(slot.get("items") or []) < 50:
+            slot.setdefault("items", []).append(
+                {"name": e.name, "path": e.path, "size": sz,
+                 "size_h": human(sz)})
     groups = sorted(agg.values(), key=lambda g: -g["size"])
     for g in groups:
         g["size_h"] = human(g["size"])
@@ -8278,6 +8432,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(fs_search(
                 str(body.get("drive") or drive or "C"),
                 str(body.get("q") or "")))
+        if route == "/__oc__/appclean/scan":
+            return self._json(appclean_scan(
+                (body.get("drive") or drive or "").rstrip(":").upper()))
+        if route == "/__oc__/treemap":
+            return self._json(treemap_data(
+                str(body.get("drive") or drive or "C"),
+                str(body.get("parent") or "")))
         if route == "/__oc__/sync/save":
             with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
                 cfg = _sync_cfg()
@@ -8527,6 +8688,29 @@ def pick_port(preferred: int) -> int:
     raise SystemExit(f"{preferred} 起连续 30 个端口都不可用")
 
 
+def run_auto_clean(drive: str) -> dict:
+    """无头单次清理（v2.15 CLI Automation，配任务计划程序用）。
+
+    「safe 预设」的定义即：只清 cleanable=True 的目标（知识库判定
+    「建议清理」的才入选，建议保留/未识别一律不碰），高风险项一律入
+    回收站（可恢复），全程记历史与回执。输出 JSON 摘要供上层调度。
+    """
+    drive = (drive or "C").rstrip(":").upper()
+    targets = [t for t in build_targets(drive)
+               if t.get("cleanable") is not False]
+    results = []
+    for t in targets:
+        try:
+            results.append(clean_target(t, None, drive, trash=True))
+        except Exception as exc:  # noqa: BLE001
+            results.append({"id": t.get("id"),
+                            "error": f"{type(exc).__name__}: {exc}"})
+    freed = sum(r.get("freed", 0) or 0 for r in results
+                if isinstance(r, dict))
+    return {"drive": drive, "targets": len(selected_targets := targets),
+            "freed": freed, "freed_h": human(freed), "results": results}
+
+
 def main() -> None:
     _dpapi_migrate_plaintext()   # 批次 A3：明文凭据惰性迁移（加密回写）
     if IS_WINDOWS:
@@ -8561,6 +8745,10 @@ def main() -> None:
     ap.add_argument("--scan-only", action="store_true")
     ap.add_argument("--fullscan-only", action="store_true",
                     help="命令行扫描磁盘占用树并打印，不开服务")
+    ap.add_argument("--auto-clean", action="store_true",
+                    help="无头单次清理（safe 预设：只清 cleanable 目标，"
+                         "高风险入回收站），打印 JSON 摘要后退出；"
+                         "配合 --drive 与 Windows 任务计划程序使用")
     ap.add_argument("--depth", type=int, default=0,
                     help="配合 --fullscan-only 指定展开层数（默认 5）")
     ap.add_argument("--data-dir", default=None, metavar="PATH",
@@ -8573,6 +8761,10 @@ def main() -> None:
     ap.add_argument("--lint", action="store_true",
                     help="只跑规则 linter（发布/贡献规则前用），不开服务")
     args = ap.parse_args()
+    if getattr(args, "auto_clean", False):
+        print(json.dumps(run_auto_clean(args.drive or "C"), ensure_ascii=False,
+                         indent=2))
+        return
 
     if args.version:
         print(f"O-Cleaner v{APP_VERSION}")

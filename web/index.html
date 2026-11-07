@@ -831,6 +831,8 @@
     <button id="btnDlAdvice" data-i18n="btn.dlAdvice">下载整理</button>
     <button id="btnJunctionMove" data-i18n="btn.jm">C 盘搬家</button>
     <button id="btnSnapDiff" data-i18n="btn.snapDiff">近期暴涨</button>
+    <button id="btnAppClean" data-i18n="btn.ac">应用专清</button>
+    <button id="btnTreemap" data-i18n="btn.tm">树图</button>
     <button id="btnBloat" data-i18n="btn.bloat">毒瘤清除</button>
     <button id="btnDense" data-i18n="btn.dense">紧凑模式</button>
     <button id="btnAll" data-i18n="btn.all">全选</button>
@@ -5750,6 +5752,154 @@ async function openSnapDiff() {
 }
 $("btnSnapDiff").addEventListener("click", openSnapDiff);
 
+/* 应用专清（v2.15 方向三）：国民级大软件与开发者缓存结构化拆解。
+   cache 项可一键移入回收站；data 项给处理建议；core 项锁定警示。 */
+async function openAppClean() {
+  $("modal").innerHTML = `<h2>${t("ac.title", "应用专清")}</h2>
+    <div class="mbody"><div class="empty"><span class="spin"></span>
+      ${t("ac.loading", "正在测量各应用的数据目录…")}</div></div>`;
+  $("mask").classList.add("on");
+  const r = await apiJSON(`${API}/__oc__/appclean/scan`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ drive }) }).catch(e => ({ error: String(e) }));
+  const apps = r.apps || [];
+  const kindBadge = k => k === "cache"
+    ? `<span style="color:var(--ok-fg)">${t("ac.cache", "缓存·可清")}</span>`
+    : k === "core"
+      ? `<span style="color:var(--danger-fg)">🔒 ${t("ac.core", "核心·勿动")}</span>`
+      : `<span style="color:var(--warn-fg)">${t("ac.data", "数据·按需")}</span>`;
+  $("modal").innerHTML = `<h2>${t("ac.title", "应用专清")}
+      <span class="hint">${t("ac.n", "{n} 个应用").replace("{n}", apps.length)}</span></h2>
+    <div class="mbody">${apps.length ? apps.map(a => `
+      <div class="logrow">
+        <div class="t"><b>${esc(a.name)}</b>
+          <span class="freed">${a.total_h}</span>
+          <span class="hint">${esc(a.base)}</span></div>
+        ${a.items.map(it => `
+        <div class="d" style="word-break:break-all">
+          ${kindBadge(it.kind)} <b>${esc(it.label)}</b>
+          <span class="freed">${it.size_h}</span>
+          ${it.kind === "cache" ? `<button class="tiny ac-go" data-p='${esc(it.path)}'
+             data-label='${esc(it.label)}'>${t("ac.clean", "清入回收站")}</button>` : ""}
+        </div>
+        ${it.advice ? `<div class="d hint">💡 ${esc(it.advice)}</div>` : ""}
+        `).join("")}
+      </div>`).join("")
+      : `<div class="empty">${t("ac.none", "签名库里的应用数据目录在本机均未发现")}</div>`}
+    <div class="d hint">${t("ac.tip", "core 项（聊天数据库等）永远不可清理；data 项（接收的文件等）请自行确认后处理。")}</div>
+    <div style="text-align:right;padding-top:10px">
+      <button class="tiny" id="acClose">${t("cc.close", "关闭")}</button></div></div>`;
+  $("acClose").addEventListener("click", closeModal);
+  [...document.querySelectorAll("#modal .ac-go")].forEach(b =>
+    b.addEventListener("click", async () => {
+      b.disabled = true; b.textContent = t("ac.working", "清理中…");
+      const rr = await apiJSON(`${API}/__oc__/delete-paths`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: [b.dataset.p] }) });
+      toast(rr.error || t("ac.cleaned", "已移入回收站（明细计入清理记录）"));
+      openAppClean();
+    }));
+}
+$("btnAppClean").addEventListener("click", openAppClean);
+
+/* Treemap 矩形树图（v2.15 方向六）：纯 Canvas Squarified，零第三方库。
+   点击色块下钻；「返回上一级」沿栈回退；色带按体积深浅着色。 */
+async function openTreemap(parent) {
+  const stack = openTreemap._stack = openTreemap._stack || [];
+  $("modal").innerHTML = `<h2>${t("tm.title", "矩形树图")}</h2>
+    <div class="mbody"><div class="empty"><span class="spin"></span>
+      ${t("tm.loading", "正在从扫描缓存取子项…")}</div></div>`;
+  $("mask").classList.add("on");
+  const r = await apiJSON(`${API}/__oc__/treemap`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ drive, parent: parent || "" }) }).catch(
+      e => ({ error: String(e) }));
+  const nodes = r.nodes || [];
+  const W = 860, H = 460;
+  const tmBtn = `<div style="text-align:right;padding:6px 0">
+      ${stack.length ? `<button class="tiny" id="tmBack">${t("tm.back", "返回上一级")}</button>` : ""}
+      <button class="tiny" id="tmClose">${t("cc.close", "关闭")}</button></div>`;
+  if (r.error) {
+    $("modal").innerHTML = `<h2>${t("tm.title", "矩形树图")}</h2>
+      <div class="mbody"><div class="empty">${esc(r.error)}</div>${tmBtn}</div>`;
+    const b = $("tmBack"); if (b) b.addEventListener("click", () =>
+      openTreemap(stack.pop() || ""));
+    $("tmClose").addEventListener("click", closeModal);
+    return;
+  }
+  $("modal").innerHTML = `<h2>${t("tm.title", "矩形树图")}
+      <span class="hint">${esc(r.parent)} · ${t("tm.tip", "点击色块下钻")}</span></h2>
+    <div class="mbody">
+      <canvas id="tmCv" width="${W}" height="${H}"
+        style="width:100%;border:1px solid var(--line);cursor:pointer"></canvas>
+      ${tmBtn}</div>`;
+  $("tmClose").addEventListener("click", closeModal);
+  const back = $("tmBack");
+  if (back) back.addEventListener("click", () => openTreemap(stack.pop() || ""));
+  const cv = $("tmCv"), ctx = cv.getContext("2d");
+  const css = getComputedStyle(document.documentElement);
+  const palette = ["#2f6f3f", "#3f7f56", "#b45309", "#1f4f6f", "#5b5f77",
+                   "#7f5a2f", "#3f5f7f", "#6f3f5f"];
+  const rects = [];
+  function layout(items, x, y, w, h) {
+    // 简化 squarified：按体积降序逐行填充，行内均匀切分
+    let i = 0, cy = y, total = items.reduce((s, n) => s + n.size, 0) || 1;
+    while (i < items.length && cy < y + h - 2) {
+      const rowH = Math.max(22, Math.min(120,
+        (h - (cy - y)) * items[i].size / Math.max(1,
+          items.slice(i).reduce((s, n) => s + n.size, 0))));
+      let cx = x;
+      const rowStart = i;
+      let rowSum = 0;
+      while (i < items.length) {
+        const w0 = w * items[i].size / Math.max(1,
+          items.slice(rowStart).reduce((s, n) => s + n.size, 0));
+        if (cx + Math.max(2, w0) > x + w + 1) break;
+        drawRect(items[i], cx, cy, Math.max(2, w0), rowH,
+                 rowStart, palette);
+        rowSum += items[i].size;
+        cx += Math.max(2, w0);
+        i++;
+        if (cy + rowH >= y + h) break;
+      }
+      cy += rowH;
+      // 占位递归保护
+      if (rowStart === i) i++;
+    }
+    function drawRect(item, rx, ry, rw, rh, rowStart, pal) {
+      const idx = rowStart % pal.length;
+      ctx.fillStyle = pal[idx] || "#555";
+      ctx.fillRect(rx, ry, rw, rh);
+      rects.push({ x: rx, y: ry, w: rw, h: rh, node: item });
+      ctx.fillStyle = "#fff";
+      if (rw > 90 && rh > 20) {
+        ctx.font = "12px sans-serif";
+        const label = item.name.length > 14
+          ? item.name.slice(0, 13) + "…" : item.name;
+        ctx.fillText(label, rx + 5, ry + 15);
+        if (rh > 34) {
+          ctx.font = "11px sans-serif";
+          ctx.fillText(item.size_h, rx + 5, ry + 30);
+        }
+      }
+    }
+  }
+  ctx.clearRect(0, 0, W, H);
+  layout(nodes, 0, 0, W, H);
+  cv.addEventListener("click", ev => {
+    const rect = cv.getBoundingClientRect();
+    const mx = (ev.clientX - rect.left) * (W / Math.max(1, rect.width));
+    const my = (ev.clientY - rect.top) * (H / Math.max(1, rect.height));
+    const hit = rects.find(rc =>
+      mx >= rc.x && mx <= rc.x + rc.w && my >= rc.y && my <= rc.y + rc.h);
+    if (hit && hit.node.kind === "dir" && hit.node.size > 0) {
+      stack.push(r.parent);
+      openTreemap(hit.node.path);
+    }
+  });
+}
+$("btnTreemap").addEventListener("click", () => { openTreemap._stack = []; openTreemap(); });
+
 /* 下载目录整理建议（#35）：按知识库归类顶层文件，给可执行建议。
    只读不动文件 —— 删/转移由用户自己决定。 */
 async function openDownloadsAdvice() {
@@ -5783,12 +5933,37 @@ async function openDownloadsAdvice() {
           <span style="color:var(--dim2)">× ${g.count}</span>
           <span class="freed">${esc(g.size_h)}</span></div>
         ${g.hint ? `<div class="d" style="color:var(--ok)">${esc(g.hint)}</div>` : ""}
-        ${g.names && g.names.length ? `<div class="d" style="word-break:break-all">
+        ${(g.items || []).length && g.cleanable ? `
+        <div class="d">${(g.items || []).map(it => `
+          <label style="display:block;cursor:pointer"><input type="checkbox"
+            class="dlChk" data-p="${esc(it.path)}"> ${esc(it.name)}
+            <span class="hint">${it.size_h}</span></label>`).join("")}</div>` : ""}
+        ${g.names && g.names.length && !(g.items || []).length ? `<div class="d" style="word-break:break-all">
           ${g.names.map(n => esc(n)).join(" · ")}</div>` : ""}
       </div>`).join("") || `<div class="empty">${t("dl.empty", "下载目录是空的")}</div>`}
     <div style="text-align:right;padding-top:10px">
+      <button class="go" id="dlGo" style="display:none">${t("dl.go", "清理选中项（移入回收站）")}</button>
       <button class="tiny" id="dlClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("dlClose").addEventListener("click", closeModal);
+  const dlGo = $("dlGo");
+  const syncGo = () => { dlGo.style.display =
+    document.querySelectorAll("#modal .dlChk:checked").length ? "" : "none"; };
+  document.querySelectorAll("#modal .dlChk").forEach(c =>
+    c.addEventListener("change", syncGo));
+  if (dlGo) dlGo.addEventListener("click", async () => {
+    const picked = [...document.querySelectorAll("#modal .dlChk:checked")]
+      .map(x => x.dataset.p);
+    if (!picked.length) { toast(t("dl.none", "请先勾选要清理的文件")); return; }
+    if (!confirm(t("dl.confirm", "把选中的 {n} 个文件移入回收站？（可随时还原）")
+        .replace("{n}", picked.length))) return;
+    dlGo.disabled = true; dlGo.textContent = t("dl.working", "清理中…");
+    const rr = await apiJSON(`${API}/__oc__/delete-paths`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths: picked }) });
+    toast(rr.error || t("dl.done", "已移入回收站 {n}/{total} 个")
+      .replace("{n}", rr.done).replace("{total}", rr.total));
+    openDownloadsAdvice();
+  });
 }
 $("btnDlAdvice").addEventListener("click", openDownloadsAdvice);
 
@@ -6892,6 +7067,28 @@ const I18N_EN = {
   "sd.calm": "No significant growth between snapshots ✓",
   "hist.restore": "↩ Restore from Recycle Bin",
   "hist.restored": "Restored to the original location",
+  "btn.ac": "App Deep Clean",
+  "btn.tm": "Treemap",
+  "ac.title": "App Deep Clean",
+  "ac.loading": "Measuring per-app data directories…",
+  "ac.n": "{n} apps",
+  "ac.cache": "Cache · safe",
+  "ac.core": "Core · do not touch",
+  "ac.data": "User data · review",
+  "ac.clean": "Clean (to Recycle Bin)",
+  "ac.working": "Cleaning…",
+  "ac.cleaned": "Moved to Recycle Bin (recorded in history)",
+  "ac.none": "No signature-library app data dirs found on this machine",
+  "ac.tip": "core items (chat databases etc.) are never cleanable; data items (received files etc.) should be reviewed before removal.",
+  "tm.title": "Treemap",
+  "tm.loading": "Loading children from the scan cache…",
+  "tm.tip": "Click a block to drill down",
+  "tm.back": "Back to parent",
+  "dl.go": "Clean selected (to Recycle Bin)",
+  "dl.none": "Select files to clean first",
+  "dl.confirm": "Move the selected {n} files to the Recycle Bin? (restorable anytime)",
+  "dl.working": "Cleaning…",
+  "dl.done": "Moved {n}/{total} files to the Recycle Bin",
   "foot.afterClean": "after cleaning {drive}: would have about",
   "stat.runs": "{n} runs recorded",
   "stat.empty": "No cleaning history yet. After the first clean, this shows the cumulative release converted into everyday units.",
