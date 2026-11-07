@@ -103,7 +103,7 @@
 
 ### 3.5 两次真实事故（必须留档）
 
-1. **`Documents\Adobe` 被改名暂存**。写端到端测试时对真实 `C:\Users\28474\Documents` 发了带 `allow_non_cleanable=True` 的 `/clean`，请求真的开始删（改名暂存成功），被宿主 safe-delete 钩子打断。**已人工改回，51 个文件与结构完整无损。** 这暴露了产品缺陷「中断不还原」，已由 `6f9f679` 修复（`pending-deletes.json` 日志 + 启动 `recover_pending_deletes`）。
+1. **`Documents\Adobe` 被改名暂存**。写端到端测试时对真实 `C:\Users\<用户名>\Documents` 发了带 `allow_non_cleanable=True` 的 `/clean`，请求真的开始删（改名暂存成功），被宿主 safe-delete 钩子打断。**已人工改回，51 个文件与结构完整无损。** 这暴露了产品缺陷「中断不还原」，已由 `6f9f679` 修复（`pending-deletes.json` 日志 + 启动 `recover_pending_deletes`）。
    → 纪律：**任何端到端删除测试必须 `OC_DATA_DIR` + 目标路径双隔离，只验纯判断函数。**
 2. **本地 AI 密钥被清空**。`POST /ai/config {"clear_api_key": true}` 打的是真实 `config/ai.json`（被 gitignore，无备份），密钥不可恢复。
    → 纪律：**写配置类接口的测试必须在隔离数据目录的子进程里跑。**

@@ -797,9 +797,9 @@ def phase1() -> None:
         check("重复大文件：识别出唯一的重复组",
               r.get("ok") is True and len(_g) == 1, f"{len(_g)} 组")
         _m = {f["name"]: f["dup"] for f in (_g[0]["files"] if _g else [])}
-        check("重复大文件：哈希一致的两个算副本，同体积不同内容的排除",
+        check("重复大文件：三级分桶后组内只有真副本（同体积不同内容整组排除）",
               _m.get("a.bin") is True and _m.get("b.bin") is True
-              and _m.get("c.bin") is False, str(_m))
+              and "c.bin" not in _m, str(_m))
         check("重复大文件：可回收体积 = 大小 ×（份数 − 1）",
               bool(_g) and _g[0]["wasted"] == (1 << 20) and _g[0]["dup_count"] == 2,
               str(_g[0].get("wasted")) if _g else "-")

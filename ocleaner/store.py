@@ -11,6 +11,8 @@ core 在自身初始化早期 import 本模块，本模块在**调用期**才访
 属性（此时 core 已全量初始化），且 monkeypatch（core.X = stub）
 对 store 内调用点可见。
 """
+
+from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import json
 import os
 import threading

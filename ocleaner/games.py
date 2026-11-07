@@ -9,6 +9,8 @@ Steam / Epic / GOG 平台清单发现（含 VDF 解析与注册表读取）、�
 selftest 的 monkeypatch 落在 core 命名空间，本模块对 core 侧符号
 （identify / human / 测量与 WizTree 表等）经 `_core.` 惰性引用访问。
 """
+
+from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import json
 import os
 import re

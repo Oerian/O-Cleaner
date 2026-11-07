@@ -22,7 +22,7 @@
 
 ## 阶段 1：全量静态审计
 
-- `py_compile` + `pyflakes` 全部 `.py`（venv: `C:/Users/28474/.workbuddy/binaries/python/envs/default/Scripts/python.exe`）；前端单文件 HTML 抽出 `<script>` 块做同样检查（未定义名、死函数、未用词条）。
+- `py_compile` + `pyflakes` 全部 `.py`（venv: `%LOCALAPPDATA%\Programs\Python（本机 venv，按实际路径替换）`）；前端单文件 HTML 抽出 `<script>` 块做同样检查（未定义名、死函数、未用词条）。
 - i18n 键对账：`I18N_EN` 词典 vs `t("key")` + `data-i18n*` 引用，双向找缺漏；注意动态 key 构造的假阳性。
 - 重点复查历史高危函数（每个都对应真实缺陷史，改前先读 HANDOFF §五）：`check_deletable`、`identify`、`run_ps`、`auto_discovered_targets`、`_looks_like_installed_program`、`normKey`（前后端契约）、`discover_junk_folders`（2026-10-20 刚复活，断言覆盖薄）。
 - 对照 HANDOFF.md §四路由表逐条核验：文档说的路由是否都存在、参数是否一致；文档没写的新路由是否有（反向找文档遗漏）。

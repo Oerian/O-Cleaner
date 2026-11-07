@@ -1591,6 +1591,19 @@ SECURITY 该处表述未动。
 - **环呼吸空间（第五轮微调，v2.11 后本地）**：用户反馈「环状图还是有点紧凑」。修法：环 134→**150px**（`::after` inset 17→19px、中心字号 22→24px），`.ovrow` gap 20→24 + 上下 padding、`#fsOverview` margin-top 6px——环上方距进度条 12px、下方距引擎条 18px，不再贴边。
 - **回归**：selftest **580-0-6** 全绿（stub 化后全量 ~2.5 分钟）；CDP **141-0-5**；7 道门禁全过；探针实测：环 150px、本次扫到统计宽 123px（原整行拉伸）、图表坞 769px 宽、13 列柱底边唯一、无横向溢出、`#dwTabs` 全页唯一、页签落在环带内。
 
+**⑲补（2026-11-07）：三份外部审计交叉核验 + P0 数据安全修复 + 毒瘤清除/C 盘搬家两大新功能（本地待推送）**——三轮审计（hy4 只读全量审计 + gemini4 两份，均经逐项对照真实代码核验）：
+- **S-01（hy4，属实，必修）**：7 个 ocleaner 子模块缺 `from __future__ import annotations`，3.8/3.9 下 PEP 585/604 注解求值即崩 —— 全部补齐（py_compile 验证 placement 合法）。
+- **S-02（hy4，属实）**：推送基线文档含本机用户名 —— HANDOFF-PROMPT.md venv 路径、ROADMAP-DRAFT 案例路径已脱敏。注意：hy4 报告的「领先 origin/main 18 提交」是**本地引用未 fetch 的假象**（fetch 后 0 领先，全部已推送）；v2.11 tag 已在远端。
+- **【P0 数据安全，gemini4 两份一致指出，属实必修】dupfiles 三级分桶**：旧 `dupfiles_scan` 把同体积桶内全部文件塞进一组、仅采样命中的标 dup；939a115 前端勾选清理丢掉 `.filter(f=>f.dup)` → 全盘唯一文件被画复选框、另一哈希组可能被整组删光。修复：同体积 → 采样哈希预筛 → **全文件 SHA-256 二次证实**（新增 `_full_sha256` 流式哈希，防首尾相同中间不同的镜像误判）→ 每个真副本集合独立成组。selftest 断言同步更新（c.bin 从「标 dup=false」改为「整组排除」——严格更优的新契约）。
+- **P1 delete-paths 加固**：仅允许普通文件（拒绝目录/链接/重解析点）；接入 `append_history` + 逐项回执（trigger=清理重复大文件，含逐文件体积与失败原因），计入累计释放量。
+- **P1 histSearch 交互修复**：搜索框从 `<h3>`（折叠面板标题，role=button）移入展开区顶部；initAccordions 点击排除 `input/select/a`、keydown 仅响应 h3 本身——修复「点击搜索框面板折叠、空格键无法输入」的必现 Bug。
+- **P2 Ollama 探测改走后端**：前端直连 11434 有跨端口 CORS 风险 → 改调 `/__oc__/ai/models`（服务端直连），顺带自动填第一个模型。
+- **新功能：毒瘤软件完整清除**（`/__oc__/bloatware/scan|sweep|uninstall` + 工具栏「毒瘤清除」）——15 款常见捆绑软件签名库（360 全家桶六件套/腾讯电脑管家/QQ 浏览器/2345 系/金山毒霸/快压/好压/百度系），两段式：①官方卸载程序（reg_key 服务端实时读注册表启动，白名单限定 Uninstall 子树防命令注入）②残留清扫（已知目录走 check_deletable 护栏链+回收站，注册表键精准删除）；清扫计入清理历史。用户可经 config/bloatware.json 扩展签名。
+- **新功能：C 盘无损搬家 v2**（`/__oc__/junction-move|restore|list` + 工具栏「C 盘搬家」）——占用预检 → 整树拷贝（支持**合并并入 + 同名冲突自动重命名**，专治误装到 C 盘的绿色软件）→ 双向校验（文件数+字节数 100% 一致）→ 原目录改名暂存 → 建 NTFS Junction → rm_tree_strict 删暂存（断电恢复）→ 记录 moved-junctions.json 支持**一键迁回**。跨盘强校验（同盘拒绝）。实测：C→E 搬家、透传读写、迁回全链路通过。
+- **卫生**：ps_scripts 三个死模板（PS_MEASURE_TREE/GLOB/PS_DIR_KIND）删除（PS_STEAM 保留——games.py 经 _core 引用，注释已正名）；tools/audit_dead.py 两处 0x08（`\b` 变退格）修复；3 个 _tmp_*.py 移出磁盘；fix-encoding 补 `.example` 规则；__init__.py docstring 更新为七模块实况；CI 加 permissions/concurrency/timeout（M-12）。
+- **hy4 报告部分声明修正**：「无 CI 结果」「领先 18 提交」系未 fetch；M-24/M-27 等文档细节项属实但低优，待后续批次。
+- **测试**：unit_test **24-0** · selftest **594-0-6** · CDP **141-0-5** · check_undefined 40 符号可达 · 7 道门禁 · 搬家/迁回/护栏实测。
+
 **⑱补（2026-11-06 凌晨）：优化方案全批次落地——A/B/C/D 四批完成（本地待推送）**——依据审计报告的修订版方案（用户确认「ABCD 全部开始」）：
 - **批次 A（低成本）**：①fix-encoding 修复「双重 CR 不动点」缺陷（旧归一化对 `\r\r\n` 原样保留 → 污染静默积累；现先剥全部 CR 再补 CRLF，幂等）——这是 core.py 反斜杠续行断裂的根因；②unit_test.py 纳入 CI 快级（每次推送 2 秒纯逻辑回归）；③凭据惰性迁移：main() 启动检测明文 api_key/token 即 DPAPI 加密回写（无需等用户保存）；④DELETE /custom-rules 补锁；⑤make_package 清单完整性校验（ocleaner 包缺模块拒绝出包）。
 - **批次 B（store 域）**：`ocleaner/store.py` —— _atomic_write/_load_json/_cache/_lock(RLock)/_cross_process_lock；字典与锁按对象共享（core 无重绑定已核查），RUNTIME_DIR/IS_WINDOWS 走 `_core` 惰性引用。

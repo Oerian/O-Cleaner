@@ -1,12 +1,15 @@
-"""O-Cleaner 后端包（P2-1 巨石拆分，2026-11-05 起步）。
+"""O-Cleaner 后端包（P2-1 巨石拆分，2026-11-05 起，2026-11-07 更新）。
 
-拆分策略（外部审计 P2-1 / HANDOFF ⑮补）：叶子模块逐个从 app.py 迁出，
-**app.py 保留在仓库根作为启动入口并 re-export 迁出符号** —— 三条兼容线
-不变：`import app`（tools/selftest 等下游）、启动脚本（python app.py）、
-打包清单（make_package.INCLUDE，新模块需逐个登记）。
+模块清单与职责：
+- core.py      实现主体（扫描编排/识别/护栏/HTTP 路由 Handler）
+- store.py     原子写 / JSON 缓存 / RLock / 跨进程文件锁
+- deleter.py   三态删除 / 锁定预检 / 回收站 / 中断恢复
+- measure.py   os.scandir 测量原语（tree/glob/dir_kind/tree_size）
+- credentials.py  Windows DPAPI 凭据加密
+- games.py     Steam/Epic/GOG 发现、游戏库、趋势
+- integrations.py  Gist 云同步 / 自有 AI 接入 / 版本更新检查
 
-已迁出：credentials（DPAPI 凭据加密，P1-4）、measure（os.scandir
-测量原语，P2-4）。后续待迁：store（原子写/JSON 缓存/统一锁）、
-guard（删除护栏链）、deleter（三态删除）、engines（MFT/WizTree/
-walk）、games、integrations、server（路由表）。
+兼容契约：根 app.py 全量 re-export core；子模块对 core 侧符号经
+`_core.` 惰性引用（selftest 的 monkeypatch 落在 core 命名空间）；
+新增模块必须登记 tools/make_package.py 的 INCLUDE（构建时强校验）。
 """

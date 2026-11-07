@@ -19,45 +19,7 @@
 PS_UTF8_PREAMBLE = ("$OutputEncoding=[System.Text.Encoding]::UTF8;"
                     "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;")
 
-PS_MEASURE_TREE = r"""
-$ErrorActionPreference='SilentlyContinue'
-$p='__PATH__'
-$denied = $false
-if (Test-Path -LiteralPath $p) {
-    $ErrorActionPreference='Stop'
-    try {
-        $m = Get-ChildItem -LiteralPath $p -Recurse -Force -File -ErrorAction Stop |
-             Measure-Object -Property Length -Sum
-    } catch {
-        # 无权限读取。必须与“目录本来就是空的”区分开，
-        # 否则界面上会把“读不到”显示成 0 B，看起来像没东西可清。
-        $denied = $true
-        $m = $null
-    }
-    $ErrorActionPreference='SilentlyContinue'
-}
-[pscustomobject]@{size=[int64]$m.Sum; files=[int]$m.Count; denied=$denied} |
-    ConvertTo-Json -Compress
-"""
 
-PS_MEASURE_GLOB = r"""
-$ErrorActionPreference='SilentlyContinue'
-$p='__PATH__'; $g='__GLOB__'
-$denied = $false
-if (Test-Path -LiteralPath $p) {
-    $ErrorActionPreference='Stop'
-    try {
-        $m = @(Get-ChildItem -LiteralPath $p -Filter $g -Force -File -ErrorAction Stop) |
-             Measure-Object -Property Length -Sum
-    } catch {
-        $denied = $true
-        $m = $null
-    }
-    $ErrorActionPreference='SilentlyContinue'
-}
-[pscustomobject]@{size=[int64]$m.Sum; files=[int]$m.Count; denied=$denied} |
-    ConvertTo-Json -Compress
-"""
 
 # 回收站：按盘符定位。用 try/catch 把权限问题收敛成 size=-1，
 # 而不是让 PowerShell 以非零退出码结束并丢掉 stdout。
@@ -249,29 +211,6 @@ if ($progFile) { try { [IO.File]::WriteAllText($progFile, [string]$script:found)
 $out | ConvertTo-Json -Compress -Depth 2
 """
 
-PS_DIR_KIND = r"""
-$ErrorActionPreference='SilentlyContinue'
-$p = '__PATH__'
-$denied = $false
-$dirs = @()
-$files = @()
-$ErrorActionPreference='Stop'
-try { $all = @(Get-ChildItem -LiteralPath $p -Force -ErrorAction Stop) }
-catch { $denied = $true; $all = @() }
-$ErrorActionPreference='SilentlyContinue'
-foreach ($c in $all) {
-    if ($c.PSIsContainer) {
-        if ($c.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
-        $dirs += [pscustomobject]@{ name=$c.Name; path=$c.FullName
-            modified=$c.LastWriteTime.ToString('yyyy-MM-dd') }
-    } else {
-        $files += [pscustomobject]@{ name=$c.Name; path=$c.FullName
-            size=[int64]$c.Length; modified=$c.LastWriteTime.ToString('yyyy-MM-dd') }
-    }
-}
-[pscustomobject]@{ denied=$denied; dirs=$dirs; files=$files } |
-    ConvertTo-Json -Compress -Depth 4
-"""
 
 PS_STEAM = r"""
 $ErrorActionPreference='SilentlyContinue'

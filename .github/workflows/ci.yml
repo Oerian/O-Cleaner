@@ -29,11 +29,18 @@ on:
   schedule:
     - cron: "0 18 * * *"
 
+permissions:
+  contents: read        # 最小权限：CI 只需要读代码
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true   # 同分支连推时取消旧跑批
+
 jobs:
   # ---------- 第一道闸门：规则安全（快，每次推送都跑） ----------
   lint:
     name: 规则 linter
     runs-on: windows-latest
+    timeout-minutes: 30   # 三轮审计 M-12：防挂起 runner 白白占用
     steps:
       - uses: actions/checkout@v7
 

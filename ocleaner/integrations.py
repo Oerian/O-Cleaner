@@ -9,6 +9,8 @@
 _export_bundle / _as_list 等）经 `_core.` 惰性引用 —— selftest 的
 monkeypatch（core.X = stub）对本模块调用点可见。
 """
+
+from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import json
 import re
 import socket

@@ -7,6 +7,8 @@ DPAPI 凭据加密落盘（"dpapi:<base64>" 前缀），解决「绿色免安装
 失败安全返回空串（用户重填一次）；明文旧值原样返回，下次保存自动
 升级为加密。纯标准库 ctypes，零第三方依赖。
 """
+
+from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import os
 import ctypes
 

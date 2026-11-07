@@ -44,6 +44,7 @@ $rules = @{
     '.html' = @{ Encoding = 'utf8';    Eol = 'crlf' }
     '.md'   = @{ Encoding = 'utf8';    Eol = 'crlf' }
     '.yml'  = @{ Encoding = 'utf8';    Eol = 'crlf' }
+    '.example' = @{ Encoding = 'utf8'; Eol = 'crlf' }  # M-18: .gitattributes 已声明而契约检查漏覆盖
     '.yaml' = @{ Encoding = 'utf8';    Eol = 'crlf' }
     '.js'   = @{ Encoding = 'utf8';    Eol = 'crlf' }
 }

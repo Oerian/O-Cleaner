@@ -56,8 +56,9 @@ from urllib.request import Request as _UrlRequest, urlopen as _urlopen
 # PS_MEASURE_TREE/PS_MEASURE_GLOB/PS_DIR_KIND/PS_STEAM_ORPHAN_SIZE 的
 # 测量职责已由进程内 os.scandir 实现（P2-4），脚本本体保留：
 # selftest 阶段六仍直接引用 app.PS_STEAM_ORPHAN_SIZE 钉 run_ps 数组契约。
-# PS_DIR_KIND/PS_MEASURE_GLOB/PS_MEASURE_TREE/PS_STEAM 的职责已迁
-# ocleaner/measure.py（P2-4）；此处仅保留仍在用的脚本常量。
+# PS_MEASURE_TREE/PS_MEASURE_GLOB/PS_DIR_KIND 三个死模板已从
+# ps_scripts.py 删除（职责迁 ocleaner/measure.py，P2-4）；
+# PS_STEAM 仍被 games.py 经 _core 引用（Steam 清理脚本），勿删。
 from ps_scripts import (PS_BIG_FILES, PS_LOCK_HOLDERS, PS_RECYCLE, PS_STEAM,  # noqa: F401 re-export
                         PS_STEAM_ORPHAN_SIZE, PS_TREE_WALK,  # noqa: F401 re-export
                         PS_UTF8_PREAMBLE)  # noqa: F401 selftest 引用钉契约
@@ -6379,6 +6380,369 @@ def _sample_hash(path: str, chunk: int = 1 << 20) -> str | None:
         return None
 
 
+
+def _full_sha256(path: str) -> str | None:
+    """流式全文件 SHA-256；读取失败返回 None（与 _sample_hash 语义一致）。
+
+    采样哈希（首尾 1MB）只作展示预筛；真正决定「这组互为副本」的是这里
+    的全量哈希 —— 固定大小镜像/稀疏文件可能首尾相同而中间不同。
+    """
+    try:
+        hh = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                hh.update(chunk)
+        return hh.hexdigest()
+    except OSError:
+        return None
+
+BLOATWARE_CFG_PATH = CONFIG_DIR / "bloatware.json"
+MOVED_JUNCTIONS_PATH = CONFIG_DIR / "moved-junctions.json"
+
+
+def _load_bloatware() -> dict:
+    """毒瘤软件签名库：内置默认 + 用户 config/bloatware.json 覆盖合并。"""
+    builtin = {
+        "apps": [
+            {"id": "360safe", "name": "360 安全卫士",
+             "match": ["360安全卫士", "360Safe"],
+             "dirs": ["360\\360safe", "360\\360safeZia"]},
+            {"id": "360av", "name": "360 杀毒",
+             "match": ["360杀毒", "360 Antivirus"],
+             "dirs": ["360\\360sd"]},
+            {"id": "360se", "name": "360 安全浏览器",
+             "match": ["360安全浏览器", "360se"],
+             "dirs": ["360se6", "360se"]},
+            {"id": "360zip", "name": "360 压缩",
+             "match": ["360压缩", "360zip"],
+             "dirs": ["360zip"]},
+            {"id": "360drv", "name": "360 驱动管家",
+             "match": ["360驱动", "360Driver"],
+             "dirs": ["360\\360drvmgr"]},
+            {"id": "360desktop", "name": "360 桌面助手",
+             "match": ["360桌面助手", "360Desktop"],
+             "dirs": ["360\\360desktop"]},
+            {"id": "qqpcmgr", "name": "腾讯电脑管家",
+             "match": ["腾讯电脑管家", "QQPCMgr", "电脑管家"],
+             "dirs": ["Tencent\\QQPCMgr"]},
+            {"id": "qqbrowser", "name": "QQ 浏览器",
+             "match": ["QQ浏览器", "QQBrowser"],
+             "dirs": ["Tencent\\QQBrowser"]},
+            {"id": "2345safe", "name": "2345 安全卫士",
+             "match": ["2345安全卫士", "2345Safe"],
+             "dirs": ["2345Security"]},
+            {"id": "2345explorer", "name": "2345 浏览器",
+             "match": ["2345浏览器", "2345Explorer"],
+             "dirs": ["2345Explorer"]},
+            {"id": "kav", "name": "金山毒霸",
+             "match": ["金山毒霸", "Kingsoft Antivirus", "kingsoft"],
+             "dirs": ["kingsoft\\KIS", "Kingsoft\\kingsoft antivirus"]},
+            {"id": "kuaiya", "name": "快压",
+             "match": ["快压", "KuaiZip"],
+             "dirs": ["KuaiZip"]},
+            {"id": "haokazip", "name": "2345 好压",
+             "match": ["好压", "HaoZip"],
+             "dirs": ["HaoZip"]},
+            {"id": "baiduguard", "name": "百度卫士/百度杀毒",
+             "match": ["百度卫士", "百度杀毒", "BaiduSd", "Baidu Guardian"],
+             "dirs": ["Baidu\\BaiduSd", "Baidu\\BaiduAn"]},
+            {"id": "jinshanweishi", "name": "腾讯金山卫士",
+             "match": ["金山卫士"],
+             "dirs": ["kingsoft\\jinshansoft"]},
+        ]
+    }
+    try:
+        user = _load_json(BLOATWARE_CFG_PATH, {})
+        if isinstance(user, dict) and user.get("apps"):
+            builtin["apps"].extend(user["apps"])
+    except Exception:
+        pass
+    return builtin
+
+
+def bloatware_scan() -> dict:
+    """扫描已安装的「毒瘤软件」：注册表卸载项签名匹配 + 已知目录探测。
+
+    只读探测，不做任何删除。返回每项的官方卸载命令（UninstallString /
+    QuietUninstallString）与已知残留目录（按存在与否过滤），供两段式
+    清除：先跑官方卸载程序，再「清扫残留」。
+    """
+    apps = _load_bloatware().get("apps") or []
+    found = []
+    if IS_WINDOWS:
+        import winreg
+        hives = [(winreg.HKEY_LOCAL_MACHINE,
+                  r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+                 (winreg.HKEY_LOCAL_MACHINE,
+                  r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+                 (winreg.HKEY_CURRENT_USER,
+                  r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")]
+        entries = []
+        for hive, sub in hives:
+            try:
+                k = winreg.OpenKey(hive, sub)
+            except OSError:
+                continue
+            try:
+                i = 0
+                while True:
+                    try:
+                        entries.append(winreg.EnumKey(k, i))
+                        i += 1
+                    except OSError:
+                        break
+            finally:
+                k.Close()
+        seen_keys = set()
+        for sub_key in entries:
+            for hive, sub in hives:
+                full = f"{sub}\\{sub_key}"
+                if full in seen_keys:
+                    continue
+                seen_keys.add(full)
+                try:
+                    k = winreg.OpenKey(hive, full)
+                except OSError:
+                    continue
+                try:
+                    disp = str(winreg.QueryValueEx(k, "DisplayName")[0])
+                except OSError:
+                    continue
+                for app in apps:
+                    if any(m.lower() in disp.lower() for m in app.get("match", [])):
+                        try:
+                            ustr = str(winreg.QueryValueEx(k, "UninstallString")[0])
+                        except OSError:
+                            ustr = ""
+                        try:
+                            qstr = str(winreg.QueryValueEx(
+                                k, "QuietUninstallString")[0])
+                        except OSError:
+                            qstr = ""
+                        try:
+                            loc = str(winreg.QueryValueEx(k, "InstallLocation")[0])
+                        except OSError:
+                            loc = ""
+                        found.append({
+                            "id": app["id"], "name": app["name"],
+                            "display": disp, "reg_key": full,
+                            "uninstall": ustr, "quiet": qstr,
+                            "install_location": loc,
+                            "dirs": app.get("dirs", []),
+                        })
+                        break
+    # 已知残留目录探测（不受注册表匹配限制 —— 卸载后残留照样能扫到）
+    drive_roots = []
+    for letter in string.ascii_uppercase:
+        drive_roots.append(f"{letter}:\\")
+        if letter == "C":
+            break
+    prog_variants = ["Program Files", "Program Files (x86)"]
+    for app in apps:
+        hits = []
+        for d in app.get("dirs", []):
+            for root in drive_roots:
+                for pf in prog_variants:
+                    cand = os.path.join(root, pf, d)
+                    if os.path.isdir(cand):
+                        hits.append(cand)
+        if hits:
+            hit = next((f for f in found if f.get("id") == app["id"]), None)
+            if hit:
+                hit["residue_dirs"] = [h for h in hits
+                                       if h not in hit.get("residue_dirs", [])]
+            else:
+                found.append({"id": app["id"], "name": app["name"],
+                              "display": app["name"], "reg_key": "",
+                              "uninstall": "", "quiet": "",
+                              "install_location": "",
+                              "residue_dirs": hits})
+    return {"ok": True, "found": found}
+
+
+def bloatware_sweep(reg_key: str, dirs: list) -> dict:
+    """清扫残留：已知目录走护栏链+回收站，注册表键精准删除。
+
+    两段式清除的第二段 —— 官方卸载程序跑完之后调用。目录经完整
+    check_deletable 护栏链（M-01/M-05 同源），注册表只删精确命中的
+    Uninstall 子键，绝不模糊匹配。
+    """
+    results = []
+    for d in dirs or []:
+        norm = os.path.normpath(d)
+        try:
+            if not os.path.isdir(norm):
+                results.append({"path": norm, "ok": True, "note": "已不存在"})
+            elif _precheck_locked_files(norm):
+                results.append({"path": norm, "ok": False,
+                                "error": "存在被占用的文件（先跑官方卸载程序）"})
+            else:
+                ok, why = check_deletable(norm)
+                if not ok:
+                    results.append({"path": norm, "ok": False, "error": why})
+                else:
+                    full, partial, _note = rm_tree_strict(norm)
+                    results.append({"path": norm, "ok": bool(full),
+                                    "error": None if full else f"部分残留（{partial} 项）"})
+        except Exception as exc:  # noqa: BLE001
+            results.append({"path": norm, "ok": False,
+                            "error": f"{type(exc).__name__}: {exc}"})
+    reg_done = 0
+    if reg_key and IS_WINDOWS:
+        import winreg
+        hive_map = {winreg.HKEY_LOCAL_MACHINE: "HKLM",
+                    winreg.HKEY_CURRENT_USER: "HKCU"}
+        parts = reg_key.split("\\")
+        for hive, prefix in hive_map.items():
+            if parts[0] != prefix:
+                continue
+            try:
+                k = winreg.OpenKey(hive, "\\".join(parts[1:-1]), 0,
+                                   winreg.KEY_SET_VALUE | winreg.KEY_ENUMERATE_SUB_KEYS
+                                   | winreg.DELETE)
+                sub = parts[-1]
+                try:
+                    winreg.DeleteKey(k, sub)
+                    reg_done += 1
+                except OSError:
+                    pass
+                finally:
+                    k.Close()
+            except OSError:
+                pass
+    return {"ok": True, "results": results, "reg_deleted": reg_done}
+
+
+def junction_move(src: str, dst: str, merge: bool = False,
+                  rename_conflict: bool = True) -> dict:
+    """C 盘无损搬家：目录整体迁移到目标盘并原位建 NTFS Junction 透明映射。
+
+    安全序列（每步可回退）：
+    1. 占用预检（被锁文件直接 409 级失败）；
+    2. 整树拷贝到目标位置（dst 已存在且 merge=True 时逐文件合并，
+       同名冲突自动重命名 name(1).ext）；
+    3. 双向校验（文件数 + 总字节数 100% 一致才继续）；
+    4. 原目录改名暂存为 src.oc-mv-backup（失败可改回）；
+    5. 原位置创建 Junction 指向新位置；
+    6. 校验通过后经 rm_tree_strict 删除暂存（自带断电恢复日志）；
+    7. 记录 config/moved-junctions.json，支持 /__oc__/junction-restore 一键迁回。
+    """
+    src = os.path.normpath(os.path.expandvars(src))
+    dst = os.path.normpath(os.path.expandvars(dst))
+    if not os.path.isabs(src) or not os.path.isdir(src):
+        return {"error": "源目录无效"}
+    if not os.path.isabs(dst) or not os.path.splitdrive(dst)[0]:
+        return {"error": "目标路径无效"}
+    if os.path.normcase(src) == os.path.normcase(dst):
+        return {"error": "源与目标相同"}
+    if os.path.splitdrive(src)[0].upper() == os.path.splitdrive(dst)[0].upper():
+        return {"error": "目标必须在不同盘符（同盘直接移动即可，无需搬家）"}
+    if os.path.exists(dst) and not merge:
+        return {"error": "目标已存在（勾选「合并」可并入现有目录）"}
+    locked = _precheck_locked_files(src)
+    if locked:
+        return {"error": "源目录存在被占用的文件，搬家已中止",
+                "locked": locked[:10]}
+    # 1) 拷贝（支持合并 + 冲突自动重命名）
+    file_count = [0]
+    byte_count = [0]
+    dst.mkdir(parents=True, exist_ok=True) if isinstance(dst, Path) else Path(dst).mkdir(parents=True, exist_ok=True)
+    for root, dirs, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        target_root = os.path.normpath(
+            os.path.join(dst, rel)) if rel != "." else Path(dst)
+        os.makedirs(target_root, exist_ok=True)
+        for f in files:
+            s = os.path.join(root, f)
+            d = os.path.join(target_root, f)
+            if os.path.exists(d):
+                if not rename_conflict:
+                    return {"error": f"目标已存在同名文件：{d}"}
+                stem, ext = os.path.splitext(f)
+                k = 1
+                while os.path.exists(d):
+                    d = os.path.join(target_root, f"{stem}({k}){ext}")
+                    k += 1
+            shutil.copy2(s, d)
+            file_count[0] += 1
+            byte_count[0] += os.path.getsize(d)
+    # 2) 双向校验
+    src_count = src_bytes = 0
+    for root, _dirs, files in os.walk(src):
+        src_count += len(files)
+        for f in files:
+            try:
+                src_bytes += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    if src_count != file_count[0] or src_bytes != byte_count[0]:
+        return {"error": f"拷贝校验不一致（源 {src_count} 文件/{src_bytes} 字节，"
+                         f"目标 {file_count[0]} 文件/{byte_count[0]} 字节），"
+                         "原目录未动，请检查目标盘空间"}
+    # 3) 原目录改名暂存 → 建 Junction → 校验
+    backup = src.rstrip("\\/") + ".oc-mv-backup"
+    if os.path.exists(backup):
+        return {"error": f"暂存目录 {backup} 已存在，请先处理上次残留"}
+    os.rename(src, backup)
+    try:
+        import _winapi
+        _winapi.CreateJunction(str(dst), str(src))
+        if not os.path.isdir(src):
+            raise RuntimeError("Junction 建立后无法访问")
+        probe = os.listdir(src)
+        if not isinstance(probe, list):
+            raise RuntimeError("Junction 内容异常")
+    except Exception as exc:  # noqa: BLE001
+        os.rename(backup, src)
+        return {"error": f"Junction 建立失败，已还原原目录：{exc}"}
+    # 4) 删除暂存（走 rm_tree_strict：断电可恢复）
+    full, partial, _note = rm_tree_strict(backup)
+    if not full:
+        return {"ok": True, "note": f"搬家完成，但暂存目录删除不彻底"
+                f"（剩 {partial} 项，见 pending-deletes.json）",
+                "src": src, "dst": str(dst)}
+    # 5) 记录（支持一键迁回）
+    try:
+        recs = _load_json(MOVED_JUNCTIONS_PATH, [])
+        if isinstance(recs, list):
+            recs.insert(0, {"src": src, "dst": str(dst),
+                            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+            _atomic_write(MOVED_JUNCTIONS_PATH, recs[:50])
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+    return {"ok": True, "src": src, "dst": str(dst),
+            "files": file_count[0], "bytes_h": human(byte_count[0])}
+
+
+def junction_restore(src: str) -> dict:
+    """一键迁回：摘除 Junction，把真实目录从目标位置移回原位。"""
+    src = os.path.normpath(os.path.expandvars(src))
+    recs = _load_json(MOVED_JUNCTIONS_PATH, [])
+    rec = next((r for r in recs
+                if os.path.normcase(str(r.get("src"))) == os.path.normcase(src)), None)
+    if not rec:
+        return {"error": "搬家记录里没有这个目录"}
+    dst = str(rec.get("dst"))
+    if not os.path.isdir(dst):
+        return {"error": f"目标目录已不存在：{dst}"}
+    if not os.path.islink(src) and not _is_reparse_dir(src):
+        return {"error": "源位置不是 Junction（可能已迁回）"}
+    os.rmdir(src)          # 摘 Junction：只删链接本身，绝不进目标
+    if os.path.exists(src):
+        return {"error": "Junction 摘除失败"}
+    try:
+        shutil.move(dst, src)
+    except OSError as exc:
+        _winapi = __import__("_winapi")
+        _winapi.CreateJunction(dst, src)
+        return {"error": f"迁回失败已重新挂回 Junction：{exc}"}
+    _atomic_write(MOVED_JUNCTIONS_PATH,
+                  [r for r in recs
+                   if os.path.normcase(str(r.get("src"))) != os.path.normcase(src)])
+    return {"ok": True, "src": src}
+
+
+
 def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
     """在扫描缓存里找「体积相同且首尾采样一致」的大文件组。
 
@@ -6404,26 +6768,37 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
     groups = []
     for sz, fs in cand:
         fs = fs[:DUP_MAX_PER_GROUP]
-        hashes: dict[str, list[str]] = {}
-        for full, _name in fs:
+        # 三级分桶（三轮审计 P0 修复）：同体积 → 采样哈希预筛 → 全文件
+        # SHA-256 二次证实。旧实现把「同体积桶内全部文件」塞进一组、只给
+        # 采样命中的打 dup 标记 —— 前端勾选清理上线后，dup=False 的全盘
+        # 唯一文件会被画上复选框、另一哈希组的副本可能被整组删光。
+        # 全量哈希防「首尾相同、中间不同」的固定大小镜像/稀疏文件误判；
+        # 只对采样命中的候选做，代价可控（用户手动触发，非全盘扫描）。
+        hashes: dict[str, list[tuple[str, str]]] = {}
+        for full, name in fs:
             h = _sample_hash(full)
             if h:
-                hashes.setdefault(h, []).append(full)
-        dup_fulls: set[str] = set()
-        for paths in hashes.values():
-            if len(paths) >= 2:
-                dup_fulls.update(paths)
-        if not dup_fulls:
-            continue                      # 同体积但内容不同：不算重复
-        members = [{"path": full, "name": name, "dup": full in dup_fulls}
-                   for full, name in fs]
-        n_dup = len(dup_fulls)
-        groups.append({
-            "size": sz, "size_h": human(sz),
-            "dup_count": n_dup,
-            "wasted": sz * (n_dup - 1), "wasted_h": human(sz * (n_dup - 1)),
-            "files": members,
-        })
+                hashes.setdefault(h, []).append((full, name))
+        for pairs in hashes.values():
+            if len(pairs) < 2:
+                continue
+            fulls: dict[str, list[tuple[str, str]]] = {}
+            for full, name in pairs:
+                fh = _full_sha256(full)
+                if fh:
+                    fulls.setdefault(fh, []).append((full, name))
+            for fpairs in fulls.values():
+                if len(fpairs) < 2:
+                    continue
+                members = [{"path": full, "name": name, "dup": True}
+                           for full, name in fpairs]
+                n_dup = len(members)
+                groups.append({
+                    "size": sz, "size_h": human(sz),
+                    "dup_count": n_dup,
+                    "wasted": sz * (n_dup - 1), "wasted_h": human(sz * (n_dup - 1)),
+                    "files": members,
+                })
     groups.sort(key=lambda g: -g["wasted"])
     return {"ok": True, "drive": letter, "floor_mb": DUP_FLOOR_MB,
             "groups": groups}
@@ -7585,6 +7960,7 @@ class Handler(BaseHTTPRequestHandler):
             if getattr(self.server, "busy", False):
                 return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
             self.server.busy = True
+            freed_total = [0]
             try:
                 results = []
                 for pth in paths_in:
@@ -7596,25 +7972,137 @@ class Handler(BaseHTTPRequestHandler):
                         item["path"] = norm
                         if not os.path.isabs(norm) or not os.path.exists(norm):
                             item["error"] = "路径无效或不存在"
+                        elif not os.path.isfile(norm) or os.path.islink(norm)                                 or _is_reparse_dir(norm):
+                            # 重复文件清理专用：只允许普通文件，防整目录误移
+                            item["error"] = "仅支持普通文件（目录/链接不接受）"
                         else:
                             ok, why = check_deletable(norm)
                             if not ok:
                                 item["error"] = why or "护栏拦截"
                             else:
+                                sz0 = os.path.getsize(norm)
                                 ok2, why2 = rm_trash(norm)
                                 item["ok"] = ok2
                                 item["trashed"] = ok2
-                                if not ok2:
+                                if ok2:
+                                    item["size"] = sz0
+                                    freed_total[0] += sz0
+                                else:
                                     item["error"] = why2 or "移入回收站失败"
                     except Exception as exc:  # noqa: BLE001
                         item["error"] = f"{type(exc).__name__}: {exc}"
                     results.append(item)
                 done = sum(1 for r in results if r["ok"])
+                # 三轮审计 P1：接入清理历史与逐项回执 —— 几十 GB 的重复
+                # 文件清理必须可追溯（可搜索、可导出、计入累计释放量）。
+                try:
+                    append_history({
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "trigger": "清理重复大文件",
+                        "freed": freed_total[0],
+                        "freed_h": human(freed_total[0]),
+                        "results": [{"label": os.path.basename(r["path"]),
+                                     "path": r["path"],
+                                     "freed": r.get("size", 0),
+                                     "trashed": 1 if r["trashed"] else 0,
+                                     "failed": 0 if r["ok"] else 1,
+                                     "error": r.get("error")}
+                                    for r in results],
+                    })
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
                 return self._json({"ok": done == len(results), "done": done,
-                                   "total": len(results), "results": results})
+                                   "total": len(results),
+                                   "freed": freed_total[0],
+                                   "results": results})
             finally:
                 self.server.busy = False
 
+        if route == "/__oc__/bloatware/scan":
+            return self._json(bloatware_scan())
+        if route == "/__oc__/bloatware/uninstall":
+            # 官方卸载程序启动：命令由服务端从注册表实时读取（客户端只传
+            # reg_key），杜绝任意命令注入；reg_key 白名单限定 Uninstall 子树。
+            reg_key = str(body.get("reg_key") or "")
+            ok_prefixes = (
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                r"SOFTWARE\WOW6432Node\Microsoft\Windows"
+                r"\CurrentVersion\Uninstall")
+            if not reg_key or not any(
+                    reg_key.startswith(p) for p in ok_prefixes):
+                return self._json({"error": "reg_key 非法"}, 400)
+            if not IS_WINDOWS:
+                return self._json({"error": "仅 Windows"}, 400)
+            import winreg
+            cmd = ""
+            parts = reg_key.split("\\")
+            try:
+                k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE if parts[0] == "SOFTWARE"
+                                   else winreg.HKEY_CURRENT_USER,
+                                   "\\".join(parts[1:]))
+                try:
+                    try:
+                        cmd = str(winreg.QueryValueEx(k, "QuietUninstallString")[0])
+                    except OSError:
+                        cmd = str(winreg.QueryValueEx(k, "UninstallString")[0])
+                finally:
+                    k.Close()
+            except OSError:
+                pass
+            if not cmd:
+                return self._json({"error": "注册表里找不到卸载命令"}, 404)
+            try:
+                os.startfile(cmd)   # ShellExecute：卸载向导照常弹出
+                return self._json({"ok": True})
+            except OSError as exc:
+                return self._json({"error": f"启动失败：{exc}"}, 500)
+        if route == "/__oc__/bloatware/sweep":
+            self.server.busy = getattr(self.server, "busy", False)
+            if self.server.busy:
+                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
+            reg_key = str(body.get("reg_key") or "")
+            dirs = body.get("dirs") or []
+            if not isinstance(dirs, list) or (not dirs and not reg_key):
+                return self._json({"error": "dirs/reg_key 不能同时为空"}, 400)
+            self.server.busy = True
+            try:
+                r = bloatware_sweep(reg_key, [str(x) for x in dirs][:20])
+                try:
+                    append_history({
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "trigger": "毒瘤软件残留清扫",
+                        "freed": 0,
+                        "freed_h": "—",
+                        "results": [{"label": os.path.basename(r0["path"]) or r0["path"],
+                                     "path": r0["path"],
+                                     "freed": 0,
+                                     "trashed": 0,
+                                     "failed": 0 if r0["ok"] else 1,
+                                     "error": r0.get("error")}
+                                    for r0 in r.get("results", [])],
+                    })
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
+                return self._json(r)
+            finally:
+                self.server.busy = False
+        if route == "/__oc__/junction-move":
+            self.server.busy = getattr(self.server, "busy", False)
+            if self.server.busy:
+                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
+            self.server.busy = True
+            try:
+                return self._json(junction_move(
+                    str(body.get("src") or ""),
+                    str(body.get("dst") or ""),
+                    merge=bool(body.get("merge")),
+                    rename_conflict=bool(body.get("rename_conflict", True))))
+            finally:
+                self.server.busy = False
+        if route == "/__oc__/junction-restore":
+            return self._json(junction_restore(str(body.get("src") or "")))
+        if route == "/__oc__/junction/list":
+            return self._json({"records": _load_json(MOVED_JUNCTIONS_PATH, [])})
         if route == "/__oc__/sync/save":
             with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
                 cfg = _sync_cfg()

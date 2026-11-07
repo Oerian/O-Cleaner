@@ -7,6 +7,8 @@ powershell.exe 有 180–350ms 固定开销，测量类小目标的进程开销�
 磁盘 I/O 本身。DirEntry.stat(follow_symlinks=False) 直接从
 FindFirstFileW / FindNextFileW 缓冲取文件大小，零额外系统调用。
 """
+
+from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import os
 import stat
 import time

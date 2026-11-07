@@ -11,6 +11,8 @@ selftest 的 monkeypatch 落在 core 命名空间（core.X = stub），本模块
 对 core 侧符号（run_ps / 护栏常量 / 回收站守卫等）经 `_core.` 惰性
 引用访问 —— patch 对这里可见。
 """
+
+from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import os
 import shutil
 import time
