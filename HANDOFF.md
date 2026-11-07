@@ -1591,6 +1591,13 @@ SECURITY 该处表述未动。
 - **环呼吸空间（第五轮微调，v2.11 后本地）**：用户反馈「环状图还是有点紧凑」。修法：环 134→**150px**（`::after` inset 17→19px、中心字号 22→24px），`.ovrow` gap 20→24 + 上下 padding、`#fsOverview` margin-top 6px——环上方距进度条 12px、下方距引擎条 18px，不再贴边。
 - **回归**：selftest **580-0-6** 全绿（stub 化后全量 ~2.5 分钟）；CDP **141-0-5**；7 道门禁全过；探针实测：环 150px、本次扫到统计宽 123px（原整行拉伸）、图表坞 769px 宽、13 列柱底边唯一、无横向溢出、`#dwTabs` 全页唯一、页签落在环带内。
 
+**㉓补（2026-11-07 中午）：第四份报告（全量评估合并版）核验 + UI 打磨三项（本地待推送）**——该报告主体为前三份的合并重排版：
+- **第二部分 5 项缺陷声明已全部过期**：dupfiles 三级分桶/delete-paths 加固/histSearch/Ollama 后端路由均已在 ㉑㉒ 批次修复——逐项 grep 实证后未重复实施。
+- **采纳的新内容（第三部分 UI 打磨）**：①工具栏三组分隔线 `.tb-sep`（扫描控制｜专项分析｜视图勾选）；②排行行「归档/管理」低频按钮渐进披露（`.vrow .rowgrp` 悬停/键盘导航时从 opacity .35 全显）；③排行副标题补右键功能提示（中英双语）。
+- **采纳的新内容（竞品分析 → ROADMAP 方向）**：「软件级行为语义引擎」（清理项从路径匹配升级为行为语义分层推荐）与「主动预测性磁盘维护」已记入 docs/ROADMAP.md 展望；签名/winget 按用户指示暂缓。
+- **⚠️ 外部工具干扰事件**：本批次发现 core.py 的 8 个标准库导入（sys/subprocess/threading/time/stat/string/struct/tempfile）被会话外的某工具自动移除——已全部恢复（8 个均被活跃代码引用）。**教训：跨会话接管仓库前先 `git status`+`git diff` 核对工作区，发现非本会话改动先甄别来源。**
+- **测试**：unit_test **24-0** · selftest **594-0-6** · CDP **141-0-5** · 7 道门禁。
+
 **㉒补（2026-11-07 中午）：engines + guard 域迁出——P2-1 模块化拆分全面收官（本地待推送）**——两个提交（`eeb1178` engines、`7c8f96c` guard），ocleaner 包达 **10 模块**：
 - **engines.py**（23 span）：11 个 MFT 直读函数 + 12 个 WizTree 函数 + 11 组 WIZTREE_*/MFT_* 常量 + `_WIZ_CACHE`（随域迁移——`global` 重绑定语句与定义同模块自洽）。`_WIZ_DIRS` 留 core（扫描编排/dupfiles/快照钩子三方读写，引擎内经 `_core` 引用同一字典对象）。
 - **guard.py**（20 span）：check_deletable 九层护栏链 + _guarded_zone 分区判定 + 已安装程序/浏览器档案识别 + _override_key 覆盖存取 + 12 组签名常量（BROWSER_CACHE_DIRS 随迁组合出 ZONE_CACHE_EXEMPT——**模块级求值常量随消费方迁**）。guard_matrix 50 项护栏矩阵直接落本模块。

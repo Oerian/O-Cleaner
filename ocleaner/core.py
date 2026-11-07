@@ -44,9 +44,6 @@ import sys
 import tempfile
 import threading
 import time
-import traceback
-import webbrowser
-from array import array
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
