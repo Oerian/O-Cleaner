@@ -7409,6 +7409,130 @@ def downloads_archive_undo() -> dict:
     return {"ok": True, "restored": restored, "errors": errors}
 
 
+def _tray_worker(url: str) -> None:
+    """系统托盘常驻（v3.0 方向七后半，纯 ctypes 零依赖）。
+
+    仅 --tray 时启动：左键双击打开界面；右键菜单＝打开界面 /
+    立即安全清理（后台线程跑 run_auto_clean）/ 退出（连服务一起停）。
+    任何步骤失败都静默退出托盘 —— 服务照常运行，只是没有图标。
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        shell32 = ctypes.windll.shell32
+        kernel32 = ctypes.windll.kernel32
+        # 64 位句柄/参数必须显式声明 argtypes，否则回调里转发会 OverflowError
+        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT,
+                                          wintypes.WPARAM, wintypes.LPARAM]
+        user32.DefWindowProcW.restype = ctypes.c_longlong
+
+        WM_USER_TRAY = 0x0400 + 1          # 托盘回调消息
+        IDM_OPEN, IDM_CLEAN, IDM_QUIT = 1001, 1002, 1003
+        nid_cb = 0
+
+        class NOTIFYICONDATAW(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD),
+                        ("hWnd", wintypes.HWND),
+                        ("uID", wintypes.UINT),
+                        ("uFlags", wintypes.UINT),
+                        ("uCallbackMessage", wintypes.UINT),
+                        ("hIcon", wintypes.HICON),
+                        ("szTip", wintypes.WCHAR * 128),
+                        ("dwState", wintypes.DWORD),
+                        ("dwStateMask", wintypes.DWORD),
+                        ("szInfo", wintypes.WCHAR * 256),
+                        ("uVersion", wintypes.UINT),
+                        ("szInfoTitle", wintypes.WCHAR * 64),
+                        ("dwInfoFlags", wintypes.DWORD),
+                        ("guidItem", ctypes.c_ubyte * 16),
+                        ("hBalloonIcon", wintypes.HICON)]
+
+        WNDPROC = ctypes.WINFUNCTYPE(
+            ctypes.c_longlong, wintypes.HWND, wintypes.UINT,
+            ctypes.c_size_t, ctypes.c_longlong)
+
+        def _wndproc(hwnd, msg, wparam, lparam):
+            nonlocal nid_cb
+            if msg == WM_USER_TRAY:
+                if lparam == 0x0203 or lparam == 0x0202:   # 双击/左键抬起
+                    webbrowser.open(url)
+                elif lparam == 0x0205:                     # 右键抬起
+                    user32.SetForegroundWindow(hwnd)
+                    hmenu = user32.CreatePopupMenu()
+                    user32.AppendMenuW(hmenu, 0, IDM_OPEN, "打开界面")
+                    user32.AppendMenuW(hmenu, 0, IDM_CLEAN, "立即安全清理")
+                    user32.AppendMenuW(hmenu, 0x800, 0, None)  # 分隔线
+                    user32.AppendMenuW(hmenu, 0, IDM_QUIT, "退出")
+                    pos = wintypes.POINT()
+                    user32.GetCursorPos(ctypes.byref(pos))
+                    user32.TrackPopupMenu(
+                        hmenu, 0x0080, pos.x, pos.y, 0, hwnd, None)  # TPM_RIGHTBUTTON|RETURNCMD 关闭
+                    user32.DestroyMenu(hmenu)
+            elif msg == 0x0111:                            # WM_COMMAND
+                if wparam & 0xFFFF == IDM_OPEN:
+                    webbrowser.open(url)
+                elif wparam & 0xFFFF == IDM_CLEAN:
+                    import threading as _t
+                    _t.Thread(target=run_auto_clean, args=("C",),
+                              daemon=True).start()
+                    nid = NOTIFYICONDATAW(
+                        cbSize=ctypes.sizeof(NOTIFYICONDATAW), hWnd=hwnd,
+                        uID=nid_cb, uFlags=0x10, szInfo="安全清理已在后台开始"
+                        "（只清建议清理项，高风险入回收站）",
+                        szInfoTitle="O-Cleaner")
+                    shell32.Shell_NotifyIconW(1, ctypes.byref(nid))  # NIM_MODIFY
+                elif wparam & 0xFFFF == IDM_QUIT:
+                    user32.PostQuitMessage(0)
+            elif msg == 0x0010:                            # WM_CLOSE
+                user32.PostQuitMessage(0)
+            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        wndproc = WNDPROC(_wndproc)
+        hinst = kernel32.GetModuleHandleW(None)
+        wc = ctypes.c_void_p()
+        # WNDCLASSW 手工布局：style/cbClsExtra/cbWndExtra/hInstance/hIcon/
+        # hCursor/hbrBackground/lpszMenuName/lpszClassName/hCursor 处的 lpfnWndProc
+        class WNDCLASSW(ctypes.Structure):
+            _fields_ = [("style", wintypes.UINT),
+                        ("lpfnWndProc", WNDPROC),
+                        ("cbClsExtra", ctypes.c_int),
+                        ("cbWndExtra", ctypes.c_int),
+                        ("hInstance", wintypes.HINSTANCE),
+                        ("hIcon", wintypes.HICON),
+                        ("hCursor", wintypes.HANDLE),
+                        ("hbrBackground", wintypes.HBRUSH),
+                        ("lpszMenuName", wintypes.LPCWSTR),
+                        ("lpszClassName", wintypes.LPCWSTR)]
+        wc = WNDCLASSW(style=0, lpfnWndProc=wndproc, hInstance=hinst,
+                       lpszClassName="OCleanerTray")
+        atom = user32.RegisterClassW(ctypes.byref(wc))
+        if not atom:
+            return
+        hwnd = user32.CreateWindowExW(
+            0, "OCleanerTray", "O-Cleaner", 0, 0, 0, 0, 0, None, None,
+            hinst, None)
+        if not hwnd:
+            return
+        hicon = user32.LoadIconW(None, 32512)   # IDI_APPLICATION
+        nid = NOTIFYICONDATAW(cbSize=ctypes.sizeof(NOTIFYICONDATAW),
+                              hWnd=hwnd, uID=1, uFlags=0x01 | 0x02 | 0x04,
+                              uCallbackMessage=WM_USER_TRAY, hIcon=hicon,
+                              szTip="O-Cleaner —— 双击打开 / 右键菜单")
+        nid_cb = 1
+        if not shell32.Shell_NotifyIconW(0, ctypes.byref(nid)):  # NIM_ADD
+            return
+        msg = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+        shell32.Shell_NotifyIconW(2, ctypes.byref(nid))          # NIM_DELETE
+        # 托盘退出＝整个应用退出（托盘是 --tray 模式的唯一生命周期入口）
+        os._exit(0)
+    except Exception:  # noqa: BLE001
+        pass   # 托盘失败不致命：服务照常，用户可用浏览器访问
+
+
 def run_auto_clean(drive: str) -> dict:
     """无头单次清理（v2.15 CLI Automation，配任务计划程序用）。
 
@@ -7463,6 +7587,9 @@ def main() -> None:
                     help="打印版本号后退出（排障/打包核对用，版本单点定义在 APP_VERSION）")
     ap.add_argument("--drive", default=None, help="命令行扫描时指定盘符，如 D")
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--tray", action="store_true",
+                    help="系统托盘常驻模式（左键开界面 / 右键菜单：立即安全"
+                         "清理 / 退出）；配 pythonw.exe 可完全无窗口")
     ap.add_argument("--app", action="store_true",
                     help="用 Edge 无边框应用窗口打开界面（v3.0 原生桌面体验，"
                          "配 pythonw.exe 可无黑窗常驻）")
@@ -7595,6 +7722,15 @@ def main() -> None:
     print(f"  管理员权限: {'是' if is_admin() else '否（系统目录的项目会提示权限不足）'}")
     print("  关闭此窗口即停止服务。")
     print()
+    if getattr(args, "tray", False):
+        # 托盘模式：HTTP 服务放后台线程，主线程跑托盘消息循环；
+        # 托盘「退出」会 os._exit 结束整个进程。
+        threading.Timer(0.8, _tray_worker, args=(url,)).start()
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        return
     if not args.no_browser:
         if getattr(args, "app", False):
             threading.Timer(0.8, lambda: _open_app_window(url)).start()
