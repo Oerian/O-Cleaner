@@ -830,6 +830,7 @@
     <button id="btnDupFiles" data-i18n="btn.dupFiles">重复大文件</button>
     <button id="btnDlAdvice" data-i18n="btn.dlAdvice">下载整理</button>
     <button id="btnJunctionMove" data-i18n="btn.jm">C 盘搬家</button>
+    <button id="btnSnapDiff" data-i18n="btn.snapDiff">近期暴涨</button>
     <button id="btnBloat" data-i18n="btn.bloat">毒瘤清除</button>
     <button id="btnDense" data-i18n="btn.dense">紧凑模式</button>
     <button id="btnAll" data-i18n="btn.all">全选</button>
@@ -938,6 +939,9 @@
         <div class="fstabbar">
           <div class="segbtns" id="fsModes"></div>
           <div class="segbtns" id="fsSort" style="margin-top:6px"></div>
+          <input type="text" id="fsSearch" data-i18n-ph="fs.searchPh"
+                 placeholder="全盘搜索文件/目录名，回车执行…"
+                 style="width:100%;margin-top:6px">
         </div>
       </div>
       <div style="margin-top:12px"><div class="vchart" id="fsChart"></div></div>
@@ -3075,7 +3079,9 @@ async function openHistoryDetail(timeStr) {
       <div class="logrow">
         <div class="t"><b>${esc(r.label || "")}</b>
           <span class="freed">${r.freed > 0 ? fmt(r.freed) : ""}</span>
-          ${r.trashed ? tr(1) : ""}</div>
+          ${r.trashed ? tr(1) : ""}
+          ${r.trashed && r.path ? `<a href="javascript:void(0)" class="rcpt hd-rest"
+             data-p="${esc(r.path)}">${t("hist.restore", "↩ 从回收站还原")}</a>` : ""}</div>
         <div class="d" style="word-break:break-all">${esc(r.path || "")}</div>
         ${r.error ? `<div class="d failed">${esc(r.error)}</div>` : ""}
         ${(r.skipped || []).length ? `<div class="d failed">${t("hist.skipped","跳过：")}${esc((r.skipped || []).join("、"))}</div>` : ""}
@@ -3084,6 +3090,16 @@ async function openHistoryDetail(timeStr) {
     <div style="text-align:right;padding-top:10px">
       <button class="tiny" id="hdClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("hdClose").addEventListener("click", closeModal);
+  [...document.querySelectorAll("#modal .hd-rest")].forEach(a =>
+    a.addEventListener("click", async () => {
+      const rr = await apiJSON(`${API}/__oc__/recycle-restore`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: [a.dataset.p] }) });
+      const r0 = (rr.results || [])[0] || {};
+      toast(r0.ok ? t("hist.restored", "已还原到原位")
+                  : (r0.error || "还原失败"));
+      if (r0.ok) openHistoryDetail(timeStr);
+    }));
 }
 
 /* 导出清理回执：从服务端取完整记录（界面只带最近 10 条），前端生成 JSON 文件 */
@@ -5662,6 +5678,78 @@ async function openJunctionMove() {
 }
 $("btnJunctionMove").addEventListener("click", openJunctionMove);
 
+/* 占用排行跨层级实时搜索（v2.12）：扫描缓存内按名字/路径模糊匹配 */
+$("fsSearch").addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const q = e.target.value.trim();
+  if (!q) return;
+  e.preventDefault();
+  openFsSearch(q);
+});
+async function openFsSearch(q) {
+  $("modal").innerHTML = `<h2>${t("fs.searchTitle", "全盘搜索")}</h2>
+    <div class="mbody"><div class="empty"><span class="spin"></span>
+      ${t("fs.searching", "正在检索扫描缓存…")}</div></div>`;
+  $("mask").classList.add("on");
+  const r = await apiJSON(`${API}/__oc__/fs-search`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ drive, q }) }).catch(e => ({ error: String(e) }));
+  const ms = r.matches || [];
+  $("modal").innerHTML = `<h2>${t("fs.searchTitle", "全盘搜索")}
+      <span class="hint">「${esc(q)}」· ${ms.length} 条</span></h2>
+    <div class="mbody">${ms.length ? ms.map(m0 => `
+      <div class="logrow">
+        <div class="t"><span style="word-break:break-all">${esc(m0.path)}</span>
+          <span class="freed">${m0.size_h}</span></div>
+        <div class="d"><a href="javascript:void(0)" class="rcpt" data-p="${esc(m0.path)}">${t("bf.reveal", "在资源管理器中打开位置")}</a></div>
+      </div>`).join("")
+      : `<div class="empty">${t("fs.searchNone2", r.error || "扫描缓存里没有匹配项")}</div>`}
+    <div style="text-align:right;padding-top:10px">
+      <button class="tiny" id="fsSClose">${t("cc.close", "关闭")}</button></div></div>`;
+  $("fsSClose").addEventListener("click", closeModal);
+  [...document.querySelectorAll("#modal .rcpt")].forEach(a =>
+    a.addEventListener("click", () => {
+      apiJSON(`${API}/__oc__/reveal`, { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: a.dataset.p, select: true }) });
+    }));
+}
+
+/* 近期暴涨（v2.12 Snapshot Diff）：对比两次扫描快照，按增量降序揪出回涨元凶 */
+async function openSnapDiff() {
+  $("modal").innerHTML = `<h2>${t("sd.title", "近期暴涨")}</h2>
+    <div class="mbody"><div class="empty"><span class="spin"></span>
+      ${t("sd.loading", "正在对比扫描快照…")}</div></div>`;
+  $("mask").classList.add("on");
+  const r = await apiJSON(`${API}/__oc__/snapshot/diff`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ drive, days: 7 }) }).catch(e => ({ error: String(e) }));
+  if (r.error) {
+    $("modal").innerHTML = `<h2>${t("sd.title", "近期暴涨")}</h2>
+      <div class="mbody"><div class="empty">${esc(r.error)}</div>
+      <div style="text-align:right;padding-top:10px">
+        <button class="tiny" id="sdClose">${t("cc.close", "关闭")}</button></div></div>`;
+    $("sdClose").addEventListener("click", closeModal);
+    return;
+  }
+  const d0 = r.diff || [];
+  $("modal").innerHTML = `<h2>${t("sd.title", "近期暴涨")}
+      <span class="hint">${esc(r.latest_date)} vs ${esc(r.past_date)}</span></h2>
+    <div class="mbody">${d0.length ? d0.map(x => `
+      <div class="logrow">
+        <div class="t"><span style="word-break:break-all">${esc(x.path)}</span>
+          <span class="freed" style="color:${x.delta > 0 ? "var(--warn-fg)" : "var(--ok-fg)"}">
+            ${x.delta > 0 ? "+" : "−"}${x.delta_h}</span></div>
+        <div class="d">${x.new ? t("sd.newDir", "新出现（上次快照没有）")
+          : `${t("sd.was", "当时")} ${x.now_h}`}</div>
+      </div>`).join("")
+      : `<div class="empty">${t("sd.calm", "两次快照之间没有明显涨跌 ✓")}</div>`}
+    <div style="text-align:right;padding-top:10px">
+      <button class="tiny" id="sdClose">${t("cc.close", "关闭")}</button></div></div>`;
+  $("sdClose").addEventListener("click", closeModal);
+}
+$("btnSnapDiff").addEventListener("click", openSnapDiff);
+
 /* 下载目录整理建议（#35）：按知识库归类顶层文件，给可执行建议。
    只读不动文件 —— 删/转移由用户自己决定。 */
 async function openDownloadsAdvice() {
@@ -6792,6 +6880,18 @@ const I18N_EN = {
   "jm.records": "Move records (one-click restore)",
   "jm.restore": "Restore",
   "jm.restored": "Restored to the original location",
+  "fs.searchPh": "Search file / folder names across the drive, press Enter…",
+  "fs.searchTitle": "Full-drive search",
+  "fs.searching": "Searching the scan cache…",
+  "fs.searchNone2": "No matches in the scan cache",
+  "btn.snapDiff": "Recent Spikes",
+  "sd.title": "Recent Spikes",
+  "sd.loading": "Comparing scan snapshots…",
+  "sd.newDir": "New (not in the previous snapshot)",
+  "sd.was": "was",
+  "sd.calm": "No significant growth between snapshots ✓",
+  "hist.restore": "↩ Restore from Recycle Bin",
+  "hist.restored": "Restored to the original location",
   "foot.afterClean": "after cleaning {drive}: would have about",
   "stat.runs": "{n} runs recorded",
   "stat.empty": "No cleaning history yet. After the first clean, this shows the cumulative release converted into everyday units.",

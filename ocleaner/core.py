@@ -2092,7 +2092,9 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
                 _WIZ_DIRS[letter] = {"table": table, "at": time.time(),
                                      "parse_s": round(parsed, 2),
                                      "engine": "wiztree"}
+                _save_scan_snapshot(letter)
             _eng_speed_record(letter, "wiztree", parsed)
+            _save_scan_snapshot(letter)   # v2.12：落盘目录快照供近期暴涨对比
             return True
         except Exception as e:
             table = None
@@ -4298,6 +4300,164 @@ def _recycle_entries(letter: str) -> list:
                             "orig": os.path.normpath(orig).lower(), "size": size})
     return out
 
+
+
+def recycle_restore(paths: list) -> dict:
+    """回收站一键原位还原（v2.12「可逆与精算版」核心项）。
+
+    解析 $Recycle.Bin 的 $I 元数据按原始路径精确匹配，把 $R 数据原子
+    移回原位并删除 $I 元数据。原位被占用/已存在时明确报错（不覆盖）。
+    """
+    results = []
+    by_drive: dict[str, list[str]] = {}
+    for p0 in paths or []:
+        p = os.path.normpath(os.path.expandvars(str(p0)))
+        letter = os.path.splitdrive(p)[0].rstrip(":").upper()
+        if letter:
+            by_drive.setdefault(letter, []).append(p)
+    for letter, plist in by_drive.items():
+        entries = _recycle_entries(letter)
+        idx: dict[str, list] = {}
+        for e in entries:
+            idx.setdefault(e["orig"], []).append(e)
+        for p in plist:
+            key = os.path.normcase(os.path.normpath(p))
+            cand = idx.get(key)
+            if not cand:
+                results.append({"path": p, "ok": False,
+                                "error": "回收站里没有这个原始路径的条目"})
+                continue
+            e = cand.pop(0)          # 同路径多次删除：逐个还原
+            parent = os.path.dirname(p)
+            try:
+                os.makedirs(parent, exist_ok=True)
+                if os.path.exists(p):
+                    results.append({"path": p, "ok": False,
+                                    "error": "原位置已被占用，未还原"})
+                    continue
+                shutil.move(e["r"], p)
+                try:
+                    os.remove(e["i"])
+                except OSError:
+                    pass
+                results.append({"path": p, "ok": True,
+                                "size": e["size"]})
+            except OSError as exc:
+                results.append({"path": p, "ok": False,
+                                "error": f"{type(exc).__name__}: {exc}"})
+    done = sum(1 for r in results if r["ok"])
+    return {"ok": done == len(results) and bool(results), "done": done,
+            "total": len(results), "results": results}
+
+
+SNAPSHOTS_DIR = RUNTIME_DIR / "snapshots"
+
+
+def _save_scan_snapshot(letter: str) -> None:
+    """全盘扫描落盘一份轻量目录快照（顶层+≥200MB 前 150 个目录，几 KB）。
+
+    供「近期暴涨」对比（两次扫描间谁在偷偷吃空间）。每盘每天一份，
+    保留最近 30 天。
+    """
+    cached = _WIZ_DIRS.get(letter)
+    if not cached or not cached.get("table"):
+        return
+    dirs = cached["table"].get("dirs") or {}
+    items = sorted(((k, v) for k, v in dirs.items()
+                    if v >= 200 * 1024 * 1024), key=lambda x: -x[1])[:150]
+    try:
+        SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+        today = datetime.now().strftime("%Y-%m-%d")
+        _atomic_write(SNAPSHOTS_DIR / f"{letter}-{today}.json",
+                      {"drive": letter, "date": today,
+                       "dirs": [{"path": k, "size": v} for k, v in items]})
+        for f in SNAPSHOTS_DIR.glob(f"{letter}-*.json"):
+            try:
+                d = datetime.strptime(f.stem.split("-", 1)[1], "%Y-%m-%d")
+                if (datetime.now() - d).days > 30:
+                    f.unlink()
+            except (ValueError, OSError):
+                pass
+    except OSError:
+        pass
+
+
+def snapshot_diff(letter: str, days: int = 7) -> dict:
+    """对比最新快照与 ~days 天前快照，按增量体积降序返回目录涨跌。"""
+    letter = (letter or "C").rstrip(":").upper()
+    snaps = {}
+    for f in SNAPSHOTS_DIR.glob(f"{letter}-*.json"):
+        try:
+            d = datetime.strptime(f.stem.split("-", 1)[1], "%Y-%m-%d")
+            snaps[d.date()] = _load_json(f, {})
+        except (ValueError, OSError):
+            continue
+    if not snaps:
+        return {"error": "还没有历史快照（先做一次全盘扫描，明天再来对比）",
+                "diff": []}
+    dates = sorted(snaps, reverse=True)
+    latest = snaps[dates[0]]
+    target = (dates[0] - __import__("datetime").timedelta(days=max(1, days)))
+    past_date = min(dates, key=lambda d: abs((d - target).days))
+    if past_date == dates[0]:
+        return {"error": "只有一份快照（今天），还没法对比；明天再来看",
+                "diff": []}
+    past = snaps[past_date]
+    now_map = {d["path"]: d["size"] for d in latest.get("dirs", [])}
+    then_map = {d["path"]: d["size"] for d in past.get("dirs", [])}
+    diff = []
+    for path, size in now_map.items():
+        old = then_map.get(path)
+        if old is None:
+            diff.append({"path": path, "delta": size, "now": size,
+                         "then": None, "new": True})
+        else:
+            d0 = size - old
+            if d0:
+                diff.append({"path": path, "delta": d0, "now": size,
+                             "then": old, "new": False})
+    for path, size in then_map.items():
+        if path not in now_map:
+            diff.append({"path": path, "delta": -size, "now": None,
+                         "then": size, "new": False})
+    diff.sort(key=lambda x: -x["delta"])
+    return {"ok": True, "latest_date": str(dates[0]),
+            "past_date": str(past_date),
+            "diff": [{"path": x["path"], "delta": x["delta"],
+                      "delta_h": human(abs(x["delta"]))
+                      + (" ↑" if x["delta"] > 0 else " ↓"),
+                      "now_h": human(x["now"]) if x["now"] else "—",
+                      "new": x["new"]} for x in diff[:50]]}
+
+
+def fs_search(letter: str, q: str, limit: int = 80) -> dict:
+    """占用排行跨层级实时搜索：在扫描缓存里按名字/路径模糊匹配目录与文件。"""
+    letter = (letter or "C").rstrip(":").upper()
+    cached = _WIZ_DIRS.get(letter)
+    if not cached or not cached.get("table"):
+        return {"error": f"请先对 {letter}: 盘做一次全盘扫描", "matches": []}
+    q0 = (q or "").strip().lower()
+    if not q0:
+        return {"ok": True, "matches": []}
+    out = []
+    for path, size in (cached["table"].get("dirs") or {}).items():
+        if q0 in os.path.basename(path).lower() or q0 in path.lower():
+            out.append({"path": path, "size": size, "kind": "dir"})
+            if len(out) >= limit:
+                break
+    if len(out) < limit:
+        for parent, items in (cached["table"].get("files") or {}).items():
+            for name, sz, full in items:
+                if q0 in name.lower():
+                    out.append({"path": full, "size": sz, "kind": "file"})
+                    if len(out) >= limit:
+                        break
+            if len(out) >= limit:
+                break
+    out.sort(key=lambda x: -x.get("size", 0))
+    for o in out:
+        o["size_h"] = human(o["size"])
+    return {"ok": True, "matches": out[:limit]}
 
 def purge_recycle_paths(paths: list) -> dict:
     """把给定原始路径从回收站里精确移除（只动配对的 $I/$R，不动其它条目）。
@@ -8103,6 +8263,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(junction_restore(str(body.get("src") or "")))
         if route == "/__oc__/junction/list":
             return self._json({"records": _load_json(MOVED_JUNCTIONS_PATH, [])})
+        if route == "/__oc__/recycle-restore":
+            paths_in = body.get("paths") or []
+            if not isinstance(paths_in, list) or not paths_in:
+                return self._json({"error": "paths 不能为空"}, 400)
+            if len(paths_in) > 50:
+                return self._json({"error": "单次最多 50 个路径"}, 400)
+            return self._json(recycle_restore([str(x) for x in paths_in]))
+        if route == "/__oc__/snapshot/diff":
+            return self._json(snapshot_diff(
+                str(body.get("drive") or drive or "C"),
+                int(body.get("days") or 7)))
+        if route == "/__oc__/fs-search":
+            return self._json(fs_search(
+                str(body.get("drive") or drive or "C"),
+                str(body.get("q") or "")))
         if route == "/__oc__/sync/save":
             with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
                 cfg = _sync_cfg()
