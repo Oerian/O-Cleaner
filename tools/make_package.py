@@ -44,6 +44,7 @@ INCLUDE = [
     "ocleaner/credentials.py",
     "ocleaner/deleter.py",
     "ocleaner/engines.py",
+    "ocleaner/guard.py",
     "ocleaner/store.py",
     "ocleaner/games.py",
     "ocleaner/integrations.py",
