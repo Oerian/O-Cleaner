@@ -7067,14 +7067,16 @@ class Handler(BaseHTTPRequestHandler):
                 int(body.get("days") or 7)))
         if route == "/__oc__/fs-search":
             return self._json(fs_search(
-                str(body.get("drive") or drive or "C"),
+                str(body.get("drive") or "C"),
                 str(body.get("q") or "")))
         if route == "/__oc__/appclean/scan":
+            # do_POST 作用域没有 drive 变量（探测曾触发 NameError→500）；
+            # 不传 drive = 扫描全盘符。
             return self._json(appclean_scan(
-                (body.get("drive") or drive or "").rstrip(":").upper()))
+                str(body.get("drive") or "").rstrip(":").upper()))
         if route == "/__oc__/treemap":
             return self._json(treemap_data(
-                str(body.get("drive") or drive or "C"),
+                str(body.get("drive") or "C"),
                 str(body.get("parent") or "")))
         if route == "/__oc__/downloads-archive":
             return self._json(downloads_archive())
