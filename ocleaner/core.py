@@ -7735,7 +7735,7 @@ def main() -> None:
 
     url = f"http://127.0.0.1:{port}/"
     print()
-    print("  O-Cleaner 已启动")
+    print(f"  O-Cleaner 已启动（v{APP_VERSION}）")
     print(f"  界面地址: {url}")
     print(f"  数据目录: {DATA_DIR}"
           + ("（--data-dir 重定向）" if DATA_DIR != BASE_DIR else ""))
