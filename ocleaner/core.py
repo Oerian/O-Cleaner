@@ -1196,7 +1196,6 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
                                      "engine": "wiztree"}
                 _save_scan_snapshot(letter)
             _eng_speed_record(letter, "wiztree", parsed)
-            _save_scan_snapshot(letter)   # v2.12：落盘目录快照供近期暴涨对比
             return True
         except Exception as e:
             table = None
@@ -3096,7 +3095,8 @@ def _save_scan_snapshot(letter: str) -> None:
     """全盘扫描落盘一份轻量目录快照（顶层+≥200MB 前 150 个目录，几 KB）。
 
     供「近期暴涨」对比（两次扫描间谁在偷偷吃空间）。每盘每天一份，
-    保留最近 30 天。
+    保留最近 30 天。同时持久化扩展名分布（top 30），让「类型分布」
+    页签在服务重启后仍有数据可看。
     """
     cached = _WIZ_DIRS.get(letter)
     if not cached or not cached.get("table"):
@@ -3110,6 +3110,20 @@ def _save_scan_snapshot(letter: str) -> None:
         _atomic_write(SNAPSHOTS_DIR / f"{letter}-{today}.json",
                       {"drive": letter, "date": today,
                        "dirs": [{"path": k, "size": v} for k, v in items]})
+        try:
+            # table["ext"] 的值是 [字节数, 个数] 列表（_ext_bump 维护）
+            ext_items = []
+            for k, v in (cached["table"].get("ext") or {}).items():
+                size = v[0] if isinstance(v, (list, tuple)) else v
+                if size:
+                    ext_items.append((k, size))
+            ext_top = sorted(ext_items, key=lambda x: -x[1])[:30]
+            _atomic_write(SNAPSHOTS_DIR / f"{letter}-ext.json",
+                          {"drive": letter, "updated": today,
+                           "by_ext": [{"ext": k, "size": v}
+                                      for k, v in ext_top]})
+        except Exception:  # noqa: BLE001 —— 扩展名缓存失败绝不拖垮扫描
+            traceback.print_exc()
         for f in SNAPSHOTS_DIR.glob(f"{letter}-*.json"):
             try:
                 d = datetime.strptime(f.stem.split("-", 1)[1], "%Y-%m-%d")
@@ -6180,6 +6194,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"packs": load_packs(use_cache=False)["packs"],
                                "remote": load_packs_state().get("remote") or "",
                                "user_dir": str(USER_PACKS_DIR)})
+        if route == "/__oc__/ext-cache":
+            letter = (self.path.split("drive=")[-1].split("&")[0]
+                      .rstrip("/").upper() or "C")
+            fp = SNAPSHOTS_DIR / f"{letter}-ext.json"
+            try:
+                return self._json(json.loads(
+                    fp.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                return self._json({"drive": letter, "by_ext": []})
         if route == "/__oc__/scan":
             return self._json(apply_lang_payload(
                 build_scan(q.get("drive"), q.get("custom"),

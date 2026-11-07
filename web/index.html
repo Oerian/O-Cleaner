@@ -1945,18 +1945,32 @@ async function _dwRenderCleanups(body) {
 /* 类型分布（当前盘）：全盘扫描后用 FS.by_ext 画竖向柱状图（与扫描概览
    旧 extBox 同款 .extcol 三段定高结构 —— 2026-11-03 从扫描概览的展开器
    迁移为组件页签）。没扫过当前盘或 PS 递归路径没有全量清单时如实提示。 */
-function _dwRenderExt(body) {
+async function _dwRenderExt(body) {
   const dk = STATE.disk || {};
   const drv = String(dk.letter || STATE.current_drive || "").trim().toUpperCase()[0] || "";
-  const fsDrv = String(FS.drive || "").trim().toUpperCase()[0] || "";
-  const list = (drv && fsDrv && drv === fsDrv && Array.isArray(FS.by_ext)) ? FS.by_ext : [];
+  const fsDrv = String((FS && FS.drive) || "").trim().toUpperCase()[0] || "";
+  let list = (drv && fsDrv && drv === fsDrv && FS.by_ext && Array.isArray(FS.by_ext))
+    ? FS.by_ext : [];
+  let stale = false;
+  if (!list.length && drv) {
+    // 服务重启后内存缓存清空——回退读上次扫描的持久化分布（带提示）
+    try {
+      const c = await apiJSON(`${API}/__oc__/ext-cache?drive=${drv}`);
+      if (Array.isArray(c.by_ext) && c.by_ext.length) {
+        list = c.by_ext;
+        stale = true;
+      }
+    } catch (_) { /* 无缓存就走原有的「先扫描」提示 */ }
+  }
   if (!list.length) {
     body.innerHTML = `<div class="tvlbl">${esc(t("dw.extHint",
       "对 {d}: 盘做一次全盘扫描后，这里显示文件类型分布").replace("{d}", esc(drv || "?")))}</div>`;
     return;
   }
   const maxv = Math.max(1, ...list.map(e => e.size || 0));
-  body.innerHTML = `<div class="extv">${list.map(e => {
+  body.innerHTML = `${stale ? `<div class="hint" style="margin-bottom:6px">${esc(t("dw.extStale",
+    "显示的是上次全盘扫描的分布（重启后仍可查看）；重新全盘扫描即更新"))}</div>` : ""}
+    <div class="extv">${list.map(e => {
     const h = Math.max(3, Math.round((e.size || 0) / maxv * 100));
     const label = e.ext === "__other__" ? t("fs.extOther","其他类型")
       : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
@@ -7102,6 +7116,7 @@ const I18N_EN = {
   "dl.arcDone": "Archived {n} files into {cats}",
   "dl.undoing": "Undoing…",
   "dl.undone": "Last archive undone ({n} files moved back)",
+  "dw.extStale": "Showing the last full-scan distribution (persists across restarts); run a full scan to refresh",
   "btn.ac": "App Deep Clean",
   "btn.tm": "Treemap",
   "ac.title": "App Deep Clean",
