@@ -1,0 +1,29 @@
+# 资源包校验流水线（仓库基建 v3.0）：
+# 主仓库 —— packs/** 变更时校验清单/内容/哈希一致性；
+# O-Cleaner-packs 分发仓可直接复制本文件（无需改动即可运行，
+# 因 tools/packs_ci_validate.py 为纯标准库单文件脚本）。
+name: packs-validate
+
+on:
+  push:
+    paths: ["packs/**", "tools/packs_ci_validate.py"]
+  pull_request:
+    paths: ["packs/**", "tools/packs_ci_validate.py"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: 资源包校验（清单/内容/SHA-256）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验资源包（清单对应/必填字段/跨包冲突/规范形 SHA-256）
+        run: python -X utf8 tools/packs_ci_validate.py --packs-dir packs

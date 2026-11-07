@@ -1797,8 +1797,10 @@ def phase3_http() -> None:
               and "/select," in _impl_src())
         # 释义增强包：清单收录（linter 也会查），并有两仓同步工具
         idx = json.loads((HERE / "packs" / "index.json").read_text(encoding="utf-8"))
+        _idx_files = {str(x.get("file")) if isinstance(x, dict) else str(x)
+                      for x in idx.get("packs", [])}
         check("释义增强包已收录进清单且有同步工具",
-              "explanations.json" in idx.get("packs", [])
+              "explanations.json" in _idx_files
               and (HERE / "packs" / "explanations.json").exists()
               and (TOOLS_DIR / "sync_packs.py").exists())
         check("分发包构建清单含释义增强包",

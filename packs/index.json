@@ -1,12 +1,32 @@
 {
-  "_comment": "资源包清单。界面上的「从 GitHub 检查更新」按这个列表逐个下载包并导入到 config/packs-user/。",
-  "version": 1,
-  "updated": "2026-10-13",
-  "packs": [
-    "windows-system.json",
-    "apps-common.json",
-    "games-platform.json",
-    "games-titles.json",
-    "explanations.json"
-  ]
+ "_comment": "资源包清单。界面上的「从 GitHub 检查更新」按这个列表逐个下载包并导入到 config/packs-user/。",
+ "version": 2,
+ "updated": "2026-10-13",
+ "packs": [
+  {
+   "file": "windows-system.json",
+   "sha256": "9c7f823909147022afcb6bae0c30e00f9cffc0abc4c7b4cb56cfbd145f788c46",
+   "version": "1.0.0"
+  },
+  {
+   "file": "apps-common.json",
+   "sha256": "e05e34d6b880071fd388da4195c95b66bbf085b751ba1fa62bae91bff6f587f3",
+   "version": "1.0.0"
+  },
+  {
+   "file": "games-platform.json",
+   "sha256": "c47329416b504d68ee00f2daf5d5e0602959fb38d9a3630e2c9879b5bbfdf926",
+   "version": "1.0.0"
+  },
+  {
+   "file": "games-titles.json",
+   "sha256": "ce01ba8684174a1f3da4a83d45f7b22ecf5af247e2d94bf8c80c7494132c687d",
+   "version": "1.0.0"
+  },
+  {
+   "file": "explanations.json",
+   "sha256": "8ec17b1117f476836e0ad561297549fef5c4dc2e7692c3182f9076f12286e49e",
+   "version": "1.1.0"
+  }
+ ]
 }

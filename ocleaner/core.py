@@ -4886,6 +4886,16 @@ def packs_update_from_remote() -> dict:
     names = _as_list((man or {}).get("packs"))
     if not names:
         return {"ok": False, "error": "远端清单里没有 packs 列表", "remote": remote}
+    # v3.0 信任分级：index v2 支持对象条目 {"file", "sha256"}——下载后先做
+    # 哈希核验，不符即拒绝导入（防传输损坏与清单被篡改后的静默导入）。
+    # 字符串条目保持 v1 兼容（无校验）。
+    expected: dict[str, str] = {}
+    for n in names:
+        if isinstance(n, dict) and n.get("file"):
+            fname0 = os.path.basename(str(n["file"]))
+            if str(n.get("sha256") or ""):
+                expected[fname0] = str(n["sha256"]).strip().lower()
+            names[names.index(n)] = fname0
     done, failed = [], []
     for n in names:
         fname = os.path.basename(str(n))
@@ -4895,6 +4905,15 @@ def packs_update_from_remote() -> dict:
         if e2:
             failed.append(f"{fname}：{e2}")
             continue
+        if fname in expected:
+            digest = hashlib.sha256(
+                json.dumps(data, ensure_ascii=False, sort_keys=True)
+                .encode("utf-8")).hexdigest()
+            # 兼容远端格式化差异：再试原始语义哈希（对 key 排序的紧凑序列化）
+            if digest != expected[fname]:
+                failed.append(f"{fname}：SHA-256 与清单不符，已拒绝导入"
+                              "（远端包可能被篡改或清单过期）")
+                continue
         ok, why = import_pack(data)
         (done if ok else failed).append(f"{fname}：{why}" if ok else f"{fname}：{why}")
     return {"ok": bool(done), "remote": remote, "updated": done,

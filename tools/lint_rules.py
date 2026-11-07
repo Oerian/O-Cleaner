@@ -286,7 +286,9 @@ def lint_packs() -> None:
         if not isinstance(raw, list) or not raw:
             err("packs/index.json 的 packs 必须是非空数组")
         else:
-            listed = [str(x) for x in raw]
+            # v1：文件名字符串；v2：{"file", "sha256"} 对象（仓库基建）
+            listed = [str(x["file"]) if isinstance(x, dict) and x.get("file")
+                      else str(x) for x in raw]
             if len(set(listed)) != len(listed):
                 err("packs/index.json 的 packs 列表有重复项")
 
