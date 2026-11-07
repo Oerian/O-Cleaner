@@ -41,6 +41,10 @@ import string
 import struct
 import subprocess
 import sys
+import base64
+import ipaddress
+import traceback
+import webbrowser
 import tempfile
 import threading
 import time
@@ -120,7 +124,7 @@ WEB_DIR = BASE_DIR / "web"
 # config/drives.json 的 app.version），2026-10-12 升 v2.3 时漏改了后两处，
 # 结果界面显示的仍是 2.2。收敛成一个常量后，drives.json 与打包脚本由自测断言
 # 强制保持一致（见 tools/selftest.py 的「版本号三处一致」）。
-APP_VERSION = "2.11"
+APP_VERSION = "2.15"
 APP_UA = f"O-Cleaner/{APP_VERSION}"
 
 TARGETS_PATH = CONFIG_DIR / "targets.json"
@@ -3140,6 +3144,17 @@ def snapshot_diff(letter: str, days: int = 7) -> dict:
     past = snaps[past_date]
     now_map = {d["path"]: d["size"] for d in latest.get("dirs", [])}
     then_map = {d["path"]: d["size"] for d in past.get("dirs", [])}
+    # 高频回涨（v2.15 方向二补完）：沿时间线统计每个目录「较上次增长」
+    # 的次数，≥3 次标记 hot —— 清理后反复回涨的缓存目录值得进定时清理。
+    timeline = [snaps[d] for d in sorted(snaps)]
+    growth: dict[str, int] = {}
+    for prev, cur in zip(timeline, timeline[1:]):
+        prev_m = {d["path"]: d["size"] for d in prev.get("dirs", [])}
+        cur_m = {d["path"]: d["size"] for d in cur.get("dirs", [])}
+        for path0, size0 in cur_m.items():
+            prev0 = prev_m.get(path0)
+            if prev0 is not None and size0 > prev0:
+                growth[path0] = growth.get(path0, 0) + 1
     diff = []
     for path, size in now_map.items():
         old = then_map.get(path)
@@ -3162,7 +3177,9 @@ def snapshot_diff(letter: str, days: int = 7) -> dict:
                       "delta_h": human(abs(x["delta"]))
                       + (" ↑" if x["delta"] > 0 else " ↓"),
                       "now_h": human(x["now"]) if x["now"] else "—",
-                      "new": x["new"]} for x in diff[:50]]}
+                      "new": x["new"],
+                      "hot": growth.get(x["path"], 0) >= 3}
+                     for x in diff[:50]]}
 
 
 def fs_search(letter: str, q: str, limit: int = 80) -> dict:
@@ -7040,6 +7057,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(treemap_data(
                 str(body.get("drive") or drive or "C"),
                 str(body.get("parent") or "")))
+        if route == "/__oc__/downloads-archive":
+            return self._json(downloads_archive())
+        if route == "/__oc__/downloads-archive/undo":
+            return self._json(downloads_archive_undo())
         if route == "/__oc__/sync/save":
             with _lock:  # P2-3：读-改-写串行化（防并发丢失更新）
                 cfg = _sync_cfg()
@@ -7311,6 +7332,81 @@ def _open_app_window(url: str) -> None:
             except OSError:
                 continue
     webbrowser.open(url)   # 兜底：默认浏览器
+
+
+ARCHIVE_LOG_PATH = RUNTIME_DIR / "downloads-archive-log.json"
+
+
+def downloads_archive(root: str | None = None) -> dict:
+    """下载目录按类型归档（v2.15 方向五后半）：顶层文件移入分类子目录。
+
+    分类名与知识库识别一致；同名冲突自动重命名；移动清单写入
+    downloads-archive-log.json，支持 /__oc__/downloads-archive/undo 一键
+    整批撤销。子目录与隐藏文件不参与归档。
+    """
+    root = root or _downloads_dir()
+    if not os.path.isdir(root):
+        return {"error": f"下载目录不存在：{root}"}
+    moves = []
+    try:
+        entries = list(os.scandir(root))
+    except OSError as e:
+        return {"error": f"无法读取下载目录：{e}"}
+    for e in entries:
+        try:
+            if not e.is_file() or e.name.startswith("."):
+                continue
+            info = identify(e.name, e.path, "file")
+            cat = info.get("category") or "未识别"
+            cat_dir = cat if re.fullmatch(r"[\w\u4e00-\u9fff -]+", cat) \
+                else "其他"
+            target_dir = os.path.join(root, cat_dir)
+            os.makedirs(target_dir, exist_ok=True)
+            dst = os.path.join(target_dir, e.name)
+            k = 1
+            stem, ext = os.path.splitext(e.name)
+            while os.path.exists(dst):
+                dst = os.path.join(target_dir, f"{stem}({k}){ext}")
+                k += 1
+            shutil.move(e.path, dst)
+            moves.append({"name": e.name, "from": e.path, "to": dst,
+                          "category": cat_dir})
+        except OSError as exc:
+            moves.append({"name": e.name, "error":
+                          f"{type(exc).__name__}: {exc}"})
+    moved = [m for m in moves if "error" not in m]
+    try:
+        log = _load_json(ARCHIVE_LOG_PATH, [])
+        if moved:
+            log.insert(0, {"time": datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"), "moves": moved})
+        _atomic_write(ARCHIVE_LOG_PATH, log[:20])
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+    return {"ok": True, "moved": len(moved),
+            "errors": len(moves) - len(moved),
+            "by_category": sorted({m["category"] for m in moved})}
+
+
+def downloads_archive_undo() -> dict:
+    """撤销最近一次归档：按日志把文件移回下载目录顶层。"""
+    log = _load_json(ARCHIVE_LOG_PATH, [])
+    if not log:
+        return {"error": "没有可撤销的归档记录"}
+    session = log.pop(0)
+    restored = 0
+    errors = []
+    for m in session.get("moves", []):
+        try:
+            if os.path.exists(m["to"]):
+                shutil.move(m["to"], m["from"])
+                restored += 1
+            else:
+                errors.append(f"{m['name']}：目标文件已不在")
+        except OSError as exc:
+            errors.append(f"{m['name']}：{exc}")
+    _atomic_write(ARCHIVE_LOG_PATH, log)
+    return {"ok": True, "restored": restored, "errors": errors}
 
 
 def run_auto_clean(drive: str) -> dict:

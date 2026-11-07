@@ -5750,7 +5750,7 @@ async function openSnapDiff() {
         <div class="t"><span style="word-break:break-all">${esc(x.path)}</span>
           <span class="freed" style="color:${x.delta > 0 ? "var(--warn-fg)" : "var(--ok-fg)"}">
             ${x.delta > 0 ? "+" : "−"}${x.delta_h}</span></div>
-        <div class="d">${x.new ? t("sd.newDir", "新出现（上次快照没有）")
+        <div class="d">${x.hot ? `<span style="color:var(--warn-fg)">🔄 ${t("sd.hot", "高频回涨（清理后会再长，建议进定时清理）")}</span> · ` : ""}${x.new ? t("sd.newDir", "新出现（上次快照没有）")
           : `${t("sd.was", "当时")} ${x.now_h}`}</div>
       </div>`).join("")
       : `<div class="empty">${t("sd.calm", "两次快照之间没有明显涨跌 ✓")}</div>`}
@@ -5951,8 +5951,27 @@ async function openDownloadsAdvice() {
       </div>`).join("") || `<div class="empty">${t("dl.empty", "下载目录是空的")}</div>`}
     <div style="text-align:right;padding-top:10px">
       <button class="go" id="dlGo" style="display:none">${t("dl.go", "清理选中项（移入回收站）")}</button>
+      <button class="tiny" id="dlArc">${t("dl.archive", "一键按类型归档")}</button>
+      <button class="tiny" id="dlUndo">${t("dl.undo", "撤销上次归档")}</button>
       <button class="tiny" id="dlClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("dlClose").addEventListener("click", closeModal);
+  $("dlArc").addEventListener("click", async () => {
+    if (!confirm(t("dl.arcConfirm", "把下载目录顶层的全部文件按类型移入分类子文件夹？（可在弹窗里一键撤销）"))) return;
+    $("dlArc").disabled = true; $("dlArc").textContent = t("dl.archiving", "归档中…");
+    const rr = await apiJSON(`${API}/__oc__/downloads-archive`, {
+      method: "POST" });
+    toast(rr.error || t("dl.arcDone", "已归档 {n} 个文件到 {cats}")
+      .replace("{n}", rr.moved).replace("{cats}", (rr.by_category || []).join("、")));
+    openDownloadsAdvice();
+  });
+  $("dlUndo").addEventListener("click", async () => {
+    $("dlUndo").disabled = true; $("dlUndo").textContent = t("dl.undoing", "撤销中…");
+    const rr = await apiJSON(`${API}/__oc__/downloads-archive/undo`, {
+      method: "POST" });
+    toast(rr.error || t("dl.undone", "已撤销最近一次归档（{n} 个文件移回顶层）")
+      .replace("{n}", rr.restored));
+    openDownloadsAdvice();
+  });
   const dlGo = $("dlGo");
   const syncGo = () => { dlGo.style.display =
     document.querySelectorAll("#modal .dlChk:checked").length ? "" : "none"; };
@@ -7075,6 +7094,14 @@ const I18N_EN = {
   "sd.calm": "No significant growth between snapshots ✓",
   "hist.restore": "↩ Restore from Recycle Bin",
   "hist.restored": "Restored to the original location",
+  "sd.hot": "Hot re-growth (grows back after cleaning; consider scheduled cleanup)",
+  "dl.archive": "Auto-archive by type",
+  "dl.undo": "Undo last archive",
+  "dl.arcConfirm": "Move all top-level files in Downloads into category subfolders? (undoable from this dialog)",
+  "dl.archiving": "Archiving…",
+  "dl.arcDone": "Archived {n} files into {cats}",
+  "dl.undoing": "Undoing…",
+  "dl.undone": "Last archive undone ({n} files moved back)",
   "btn.ac": "App Deep Clean",
   "btn.tm": "Treemap",
   "ac.title": "App Deep Clean",
