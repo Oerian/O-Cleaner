@@ -601,7 +601,9 @@
   .pbox.bad{border-color:var(--warn-bd);background:var(--warn-bg)}
   /* 分析中心（四轮后新增）：专项工具统一挂在第三个视图的页签下，
      #modal 运行时重挂进 anHost —— 面板化呈现，状态随视图保留 */
-  .antabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}
+  .antabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px;
+    position:sticky;top:0;z-index:5;background:var(--panel);
+    padding:10px 0;border-bottom:1px solid var(--line2)}
   body[data-view="analysis"] .mask{display:none !important}
   body[data-view="analysis"] #modal{
     position:static;display:block !important;width:100%;max-width:none;
@@ -843,14 +845,6 @@
       <option value="5" data-i18n="depth.5">5 层（最慢）</option>
     </select>
     <span class="tb-sep"></span>
-    <button id="btnBigFiles" data-i18n="btn.bigFiles">大文件排行</button>
-    <button id="btnDupFiles" data-i18n="btn.dupFiles">重复大文件</button>
-    <button id="btnDlAdvice" data-i18n="btn.dlAdvice">下载整理</button>
-    <button id="btnJunctionMove" data-i18n="btn.jm">C 盘搬家</button>
-    <button id="btnSnapDiff" data-i18n="btn.snapDiff">近期暴涨</button>
-    <button id="btnAppClean" data-i18n="btn.ac">应用专清</button>
-    <button id="btnTreemap" data-i18n="btn.tm">树图</button>
-    <button id="btnBloat" data-i18n="btn.bloat">毒瘤清除</button>
     <span class="tb-sep"></span>
     <button id="btnDense" data-i18n="btn.dense">紧凑模式</button>
     <button id="btnAll" data-i18n="btn.all">全选</button>
@@ -5418,6 +5412,7 @@ document.querySelectorAll("#viewNav button").forEach(b => b.addEventListener("cl
     else await startFullScan();
     return;
   }
+  if (v === "analysis") { openAnalysis("big"); return; }
   switchView("steam");
   loadSteam();
 }));
@@ -5508,7 +5503,6 @@ async function openBigFiles() {
       });
     }));
 }
-$("btnBigFiles").addEventListener("click", openBigFiles);
 
 /* 重复大文件（#34）：基于全盘扫描明细缓存，同体积分组 + 首尾 1MB 采样
    哈希证实。只报哈希一致的组（同体积内容不同不算），杜绝误导删除。
@@ -5641,11 +5635,11 @@ async function openDupFiles() {
 }
 /* 分析中心：专项工具统一入口（第三视图页签，弹窗面板化呈现） */
 const AN_TOOLS = [
+  ["big", () => t("btn.bigFiles", "大文件排行"), openBigFiles],
   ["dup", () => t("btn.dupFiles", "重复大文件"), openDupFiles],
   ["appclean", () => t("btn.ac", "应用专清"), openAppClean],
   ["bloat", () => t("btn.bloat", "毒瘤清除"), openBloatware],
   ["snap", () => t("btn.snapDiff", "近期暴涨"), openSnapDiff],
-  ["tm", () => t("btn.tm", "树图"), () => { openTreemap._stack = []; openTreemap(""); }],
   ["dl", () => t("btn.dlAdvice", "下载整理"), openDownloadsAdvice],
   ["jm", () => t("btn.jm", "C 盘搬家"), openJunctionMove],
 ];
@@ -5660,7 +5654,6 @@ function openAnalysis(tool) {
   const t0 = AN_TOOLS.find(x => x[0] === tool);
   if (t0) t0[2]();
 }
-$("btnDupFiles").addEventListener("click", () => openAnalysis("dup"));
 
 /* 毒瘤软件完整清除：两段式 —— 先跑官方卸载程序，再由用户点「清扫残留」
    做目录/注册表精准清理。扫描只读不删。 */
@@ -5716,7 +5709,6 @@ async function openBloatware() {
       openBloatware();
     }));
 }
-$("btnBloat").addEventListener("click", () => openAnalysis("bloat"));
 
 /* C 盘无损搬家 v2：整目录迁移到目标盘并原位建 Junction；
    目标已存在可「合并 + 冲突重命名」——用于误下载到 C 盘的绿色软件搬家。 */
@@ -5838,7 +5830,6 @@ async function openJunctionMove() {
       }));
   }
 }
-$("btnJunctionMove").addEventListener("click", () => openAnalysis("jm"));
 
 /* 占用排行跨层级实时搜索（v2.12）：扫描缓存内按名字/路径模糊匹配 */
 $("fsSearch").addEventListener("keydown", e => {
@@ -5910,7 +5901,6 @@ async function openSnapDiff() {
       <button class="tiny" id="sdClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("sdClose").addEventListener("click", closeModal);
 }
-$("btnSnapDiff").addEventListener("click", () => openAnalysis("snap"));
 
 /* 应用专清（v2.15 方向三）：国民级大软件与开发者缓存结构化拆解。
    cache 项可一键移入回收站；data 项给处理建议；core 项锁定警示。 */
@@ -5960,105 +5950,7 @@ async function openAppClean() {
       openAppClean();
     }));
 }
-$("btnAppClean").addEventListener("click", () => openAnalysis("appclean"));
 
-/* Treemap 矩形树图（v2.15 方向六）：纯 Canvas Squarified，零第三方库。
-   点击色块下钻；「返回上一级」沿栈回退；色带按体积深浅着色。 */
-async function openTreemap(parent) {
-  const stack = openTreemap._stack = openTreemap._stack || [];
-  $("modal").innerHTML = `<h2>${t("tm.title", "矩形树图")}</h2>
-    <div class="mbody"><div class="empty"><span class="spin"></span>
-      ${t("tm.loading", "正在从扫描缓存取子项…")}</div></div>`;
-  $("mask").classList.add("on");
-  const r = await apiJSON(`${API}/__oc__/treemap`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ drive, parent: parent || "" }) }).catch(
-      e => ({ error: String(e) }));
-  const nodes = r.nodes || [];
-  const W = 860, H = 460;
-  const tmBtn = `<div style="text-align:right;padding:6px 0">
-      ${stack.length ? `<button class="tiny" id="tmBack">${t("tm.back", "返回上一级")}</button>` : ""}
-      <button class="tiny" id="tmClose">${t("cc.close", "关闭")}</button></div>`;
-  if (r.error) {
-    $("modal").innerHTML = `<h2>${t("tm.title", "矩形树图")}</h2>
-      <div class="mbody"><div class="empty">${esc(r.error)}</div>${tmBtn}</div>`;
-    const b = $("tmBack"); if (b) b.addEventListener("click", () =>
-      openTreemap(stack.pop() || ""));
-    $("tmClose").addEventListener("click", closeModal);
-    return;
-  }
-  $("modal").innerHTML = `<h2>${t("tm.title", "矩形树图")}
-      <span class="hint">${esc(r.parent)} · ${t("tm.tip", "点击色块下钻")}</span></h2>
-    <div class="mbody">
-      <canvas id="tmCv" width="${W}" height="${H}"
-        style="width:100%;border:1px solid var(--line);cursor:pointer"></canvas>
-      ${tmBtn}</div>`;
-  $("tmClose").addEventListener("click", closeModal);
-  const back = $("tmBack");
-  if (back) back.addEventListener("click", () => openTreemap(stack.pop() || ""));
-  const cv = $("tmCv"), ctx = cv.getContext("2d");
-  const css = getComputedStyle(document.documentElement);
-  const palette = ["#2f6f3f", "#3f7f56", "#b45309", "#1f4f6f", "#5b5f77",
-                   "#7f5a2f", "#3f5f7f", "#6f3f5f"];
-  const rects = [];
-  function layout(items, x, y, w, h) {
-    // 简化 squarified：按体积降序逐行填充，行内均匀切分
-    let i = 0, cy = y, total = items.reduce((s, n) => s + n.size, 0) || 1;
-    while (i < items.length && cy < y + h - 2) {
-      const rowH = Math.max(22, Math.min(120,
-        (h - (cy - y)) * items[i].size / Math.max(1,
-          items.slice(i).reduce((s, n) => s + n.size, 0))));
-      let cx = x;
-      const rowStart = i;
-      let rowSum = 0;
-      while (i < items.length) {
-        const w0 = w * items[i].size / Math.max(1,
-          items.slice(rowStart).reduce((s, n) => s + n.size, 0));
-        if (cx + Math.max(2, w0) > x + w + 1) break;
-        drawRect(items[i], cx, cy, Math.max(2, w0), rowH,
-                 rowStart, palette);
-        rowSum += items[i].size;
-        cx += Math.max(2, w0);
-        i++;
-        if (cy + rowH >= y + h) break;
-      }
-      cy += rowH;
-      // 占位递归保护
-      if (rowStart === i) i++;
-    }
-    function drawRect(item, rx, ry, rw, rh, rowStart, pal) {
-      const idx = rowStart % pal.length;
-      ctx.fillStyle = pal[idx] || "#555";
-      ctx.fillRect(rx, ry, rw, rh);
-      rects.push({ x: rx, y: ry, w: rw, h: rh, node: item });
-      ctx.fillStyle = "#fff";
-      if (rw > 90 && rh > 20) {
-        ctx.font = "12px sans-serif";
-        const label = item.name.length > 14
-          ? item.name.slice(0, 13) + "…" : item.name;
-        ctx.fillText(label, rx + 5, ry + 15);
-        if (rh > 34) {
-          ctx.font = "11px sans-serif";
-          ctx.fillText(item.size_h, rx + 5, ry + 30);
-        }
-      }
-    }
-  }
-  ctx.clearRect(0, 0, W, H);
-  layout(nodes, 0, 0, W, H);
-  cv.addEventListener("click", ev => {
-    const rect = cv.getBoundingClientRect();
-    const mx = (ev.clientX - rect.left) * (W / Math.max(1, rect.width));
-    const my = (ev.clientY - rect.top) * (H / Math.max(1, rect.height));
-    const hit = rects.find(rc =>
-      mx >= rc.x && mx <= rc.x + rc.w && my >= rc.y && my <= rc.y + rc.h);
-    if (hit && hit.node.kind === "dir" && hit.node.size > 0) {
-      stack.push(r.parent);
-      openTreemap(hit.node.path);
-    }
-  });
-}
-$("btnTreemap").addEventListener("click", () => openAnalysis("tm"));
 
 /* 下载目录整理建议（#35）：按知识库归类顶层文件，给可执行建议。
    只读不动文件 —— 删/转移由用户自己决定。 */
@@ -6144,7 +6036,6 @@ async function openDownloadsAdvice() {
     openDownloadsAdvice();
   });
 }
-$("btnDlAdvice").addEventListener("click", () => openAnalysis("dl"));
 
 /* 行密度两档（#39）：紧凑/舒适，localStorage 记忆。 */
 function applyDense() {

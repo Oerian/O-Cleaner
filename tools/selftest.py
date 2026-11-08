@@ -1788,6 +1788,12 @@ def phase3_http() -> None:
               and 'id="dwHome"' in html and 'id="dwDock"' in html
               and 'const host = dock || home' in html
               and 'drawDiskTrend();' in html.split("function renderOverview")[1][:6000])
+        check("工具栏与分析中心去重（2026-11-08）：专项工具只留分析中心页签",
+              all(f'id="{b}"' not in html for b in
+                  ("btnDupFiles", "btnDlAdvice", "btnJunctionMove",
+                   "btnSnapDiff", "btnAppClean", "btnTreemap", "btnBloat",
+                   "btnBigFiles"))
+              and 'id="anTabs"' in html)
         check("扫描引擎偏好（2026-11-03）：工具栏下拉 + 端点读写",
               'id="engPref"' in html and "/__oc__/engine/pref" in html
               and "eng.auto" in html and "eng.wiztree" in html and "eng.mft" in html)

@@ -5669,38 +5669,6 @@ def glob_dirs(pattern: str) -> list:
     return [g for g in _glob.glob(pattern) if os.path.isdir(g)]
 
 
-# ---- Treemap 数据源（v2.15 方向六）：扫描缓存的某目录一级子项 ----
-def treemap_data(drive: str, parent: str = "") -> dict:
-    """返回 parent 的一级子项清单（目录 + 文件聚合），供 Canvas 树图。
-
-    parent 为空 = 盘根。数据来自 WizTree/MFT 扫描缓存（零额外读盘）。
-    """
-    letter = (drive or "C").rstrip(":").upper()
-    cached = _WIZ_DIRS.get(letter)
-    if not cached or not cached.get("table"):
-        return {"error": f"请先对 {letter}: 盘做一次全盘扫描", "nodes": []}
-    parent_n = os.path.normcase(os.path.normpath(parent or f"{letter}:\\"))
-    prefix = parent_n + "\\"
-    dirs = cached["table"].get("dirs") or {}
-    agg: dict[str, float] = {}
-    for path, size in dirs.items():
-        pn = os.path.normcase(path)
-        if pn.startswith(prefix) and "\\" not in pn[len(prefix):]:
-            agg[path] = agg.get(path, 0) + size
-    files_agg = 0
-    for parent_key, items in (cached["table"].get("files") or {}).items():
-        if os.path.normcase(parent_key) == parent_n:
-            for _name, sz, _full in items:
-                files_agg += sz
-    nodes = [{"name": os.path.basename(k) or k, "path": k, "size": v,
-              "kind": "dir"} for k, v in agg.items()]
-    nodes.append({"name": "（散落文件）", "path": parent, "size": files_agg,
-                  "kind": "files"})
-    nodes.sort(key=lambda x: -x["size"])
-    for n0 in nodes:
-        n0["size_h"] = human(n0["size"])
-    return {"ok": True, "parent": parent or f"{letter}:\\",
-            "nodes": nodes[:60]}
 
 
 DUP_PROGRESS: dict = {"done": 0, "total": 0, "phase": "idle"}
@@ -7121,10 +7089,6 @@ class Handler(BaseHTTPRequestHandler):
             # 不传 drive = 扫描全盘符。
             return self._json(appclean_scan(
                 str(body.get("drive") or "").rstrip(":").upper()))
-        if route == "/__oc__/treemap":
-            return self._json(treemap_data(
-                str(body.get("drive") or "C"),
-                str(body.get("parent") or "")))
         if route == "/__oc__/downloads-archive":
             return self._json(downloads_archive())
         if route == "/__oc__/downloads-archive/undo":

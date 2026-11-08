@@ -1862,3 +1862,10 @@ SECURITY 该处表述未动。
 - **静态扫描**：10 模块 **0 孤儿** · stdlib 导入覆盖无缺失（AST 级复核）。
 - **安全+功能探测 v3（19/19）**：CSRF/Host 重绑定/delete-paths 全向量/uninstall 穿越与白名单/junction 护栏/restore 报错 + 新端点契约（appclean 无 drive/treemap/snapshot/dupfiles/downloads-archive/progress）。**注意：Node fetch 忽略自定义 Host 头——Host 重绑定测试必须走 Python urllib**。
 - **测试**：unit_test **24-0** · selftest **594-0-6** · guard_matrix **50-0** · lint_rules strict **0 错** · doctor 通过 · CDP **141-0-5** · 打包 **v2.15/10 模块** · CI 全绿。
+
+**㉘补（2026-11-08）：导航去重 + 树图删除 + 页签吸顶（用户 UX 评审第二轮）**——
+- **工具栏去重**：8 个专项分析按钮全部撤出工具栏（大文件排行入编分析中心页签）——导航唯一化 = viewNav「分析中心」+ 内部 7 页签，杜绝截图所示双重入口。viewNav 点击分发补 analysis 分支（原 if 链漏配，点分析会落到 steam）。
+- **树图模块整体删除**：前端（按钮/AN_TOOLS/openTreemap ~95 行/i18n 5 键）+ 后端（/__oc__/treemap 路由 + treemap_data）。
+- **页签吸顶**：.antabs position:sticky（面板背景+底边线）。
+- **事故与修复**：treemap_data 正则删除边界吞掉了同锚点的 DUP_PROGRESS/_DUP_CACHE 定义（selftest 阶段一 NameError 暴露）——已恢复；教训 = 正则删块后必须 grep 复核相邻符号。
+- **测试**：unit_test **24-0** · selftest **595-0-6**（新增工具栏去重断言）· guard_matrix **50-0** · lint strict **0 错** · CDP **135-0-5**（树图检查随删减少）· 打包 v2.15 · CI 全绿。
