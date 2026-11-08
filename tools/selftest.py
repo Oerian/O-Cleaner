@@ -1681,9 +1681,10 @@ def phase3_http() -> None:
               "g.cleanable" in html)
         # 各功能界面导航：两个视图常驻可达（高亮当前页），11 个折叠面板有吸顶目录
         # （v2.3 起常规清理页并入扫描概览，视图只剩 扫描概览 / Steam 游戏库）
-        check("视图导航提供两个功能页入口",
+        check("视图导航提供三个功能页入口（概览/游戏库/分析中心）",
               'id="viewNav"' in html
-              and html.count('<button data-v="') == 2)
+              and html.count('<button data-v="') == 3
+              and 'data-v="analysis"' in html)
         check("侧栏面板目录条存在（吸顶导航）",
               'id="panelNav"' in html and "initPanelNav" in html)
         # Steam 残留目录（孤儿）2026-10-29 改版：折叠面板 + 勾选批量删，

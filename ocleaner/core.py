@@ -5703,7 +5703,20 @@ def treemap_data(drive: str, parent: str = "") -> dict:
             "nodes": nodes[:60]}
 
 
+DUP_PROGRESS: dict = {"done": 0, "total": 0, "phase": "idle"}
+_DUP_CACHE: dict = {}   # letter -> (时间戳, 结果)；会话内避免重复全量哈希
+
+
 def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
+    # 会话内缓存（5 分钟）：全量哈希代价高，重复打开弹窗不应重算；
+    # 重新全盘扫描会重建 _WIZ_DIRS，缓存随新扫描自动失效（时间戳对比）。
+    letter0 = (drive or "C").rstrip(":").upper()
+    cached = _WIZ_DIRS.get(letter0)
+    hit = _DUP_CACHE.get(letter0)
+    if (hit and cached and hit[0] >= cached.get("at", 0)
+            and time.time() - hit[0] < 300
+            and hit[2] == floor_mb):
+        return hit[1]
     """在扫描缓存里找「体积相同且首尾采样一致」的大文件组。
 
     返回 groups（按可回收体积降序）：每组带 dup 文件数、可回收体积
@@ -5724,6 +5737,9 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
     cand = [(sz, fs) for sz, fs in by_size.items() if len(fs) >= 2]
     cand.sort(key=lambda x: -(x[0] * len(x[1])))
     cand = cand[:DUP_MAX_GROUPS]
+    DUP_PROGRESS["done"] = 0
+    DUP_PROGRESS["total"] = 0
+    DUP_PROGRESS["phase"] = "hashing"
 
     groups = []
     for sz, fs in cand:
@@ -5739,11 +5755,14 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
             h = _sample_hash(full)
             if h:
                 hashes.setdefault(h, []).append((full, name))
+        DUP_PROGRESS["total"] += sum(len(p) for p in hashes.values()
+                                     if len(p) >= 2)
         for pairs in hashes.values():
             if len(pairs) < 2:
                 continue
             fulls: dict[str, list[tuple[str, str]]] = {}
             for full, name in pairs:
+                DUP_PROGRESS["done"] += 1
                 fh = _full_sha256(full)
                 if fh:
                     fulls.setdefault(fh, []).append((full, name))
@@ -5760,8 +5779,11 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
                     "files": members,
                 })
     groups.sort(key=lambda g: -g["wasted"])
-    return {"ok": True, "drive": letter, "floor_mb": DUP_FLOOR_MB,
-            "groups": groups}
+    DUP_PROGRESS["phase"] = "done"
+    result = {"ok": True, "drive": letter, "floor_mb": DUP_FLOOR_MB,
+              "groups": groups}
+    _DUP_CACHE[letter] = (time.time(), result, floor_mb)
+    return result
 
 
 # ---- 下载目录整理建议（#35）----------------------------------------------
@@ -6203,6 +6225,8 @@ class Handler(BaseHTTPRequestHandler):
                     fp.read_text(encoding="utf-8")))
             except (OSError, ValueError):
                 return self._json({"drive": letter, "by_ext": []})
+        if route == "/__oc__/dupfiles/progress":
+            return self._json(dict(DUP_PROGRESS))
         if route == "/__oc__/scan":
             return self._json(apply_lang_payload(
                 build_scan(q.get("drive"), q.get("custom"),

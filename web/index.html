@@ -599,6 +599,15 @@
   .pbox.good{border-color:var(--ok-bd);background:var(--ok-bg)}
   .pbox.good .pv{color:var(--ok-fg)}
   .pbox.bad{border-color:var(--warn-bd);background:var(--warn-bg)}
+  /* 分析中心（四轮后新增）：专项工具统一挂在第三个视图的页签下，
+     #modal 运行时重挂进 anHost —— 面板化呈现，状态随视图保留 */
+  .antabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}
+  body[data-view="analysis"] .mask{display:none !important}
+  body[data-view="analysis"] #modal{
+    position:static;display:block !important;width:100%;max-width:none;
+    margin:0;box-shadow:none;border:1px solid var(--line);border-radius:10px;
+    max-height:none;overflow:visible;inset:auto;transform:none}
+  body[data-view="analysis"] #modal .mbody{max-height:none}
   /* 四轮报告 3.1：工具栏三组分隔线（扫描控制｜专项分析｜视图勾选） */
   .tb-sep{width:1px;height:18px;background:var(--line2);margin:0 4px;flex:none}
   /* 四轮报告 3.2：行内低频按钮渐进披露——悬停/键盘导航时显现 */
@@ -780,6 +789,7 @@
     <nav class="viewnav" id="viewNav" aria-label="功能视图导航">
       <button data-v="full" data-i18n="nav.full">扫描概览</button>
       <button data-v="steam" data-i18n="nav.steam">游戏占用概览</button>
+      <button data-v="analysis" data-i18n="nav.an">分析中心</button>
     </nav>
     <div class="themeseg" id="themeSeg" role="group" aria-label="界面主题" data-i18n-title="theme.aria">
       <button data-t="light" data-i18n="theme.light" data-i18n-title="theme.light.title">亮</button>
@@ -941,6 +951,12 @@
     </div>
   </section>
 
+  <section id="analysisView" class="fspanel" style="display:none">
+    <div style="width:100%">
+      <div class="antabs" id="anTabs"></div>
+      <div id="anHost"></div>
+    </div>
+  </section>
   <section id="fullView" class="fspanel">
     <div class="panel">
       <div class="fshead">
@@ -1218,6 +1234,8 @@
       <span id="selFree"></span>
     </div>
     <div class="grow"></div>
+    <button id="btnMoveSel" class="go" style="display:none"
+            data-i18n="btn.moveSel">勾选项搬家到其他盘</button>
     <button id="btnClean" class="go" disabled data-i18n="btn.cleanSelected">清理选中项</button>
   </div>
 </footer>
@@ -2259,6 +2277,11 @@ function updateFooter() {
   $("selFree").innerHTML = (d && total > 0)
     ? ` · ${t("foot.afterClean","清理后 {drive}: 可用约").replace("{drive}", d.letter)} <span class="free">${fmt(d.free + total)}</span>` : "";
   $("btnClean").disabled = n === 0 || busy;
+  const mv = $("btnMoveSel");
+  if (mv) {
+    mv.style.display = selPaths.size ? "" : "none";
+    mv.disabled = busy;
+  }
 }
 
 /* ============ 累积清理 + 换算（合并为一个面板） ============ */
@@ -3741,10 +3764,13 @@ function switchView(name) {
   document.body.dataset.view = name;   // CSS 据此压掉游戏页的盘符卡选中高亮
   $("fullView").style.display = name === "full" ? "flex" : "none";
   $("steamView").style.display = name === "steam" ? "flex" : "none";
-  const inc = $(name === "full" ? "fullView" : "steamView");
-  inc.classList.remove("slide-l", "slide-r");
-  void inc.offsetWidth;               // 强制回流，让动画类每次都能重新触发
-  inc.classList.add(name === "steam" ? "slide-l" : "slide-r");
+  $("analysisView").style.display = name === "analysis" ? "flex" : "none";
+  if (name === "full" || name === "steam") {
+    const inc = $(name === "full" ? "fullView" : "steamView");
+    inc.classList.remove("slide-l", "slide-r");
+    void inc.offsetWidth;             // 强制回流，让动画类每次都能重新触发
+    inc.classList.add(name === "steam" ? "slide-l" : "slide-r");
+  }
   setToolbars(true, name === "steam" ? "compact" : "normal");
   // 2026-11-02：工具栏的「游戏占用概览」按钮删去 —— 与顶部 viewNav 的同名
   // 按钮完全重复（同一功能两个入口，用户指出导航重复），顶部导航保留。
@@ -5490,8 +5516,17 @@ $("btnBigFiles").addEventListener("click", openBigFiles);
 async function openDupFiles() {
   $("modal").innerHTML = `<h2>${t("dup.title", "重复大文件")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
-      ${t("dup.loading", "正在核对采样哈希（基于扫描缓存，很快）…")}</div></div>`;
-  $("mask").classList.add("on");
+      ${t("dup.loading", "正在核对采样哈希（基于扫描缓存，很快）…")}</div>
+      <div id="dupProg" class="hint" style="margin-top:8px"></div></div>`;
+  const progTimer = setInterval(async () => {
+    try {
+      const pr = await apiJSON(`${API}/__oc__/dupfiles/progress`);
+      const el = $("dupProg");
+      if (el && pr.phase === "hashing" && pr.total > 0)
+        el.textContent = t("dup.prog", "全量哈希核验中：{done}/{total} 个文件")
+          .replace("{done}", pr.done).replace("{total}", pr.total);
+    } catch (_) { /* 轮询失败不打扰 */ }
+  }, 600);
   let r;
   try {
     r = await apiJSON(`${API}/__oc__/dupfiles`, {
@@ -5501,6 +5536,7 @@ async function openDupFiles() {
   } catch (e) {
     r = { error: String(e) };
   }
+  clearInterval(progTimer);
   if (!r || r.error) {
     $("modal").innerHTML = `<h2>${t("dup.title", "重复大文件")}</h2>
       <div class="mbody"><div class="empty">${esc((r && r.error) || t("up.fail", "检查失败"))}</div>
@@ -5519,10 +5555,20 @@ async function openDupFiles() {
       <span class="hint">${t("dup.n", "{n} 组 · 门槛 {v}")
         .replace("{n}", g2.length)
         .replace("{v}", fmt((r.floor_mb || 100) * 1024 * 1024))}</span></h2>
-    <div class="mbody">${g2.length ? g2.map((g, i) => {
+    <div class="mbody">
+    ${g2.length ? `<div class="d" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <button class="tiny" id="dupAll">${t("dup.all", "一键全选所有副本")}</button>
+      <button class="tiny" id="dupNone">${t("dup.none2", "清空勾选")}</button>
+      <select id="dupPreset" style="width:auto">
+        <option value="0">${t("dup.p0", "预设：全部大小")}</option>
+        <option value="1073741824">${t("dup.p1", "预设：仅 ≥1GB 的组")}</option>
+        <option value="5368709120">${t("dup.p5", "预设：仅 ≥5GB 的组")}</option>
+      </select>
+      <span class="hint" id="dupPickedN"></span></div>` : ""}
+    ${g2.length ? g2.map((g, i) => {
       const base = baseline(g);
       return `
-      <div class="logrow">
+      <div class="logrow" data-gsize="${g.size || 0}">
         <div class="t"><b>${i + 1}</b>. <span>${t("dup.sameSize", "{n} 个互为副本，每个 {v}")
           .replace("{n}", g.dup_count).replace("{v}", g.size_h)}</span>
           <span class="freed">${t("dup.wasted", "可回收 {v}").replace("{v}", g.wasted_h)}</span></div>
@@ -5544,6 +5590,33 @@ async function openDupFiles() {
       ${g2.length ? `<button class="go" id="dupGo">${t("dup.go", "清理选中项（移入回收站）")}</button>` : ""}
       <button class="tiny" id="dupClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("dupClose").addEventListener("click", closeModal);
+  const syncPicked = () => {
+    const n = document.querySelectorAll("#modal .dupChk:checked").length;
+    const el = $("dupPickedN");
+    if (el) el.textContent = t("dup.pickedN", "已勾选 {n} 个副本")
+      .replace("{n}", n);
+  };
+  const applyPreset = () => {
+    const minv = parseInt(($("dupPreset") || {}).value || "0", 10);
+    document.querySelectorAll("#modal .dupChk").forEach(c => {
+      const grp = c.closest(".logrow") && c.closest(".logrow").dataset.gsize;
+      c.checked = !!grp && Number(grp) >= minv;
+    });
+    syncPicked();
+  };
+  const allBtn = $("dupAll"), noneBtn = $("dupNone"), presetEl = $("dupPreset");
+  if (allBtn) allBtn.addEventListener("click", () => {
+    document.querySelectorAll("#modal .dupChk").forEach(c => { c.checked = true; });
+    syncPicked();
+  });
+  if (noneBtn) noneBtn.addEventListener("click", () => {
+    document.querySelectorAll("#modal .dupChk").forEach(c => { c.checked = false; });
+    syncPicked();
+  });
+  if (presetEl) presetEl.addEventListener("change", applyPreset);
+  document.querySelectorAll("#modal .dupChk").forEach(c =>
+    c.addEventListener("change", syncPicked));
+  syncPicked();
   const goBtn = $("dupGo");
   if (goBtn) goBtn.addEventListener("click", async () => {
     const picked = [...document.querySelectorAll("#modal .dupChk:checked")]
@@ -5566,7 +5639,28 @@ async function openDupFiles() {
       });
     }));
 }
-$("btnDupFiles").addEventListener("click", openDupFiles);
+/* 分析中心：专项工具统一入口（第三视图页签，弹窗面板化呈现） */
+const AN_TOOLS = [
+  ["dup", () => t("btn.dupFiles", "重复大文件"), openDupFiles],
+  ["appclean", () => t("btn.ac", "应用专清"), openAppClean],
+  ["bloat", () => t("btn.bloat", "毒瘤清除"), openBloatware],
+  ["snap", () => t("btn.snapDiff", "近期暴涨"), openSnapDiff],
+  ["tm", () => t("btn.tm", "树图"), () => { openTreemap._stack = []; openTreemap(""); }],
+  ["dl", () => t("btn.dlAdvice", "下载整理"), openDownloadsAdvice],
+  ["jm", () => t("btn.jm", "C 盘搬家"), openJunctionMove],
+];
+function openAnalysis(tool) {
+  switchView("analysis");
+  const host = $("anHost"), tabsEl = $("anTabs");
+  if ($("modal").parentElement !== host) host.appendChild($("modal"));
+  tabsEl.innerHTML = AN_TOOLS.map(([k, lab]) =>
+    `<span class="seg${k === tool ? " on" : ""}" data-an="${k}">${esc(lab())}</span>`).join("");
+  tabsEl.querySelectorAll("[data-an]").forEach(x =>
+    x.addEventListener("click", () => openAnalysis(x.dataset.an)));
+  const t0 = AN_TOOLS.find(x => x[0] === tool);
+  if (t0) t0[2]();
+}
+$("btnDupFiles").addEventListener("click", () => openAnalysis("dup"));
 
 /* 毒瘤软件完整清除：两段式 —— 先跑官方卸载程序，再由用户点「清扫残留」
    做目录/注册表精准清理。扫描只读不删。 */
@@ -5622,13 +5716,57 @@ async function openBloatware() {
       openBloatware();
     }));
 }
-$("btnBloat").addEventListener("click", openBloatware);
+$("btnBloat").addEventListener("click", () => openAnalysis("bloat"));
 
 /* C 盘无损搬家 v2：整目录迁移到目标盘并原位建 Junction；
    目标已存在可「合并 + 冲突重命名」——用于误下载到 C 盘的绿色软件搬家。 */
+let JM_BATCH = null;   // 勾选搬家：待迁移目录清单（占用排行勾选后进入）
 async function openJunctionMove() {
   const others = (STATE.drives || []).filter(d => !d.is_system)
     .map(d => d.letter);
+  if (JM_BATCH && JM_BATCH.length) {
+    // 批量模式：勾选的多个目录整体迁到目标根目录下（同名子目录）
+    $("modal").innerHTML = `<h2>${t("jm.batchTitle", "批量搬家（{n} 个目录）")
+        .replace("{n}", JM_BATCH.length)}</h2>
+      <div class="mbody">
+        <div class="d">${t("jm.batchIntro", "以下勾选目录将整体迁移到目标盘（Junction 透明映射，逐个校验，硬性失败即停）：")}</div>
+        <div class="d">${JM_BATCH.map(p0 => `<div>· ${esc(p0)}</div>`).join("")}</div>
+        <div class="d"><label>${t("jm.drive", "目标盘：")}</label>
+          <select id="jmDrive" style="width:100%">${others.map(d0 => `<option>${d0}:</option>`).join("")}</select></div>
+        <div class="d"><label style="cursor:pointer"><input type="checkbox" id="jmMerge" checked>
+          ${t("jm.merge", "目标已存在时合并并入（同名文件自动重命名）")}</label></div>
+        <div class="d hint">${t("jm.warn", "过程：占用预检 → 整树拷贝 → 双向校验 → 建 Junction → 删暂存（断电可恢复）。可随时从搬家记录一键迁回。")}</div>
+        <div style="text-align:right;padding-top:10px">
+          <button class="go" id="jmGo">${t("jm.go", "开始批量搬家")}</button>
+          <button class="tiny" id="jmClose">${t("cc.close", "关闭")}</button></div></div>`;
+    $("jmClose").addEventListener("click", () => { JM_BATCH = null; closeModal(); });
+    $("jmGo").addEventListener("click", async () => {
+      const drv = $("jmDrive") && $("jmDrive").value;
+      if (!drv) { toast(t("jm.noDrive", "未发现其他本地盘")); return; }
+      const btn = $("jmGo");
+      btn.disabled = true;
+      const results = [];
+      for (const src of JM_BATCH) {
+        btn.textContent = t("jm.batching", "搬家中：{src}")
+          .replace("{src}", src.split("\\").pop() || src);
+        const dst = drv + "\\" + (src.split(":").pop() || "").replace(/^\\/, "");
+        const r0 = await apiJSON(`${API}/__oc__/junction-move`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ src, dst, merge: $("jmMerge").checked }) });
+        results.push({ src, ok: !r0.error, err: r0.error || "",
+                       files: r0.files || 0 });
+        if (r0.error && /占用|护栏|拒绝/.test(r0.error)) break;
+      }
+      JM_BATCH = null;
+      const okN = results.filter(r0 => r0.ok).length;
+      toast(t("jm.batchDone", "批量搬家完成：{ok}/{total} 个目录成功")
+        .replace("{ok}", okN).replace("{total}", results.length)
+        + (okN < results.length ? " · " + results.filter(r0 => !r0.ok)
+            .map(r0 => r0.src + "：" + r0.err).join("；") : ""));
+      openJunctionMove();
+    });
+    return;
+  }
   $("modal").innerHTML = `<h2>${t("jm.title", "C 盘无损搬家")}</h2>
     <div class="mbody">
       <div class="d">${t("jm.intro", "把占空间又不能删的目录整体迁移到其他盘，原位置建立 NTFS Junction 透明映射，程序无感知；全程可校验、可一键迁回。")}</div>
@@ -5700,7 +5838,7 @@ async function openJunctionMove() {
       }));
   }
 }
-$("btnJunctionMove").addEventListener("click", openJunctionMove);
+$("btnJunctionMove").addEventListener("click", () => openAnalysis("jm"));
 
 /* 占用排行跨层级实时搜索（v2.12）：扫描缓存内按名字/路径模糊匹配 */
 $("fsSearch").addEventListener("keydown", e => {
@@ -5772,7 +5910,7 @@ async function openSnapDiff() {
       <button class="tiny" id="sdClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("sdClose").addEventListener("click", closeModal);
 }
-$("btnSnapDiff").addEventListener("click", openSnapDiff);
+$("btnSnapDiff").addEventListener("click", () => openAnalysis("snap"));
 
 /* 应用专清（v2.15 方向三）：国民级大软件与开发者缓存结构化拆解。
    cache 项可一键移入回收站；data 项给处理建议；core 项锁定警示。 */
@@ -5822,7 +5960,7 @@ async function openAppClean() {
       openAppClean();
     }));
 }
-$("btnAppClean").addEventListener("click", openAppClean);
+$("btnAppClean").addEventListener("click", () => openAnalysis("appclean"));
 
 /* Treemap 矩形树图（v2.15 方向六）：纯 Canvas Squarified，零第三方库。
    点击色块下钻；「返回上一级」沿栈回退；色带按体积深浅着色。 */
@@ -5920,7 +6058,7 @@ async function openTreemap(parent) {
     }
   });
 }
-$("btnTreemap").addEventListener("click", () => { openTreemap._stack = []; openTreemap(); });
+$("btnTreemap").addEventListener("click", () => openAnalysis("tm"));
 
 /* 下载目录整理建议（#35）：按知识库归类顶层文件，给可执行建议。
    只读不动文件 —— 删/转移由用户自己决定。 */
@@ -6006,7 +6144,7 @@ async function openDownloadsAdvice() {
     openDownloadsAdvice();
   });
 }
-$("btnDlAdvice").addEventListener("click", openDownloadsAdvice);
+$("btnDlAdvice").addEventListener("click", () => openAnalysis("dl"));
 
 /* 行密度两档（#39）：紧凑/舒适，localStorage 记忆。 */
 function applyDense() {
@@ -6211,6 +6349,11 @@ $("btnNone").addEventListener("click", () => {
   updateFooter();
 });
 $("btnClean").addEventListener("click", confirmDialog);
+$("btnMoveSel").addEventListener("click", () => {
+  JM_BATCH = [...selPaths];
+  if (!JM_BATCH.length) { toast(t("jm.noneSel", "请先在占用排行勾选要搬家的目录")); return; }
+  openAnalysis("jm");
+});
 $("mask").addEventListener("click", e => { if (e.target === $("mask") && !busy) closeModal(); });
 
 /* Esc 键：逐级返回。
@@ -7117,6 +7260,20 @@ const I18N_EN = {
   "dl.undoing": "Undoing…",
   "dl.undone": "Last archive undone ({n} files moved back)",
   "dw.extStale": "Showing the last full-scan distribution (persists across restarts); run a full scan to refresh",
+  "nav.an": "Analysis Hub",
+  "btn.moveSel": "Relocate selected to another drive",
+  "jm.noneSel": "Tick directories in the ranking first",
+  "jm.batchTitle": "Batch relocate ({n} dirs)",
+  "jm.batchIntro": "These checked directories will be moved to the target drive (Junction mapping, verified one by one, stops on hard failure):",
+  "jm.batching": "Relocating: {src}",
+  "jm.batchDone": "Batch relocate done: {ok}/{total} dirs succeeded",
+  "dup.all": "Select ALL duplicates",
+  "dup.none2": "Clear selection",
+  "dup.p0": "Preset: all sizes",
+  "dup.p1": "Preset: groups ≥1GB",
+  "dup.p5": "Preset: groups ≥5GB",
+  "dup.pickedN": "{n} duplicates checked",
+  "dup.prog": "Full-hash verification: {done}/{total} files",
   "btn.ac": "App Deep Clean",
   "btn.tm": "Treemap",
   "ac.title": "App Deep Clean",
