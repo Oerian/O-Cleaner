@@ -5672,6 +5672,9 @@ def glob_dirs(pattern: str) -> list:
 
 
 DUP_PROGRESS: dict = {"done": 0, "total": 0, "phase": "idle"}
+_BIG_CACHE: dict = {}          # (盘符, limit) -> (时间戳, 结果)；随新扫描失效
+_APPCLEAN_CACHE: dict = {"ts": 0.0, "r": None}   # TTL 10 分钟
+_BLOAT_CACHE: dict = {"ts": 0.0, "r": None}      # TTL 10 分钟
 _DUP_CACHE: dict = {}   # letter -> (时间戳, 结果)；会话内避免重复全量哈希
 
 
@@ -6606,8 +6609,16 @@ class Handler(BaseHTTPRequestHandler):
                 limit_n = int(body.get("limit") or 0)
             except (TypeError, ValueError):
                 return self._json({"error": "limit 必须是整数"}, 400)
-            return self._json(big_files(str(body.get("drive") or ""),
-                                        limit=limit_n))
+            drv0 = str(body.get("drive") or "").rstrip(":").upper()
+            key0 = ("big", drv0, limit_n)
+            cached0 = _WIZ_DIRS.get(drv0)
+            hit0 = _BIG_CACHE.get(key0)
+            if (hit0 and cached0 and hit0[0] >= cached0.get("at", 0)):
+                return self._json(hit0[1])
+            r0 = big_files(str(body.get("drive") or ""), limit=limit_n)
+            if not r0.get("error") and cached0:
+                _BIG_CACHE[key0] = (time.time(), r0)
+            return self._json(r0)
 
         if route == "/__oc__/dupfiles":
             # 重复大文件（#34）：基于扫描明细缓存，同体积分组 + 采样哈希。
@@ -6984,7 +6995,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.busy = False
 
         if route == "/__oc__/bloatware/scan":
-            return self._json(bloatware_scan())
+            now0 = time.time()
+            if (_BLOAT_CACHE["r"] is not None
+                    and now0 - _BLOAT_CACHE["ts"] < 600):
+                return self._json(_BLOAT_CACHE["r"])
+            r0 = bloatware_scan()
+            if r0.get("ok"):
+                _BLOAT_CACHE.update(ts=now0, r=r0)
+            return self._json(r0)
         if route == "/__oc__/bloatware/uninstall":
             # 官方卸载程序启动：命令由服务端从注册表实时读取（客户端只传
             # reg_key），杜绝任意命令注入；reg_key 白名单限定 Uninstall 子树。
@@ -7086,9 +7104,16 @@ class Handler(BaseHTTPRequestHandler):
                 str(body.get("q") or "")))
         if route == "/__oc__/appclean/scan":
             # do_POST 作用域没有 drive 变量（探测曾触发 NameError→500）；
-            # 不传 drive = 扫描全盘符。
-            return self._json(appclean_scan(
-                str(body.get("drive") or "").rstrip(":").upper()))
+            # 不传 drive = 扫描全盘符。TTL 10 分钟：切页签不重扫。
+            now0 = time.time()
+            if (_APPCLEAN_CACHE["r"] is not None
+                    and now0 - _APPCLEAN_CACHE["ts"] < 600):
+                return self._json(_APPCLEAN_CACHE["r"])
+            r0 = appclean_scan(
+                str(body.get("drive") or "").rstrip(":").upper())
+            if r0.get("ok"):
+                _APPCLEAN_CACHE.update(ts=now0, r=r0)
+            return self._json(r0)
         if route == "/__oc__/downloads-archive":
             return self._json(downloads_archive())
         if route == "/__oc__/downloads-archive/undo":

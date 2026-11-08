@@ -601,6 +601,9 @@
   .pbox.bad{border-color:var(--warn-bd);background:var(--warn-bg)}
   /* 分析中心（四轮后新增）：专项工具统一挂在第三个视图的页签下，
      #modal 运行时重挂进 anHost —— 面板化呈现，状态随视图保留 */
+  /* 磁盘卡三页签（趋势/清理记录/类型分布）展开后统一对齐基线 */
+  #dwBody{width:100%;min-height:170px}
+  #dwBody > div{width:100%}
   .antabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px;
     position:sticky;top:0;z-index:5;background:var(--panel);
     padding:10px 0;border-bottom:1px solid var(--line2)}
@@ -5641,10 +5644,22 @@ const AN_TOOLS = [
   ["bloat", () => t("btn.bloat", "毒瘤清除"), openBloatware],
   ["snap", () => t("btn.snapDiff", "近期暴涨"), openSnapDiff],
   ["dl", () => t("btn.dlAdvice", "下载整理"), openDownloadsAdvice],
-  ["jm", () => t("btn.jm", "C 盘搬家"), openJunctionMove],
+  ["jm", () => t("btn.jm", "磁盘迁移"), openJunctionMove],
 ];
+let _anObserverBound = false;
 function openAnalysis(tool) {
   switchView("analysis");
+  if (!_anObserverBound) {
+    _anObserverBound = true;
+    // 整块重渲染（childList 变化）时把分析视图滚回顶部——修复「扫描完成
+    // 滚动条跳到最后」；进度文案等 characterData 更新不触发。
+    new MutationObserver(() => {
+      if (document.body.dataset.view !== "analysis") return;
+      const host = $("anHost");
+      host.scrollTop = 0;
+      window.scrollTo({ top: Math.max(0, host.offsetTop - 8) });
+    }).observe($("modal"), { childList: true, subtree: false });
+  }
   const host = $("anHost"), tabsEl = $("anTabs");
   if ($("modal").parentElement !== host) host.appendChild($("modal"));
   tabsEl.innerHTML = AN_TOOLS.map(([k, lab]) =>
@@ -5725,6 +5740,8 @@ async function openJunctionMove() {
         <div class="d">${JM_BATCH.map(p0 => `<div>· ${esc(p0)}</div>`).join("")}</div>
         <div class="d"><label>${t("jm.drive", "目标盘：")}</label>
           <select id="jmDrive" style="width:100%">${others.map(d0 => `<option>${d0}:</option>`).join("")}</select></div>
+        <div class="d"><label>${t("jm.sub", "目标子文件夹（可选，自动创建）：")}</label>
+          <input type="text" id="jmSub" style="width:100%" placeholder="${t("jm.subPh", "留空 = 迁到目标盘根目录下")}"></div>
         <div class="d"><label style="cursor:pointer"><input type="checkbox" id="jmMerge" checked>
           ${t("jm.merge", "目标已存在时合并并入（同名文件自动重命名）")}</label></div>
         <div class="d hint">${t("jm.warn", "过程：占用预检 → 整树拷贝 → 双向校验 → 建 Junction → 删暂存（断电可恢复）。可随时从搬家记录一键迁回。")}</div>
@@ -5741,7 +5758,10 @@ async function openJunctionMove() {
       for (const src of JM_BATCH) {
         btn.textContent = t("jm.batching", "搬家中：{src}")
           .replace("{src}", src.split("\\").pop() || src);
-        const dst = drv + "\\" + (src.split(":").pop() || "").replace(/^\\/, "");
+        const sub = (($("jmSub") || {}).value || "").trim()
+          .replace(/^\\+|\\+$/g, "");
+        const dst = drv + "\\" + (sub ? sub + "\\" : "") +
+          (src.split(":").pop() || "").replace(/^\\/, "");
         const r0 = await apiJSON(`${API}/__oc__/junction-move`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ src, dst, merge: $("jmMerge").checked }) });
@@ -5759,7 +5779,7 @@ async function openJunctionMove() {
     });
     return;
   }
-  $("modal").innerHTML = `<h2>${t("jm.title", "C 盘无损搬家")}</h2>
+  $("modal").innerHTML = `<h2>${t("jm.title", "磁盘迁移")}</h2>
     <div class="mbody">
       <div class="d">${t("jm.intro", "把占空间又不能删的目录整体迁移到其他盘，原位置建立 NTFS Junction 透明映射，程序无感知；全程可校验、可一键迁回。")}</div>
       <div class="d"><label>${t("jm.src", "源目录：")}</label>
@@ -7097,7 +7117,7 @@ const I18N_EN = {
   "dup.confirm": "Move the selected {n} copies to the Recycle Bin? (restorable anytime)",
   "dup.working": "Moving to Recycle Bin…",
   "dup.done": "Moved {n}/{total} copies to the Recycle Bin",
-  "btn.jm": "C Drive Relocator",
+  "btn.jm": "Disk Relocation",
   "btn.bloat": "Bloatware Removal",
   "bw.title": "Bloatware Removal",
   "bw.loading": "Scanning against signature library (registry uninstall entries + known dirs)…",
@@ -7111,7 +7131,7 @@ const I18N_EN = {
   "bw.unLaunched": "Official uninstaller launched. After finishing the wizard, come back for “② Sweep leftovers”",
   "bw.sweeping": "Sweeping…",
   "bw.swept": "Leftover sweep finished (details recorded in cleanup history)",
-  "jm.title": "C Drive Lossless Relocator",
+  "jm.title": "Disk Relocation",
   "jm.intro": "Move a space-hungry but undeletable directory to another drive and leave an NTFS Junction behind for transparent access. Verifiable end to end, restorable anytime.",
   "jm.src": "Source directory:",
   "jm.mode": "Destination:",
@@ -7165,6 +7185,8 @@ const I18N_EN = {
   "dup.p5": "Preset: groups ≥5GB",
   "dup.pickedN": "{n} duplicates checked",
   "dup.prog": "Full-hash verification: {done}/{total} files",
+  "jm.sub": "Target subfolder (optional, auto-created):",
+  "jm.subPh": "Empty = relocate into the target drive root",
   "btn.ac": "App Deep Clean",
   "btn.tm": "Treemap",
   "ac.title": "App Deep Clean",

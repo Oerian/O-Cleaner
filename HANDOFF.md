@@ -1869,3 +1869,10 @@ SECURITY 该处表述未动。
 - **页签吸顶**：.antabs position:sticky（面板背景+底边线）。
 - **事故与修复**：treemap_data 正则删除边界吞掉了同锚点的 DUP_PROGRESS/_DUP_CACHE 定义（selftest 阶段一 NameError 暴露）——已恢复；教训 = 正则删块后必须 grep 复核相邻符号。
 - **测试**：unit_test **24-0** · selftest **595-0-6**（新增工具栏去重断言）· guard_matrix **50-0** · lint strict **0 错** · CDP **135-0-5**（树图检查随删减少）· 打包 v2.15 · CI 全绿。
+
+**㉙补（2026-11-08）：UX 第三轮——切页签缓存 + 滚动修复 + 磁盘迁移改名**——
+- **切页签不再重扫**：bigfiles 路由级缓存（随 _WIZ_DIRS.at 失效，实测 26.7s→0.01s）、appclean/bloatware TTL 10 分钟缓存；dupfiles 此前已有 5 分钟会话缓存。
+- **滚动跳底修复**：分析中心 MutationObserver 监听 #modal childList——整块重渲染即滚回顶部（进度文案 characterData 更新不触发）。
+- **dwTabs 三图表对齐**：#dwBody 统一 width:100% + min-height 基线。
+- **C 盘搬家 → 磁盘迁移**：不局限 C 盘（勾选任意盘目录批量迁移）；批量模式新增「目标子文件夹（可选，自动创建）」输入；中英更名完成。
+- 测试：unit_test **24-0** · selftest **595-0-6** · guard_matrix **50-0** · lint strict **0 错** · 缓存时延实测 · CI 全绿。
