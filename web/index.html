@@ -5655,9 +5655,14 @@ function openAnalysis(tool) {
     // 滚动条跳到最后」；进度文案等 characterData 更新不触发。
     new MutationObserver(() => {
       if (document.body.dataset.view !== "analysis") return;
-      const host = $("anHost");
-      host.scrollTop = 0;
-      window.scrollTo({ top: Math.max(0, host.offsetTop - 8) });
+      // 滚动容器是 #leftcol（overflow-y:auto），window.scrollTo 无效。
+      // 微任务期布局未定，scrollIntoView 会被后续布局冲掉——双 rAF
+      // 等两帧布局稳定后再归位到面板顶部。
+      requestAnimationFrame(() => {
+        $("modal").scrollIntoView({ block: "start" });
+        requestAnimationFrame(() =>
+          $("modal").scrollIntoView({ block: "start" }));
+      });
     }).observe($("modal"), { childList: true, subtree: false });
   }
   const host = $("anHost"), tabsEl = $("anTabs");
