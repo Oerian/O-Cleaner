@@ -1856,3 +1856,9 @@ SECURITY 该处表述未动。
 - **重复大文件增强**：一键全选所有副本/清空勾选/体积预设（全部/≥1GB/≥5GB 过滤组）/已勾选计数实时同步；**全量哈希进度**（DUP_PROGRESS + /__oc__/dupfiles/progress 轮询，「核验中 N/M 个文件」）；**会话缓存**（5 分钟 TTL，二次打开 0.0s，实测 9.2s→0.00s）。
 - **踩坑**：DUP_PROGRESS 补丁脚本半途 assert 未写盘致后续标记孤立（NameError）——多段补丁必须整体原子应用；探测预期需与「页面当前盘符」对齐（默认盘非 C）。
 - **实测**：19 组重复显示、全选 29 副本、计数同步、进度轮询工作、批量搬家 UI、缓存命中；unit_test **24-0** · selftest **594-0-6** · guard_matrix **50-0** · CI 全绿。
+
+**㉗补（2026-11-08）：全量自检轮（分析中心批次后）——1 个 UX 缺陷修复 + 全向量复核**——
+- **自检发现并修复**：启动自动扫描完成后会把用户从「分析中心」踢回扫描概览——「扫描完成不抢视图」守卫只排除了 steam，漏了新增的 analysis 视图。两处守卫扩展为 `view !== "steam" && view !== "analysis"`；selftest/cdp_check 的视图断言同步更新（两入口→三入口、守卫文案同步）。
+- **静态扫描**：10 模块 **0 孤儿** · stdlib 导入覆盖无缺失（AST 级复核）。
+- **安全+功能探测 v3（19/19）**：CSRF/Host 重绑定/delete-paths 全向量/uninstall 穿越与白名单/junction 护栏/restore 报错 + 新端点契约（appclean 无 drive/treemap/snapshot/dupfiles/downloads-archive/progress）。**注意：Node fetch 忽略自定义 Host 头——Host 重绑定测试必须走 Python urllib**。
+- **测试**：unit_test **24-0** · selftest **594-0-6** · guard_matrix **50-0** · lint_rules strict **0 错** · doctor 通过 · CDP **141-0-5** · 打包 **v2.15/10 模块** · CI 全绿。

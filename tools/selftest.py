@@ -1758,9 +1758,9 @@ def phase3_http() -> None:
               "renderOtherPlatforms" in html
               and html.count("cover-placeholder") >= 3)
         # 视图不被自动扫描踢回：扫描完成回调只在 full 视图才 switchView
-        check("自动扫描完成后不把用户踢回扫描概览",
-              'if (view !== "steam") switchView("full")' in html
-              and html.count('if (view !== "steam") switchView("full")') == 2)
+        check("自动扫描完成后不把用户踢回当前工作视图（概览/游戏库/分析中心）",
+              'if (view !== "steam" && view !== "analysis") switchView("full")' in html
+              and html.count('if (view !== "steam" && view !== "analysis") switchView("full")') == 2)
         # 默认占位图：GET 恒 200（自定义图优先、内置 SVG 兜底）+ POST 校验
         # （dataURL、magic bytes、2MB 上限、reset），前端 onerror 链到该端点
         _appsrc = _impl_src()

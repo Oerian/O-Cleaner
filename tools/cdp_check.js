@@ -431,8 +431,8 @@ class CDP {
              chips: chips.length, panels: panels.length,
              on: tabs.filter(b => b.classList.contains('on')).map(b => b.dataset.v) };
   })()`);
-  check("视图导航有两个功能页入口",
-        navInfo.tabs === 2, JSON.stringify(navInfo.labels));
+  check("视图导航有三个功能页入口（概览/游戏库/分析中心）",
+        navInfo.tabs === 3, JSON.stringify(navInfo.labels));
   check("视图导航有且仅有一个高亮页",
         navInfo.on.length === 1, `当前高亮: ${navInfo.on.join(",") || "无"}`);
   check("侧栏面板目录覆盖全部折叠面板",

@@ -3805,7 +3805,7 @@ async function startFullScan() {
     buildKidsIndex();
     fsMode = "biggest";
     // 同上：缓存命中也不抢视图，用户在游戏占用页就别踢回扫描概览
-    if (view !== "steam") switchView("full");
+    if (view !== "steam" && view !== "analysis") switchView("full");
     renderOverview(); renderChart();
     const mins = Math.max(1, Math.round((Date.now() - hit.at) / 60000));
     $("fsHint").textContent =
@@ -3898,7 +3898,7 @@ async function startFullScan() {
     fsMode = "biggest";
     // 扫描完成不抢视图：启动时自动开扫，用户若在扫描期间切去了游戏占用页，
     // 不能在 1 秒后把他硬踢回扫描概览 —— 数据已更新，回来时自然看到结果。
-    if (view !== "steam") switchView("full");
+    if (view !== "steam" && view !== "analysis") switchView("full");
     renderOverview();
     renderChart();     // 概览与排行必须一起渲染，否则只有统计没有列表
     drawDiskTrend();   // 组件槽（类型分布页签）吃到新 FS.by_ext，立即出图
