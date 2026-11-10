@@ -5845,6 +5845,11 @@ def downloads_advice(limit_names: int = 3) -> dict:
                     "cleanable": False, "names": []})
                 slot["count"] += 1
                 slot["size"] += sz
+                # 2026-11-10：子文件夹也提供条目（勾选=归档/迁移整个文件夹）
+                if len(slot.get("items") or []) < 50:
+                    slot.setdefault("items", []).append(
+                        {"name": e.name, "path": e.path, "size": sz,
+                         "size_h": human(sz), "is_dir": True})
                 continue
             sz = e.stat().st_size
         except OSError:
@@ -6105,15 +6110,23 @@ class Handler(BaseHTTPRequestHandler):
             base = Path(root) / "appcache" / "librarycache" / appid
             if not base.is_dir():
                 continue
-            for name in ("icon.jpg", "256p.jpg", "library_600x900.jpg",
-                         "library_600x900_2x.jpg", "portrait.png"):
-                f = base / name
+            named = [base / n for n in ("icon.jpg", "256p.jpg",
+                    "library_600x900.jpg", "library_600x900_2x.jpg",
+                    "portrait.png")]
+            # 新版 Steam 客户端的 librarycache 文件名不定型（哈希命名）——
+            # 命名探测全部落空后，按修改时间回退到目录里任意图片。
+            import glob as _glob
+            anyimg = sorted(
+                (Path(f0) for f0 in _glob.glob(str(base / "*"))
+                 if f0.lower().endswith((".jpg", ".jpeg", ".png"))),
+                key=lambda f0: f0.stat().st_mtime, reverse=True)                 if base.is_dir() else []
+            for f in named + anyimg:
                 if f.is_file():
                     try:
                         body = f.read_bytes()
                     except OSError:
                         continue
-                    ctype = "image/png" if name.endswith(".png") else "image/jpeg"
+                    ctype = "image/png" if f.name.endswith(".png") else "image/jpeg"
                     return self._send(200, body, ctype)
         return self._json({"error": "no cover"}, 404)
 
@@ -6589,6 +6602,16 @@ class Handler(BaseHTTPRequestHandler):
                 })
 
             if not selected:
+                # 报错细化（2026-11-10 用户反馈）：整批「目录不存在」＝扫描
+                # 缓存过期（如 Steam 卸载残留目录已随卸载消失）—— 明说原
+                # 因与自救动作，而不是牛头不对马嘴的「没有选择任何清理项」。
+                if skipped_paths and all(
+                        "不存在" in x.get("reason", "")
+                        for x in skipped_paths):
+                    return self._json({"error":
+                        "勾选的目录已不存在（扫描缓存过期，如卸载后残留已随"
+                        "之消失）——请重新扫描后再清理",
+                        "skipped_paths": skipped_paths}, 400)
                 return self._json({"error": "没有选择任何清理项",
                                    "skipped_paths": skipped_paths}, 400)
             # 包含关系去重：外层勾选项完整包含内层勾选项时只清最小项，
@@ -7449,7 +7472,9 @@ def downloads_archive(root: str | None = None,
         if only else None
     for e in entries:
         try:
-            if not e.is_file() or e.name.startswith("."):
+            if e.name.startswith("."):
+                continue
+            if not e.is_file() and not e.is_dir():
                 continue
             if only_set and os.path.normpath(os.path.abspath(e.path)) not in only_set:
                 continue
