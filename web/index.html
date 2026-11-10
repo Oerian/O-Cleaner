@@ -437,7 +437,8 @@
   /* 扩展名分布（类型分布）竖向柱状图：每列一类型，柱高∝体积。
      2026-11-03 起从扫描概览的收起/展开器迁移为磁盘卡组件页签，
      .extbox/.exttoggle 退役；列结构保留（三段定高，共享基线）。 */
-  .extv{display:flex;align-items:flex-end;gap:6px;height:130px;margin-top:3px}
+  .extv{display:flex;align-items:flex-end;gap:6px;height:130px;margin-top:3px;
+    border-bottom:1px solid var(--line);padding:0 2px 3px}
   /* 2026-11-03 对齐修复：列改三段固定区（数值 2 行高 / 弹性柱区 / 标签
      2 行高）—— 旧版标签换行会把柱子顶得高低不一（用户截图「换行导致
      柱状图错位」）；现在所有柱共享同一条基线，长标签在各自固定区内换行。 */
@@ -603,6 +604,15 @@
      #modal 运行时重挂进 anHost —— 面板化呈现，状态随视图保留 */
   /* 磁盘卡三页签（趋势/清理记录/类型分布）展开后统一对齐基线 */
   #dwBody{width:100%;min-height:200px}
+  /* 快照双图表（2026-11-10）：与剩余空间趋势同款风格基线 */
+  .tvcol .tvlab{font-size:9px;line-height:1.2;color:var(--dim);
+    max-width:44px;overflow:hidden;text-align:center;font-weight:normal;
+    overflow-wrap:anywhere}
+  .tvpair{flex:0 1 48px;min-width:6px;height:100%;display:flex;
+    flex-direction:row;align-items:flex-end;justify-content:center;gap:3px;
+    cursor:default;position:relative}
+  .tvpair i{display:block;width:46%;min-height:3px;border-radius:3px 3px 0 0;
+    background:linear-gradient(180deg,var(--accent),var(--accent2))}
   #dwBody > div{width:100%}
   .antabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px;
     position:sticky;top:0;z-index:5;background:var(--panel);
@@ -5749,7 +5759,16 @@ async function openJunctionMove() {
         .replace("{n}", JM_BATCH.length)}</h2>
       <div class="mbody">
         <div class="d">${t("jm.batchIntro", "以下勾选目录将整体迁移到目标盘（Junction 透明映射，逐个校验，硬性失败即停）：")}</div>
-        <div class="d">${JM_BATCH.map(p0 => `<div>· ${esc(p0)}</div>`).join("")}</div>
+        <div class="d">${(() => {
+          const maxS = Math.max(1, ...JM_BATCH.map(x0 => x0.s || 0));
+          return JM_BATCH.map(x0 => {
+            const w0 = Math.max(2, ((x0.s || 0) / maxS * 100)).toFixed(1);
+            return `<label style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span style="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:break-all">📁 ${esc(x0.p)}</span>
+              <span class="vtrack" style="flex:0 0 24%"><i class="vfill" style="width:${w0}%"></i></span>
+              <span class="hint" style="flex:none">${human(x0.s || 0)}</span></label>`;
+          }).join("");
+        })()}</div>
         <div class="d"><label>${t("jm.drive", "目标盘：")}</label>
           <select id="jmDrive" style="width:100%">${others.map(d0 => `<option>${d0}:</option>`).join("")}</select></div>
         <div class="d"><label>${t("jm.sub", "目标子文件夹（可选，自动创建）：")}</label>
@@ -5767,7 +5786,7 @@ async function openJunctionMove() {
       const btn = $("jmGo");
       btn.disabled = true;
       const results = [];
-      for (const src of JM_BATCH) {
+      for (const src of JM_BATCH.map(x0 => x0.p)) {
         btn.textContent = t("jm.batching", "搬家中：{src}")
           .replace("{src}", src.split("\\").pop() || src);
         const sub = (($("jmSub") || {}).value || "").trim()
@@ -5927,7 +5946,35 @@ async function openSnapDiff(selDrive) {
     if (r.error) { box.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
     const d0 = r.diff || [];
     const nf = r.new_files || [];
+    // 增量排行图（.tv 同款风格，柱高 ∝ |增量|，增长=暖色/回落=绿色）
+    const rank = [...d0].sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+      .slice(0, 12);
+    const maxAbs = Math.max(1, ...rank.map(x => Math.abs(x.delta)));
+    const segName = p0 => (p0.replace(/^.:\\/, "").split("\\").pop() || p0);
+    const rankChart = rank.length ? `<div class="tv" style="height:130px">${rank.map(x => {
+      const h0 = Math.max(4, Math.round(Math.abs(x.delta) / maxAbs * 100));
+      const color = x.delta > 0
+        ? "linear-gradient(180deg,var(--warn),var(--danger))"
+        : "linear-gradient(180deg,var(--ok),var(--ok2))";
+      return `<span class="tvcol" title="${esc(x.path)} · ${x.delta > 0 ? "+" : "−"}${x.delta_h}">
+        <i style="height:${h0}%;background:${color}"></i>
+        <b class="tvlab">${esc(segName(x.path).slice(0, 10))}</b></span>`;
+    }).join("")}</div>
+    <div class="tvlbl">${t("sd.rankLbl", "增量排行（前 12）：暖色=增长 · 绿色=回落")}</div>` : "";
+    // 今昔对比图：增量>0 的目录，双柱（灰=当时 / 蓝=现在）
+    const cmp = d0.filter(x => x.then !== null && x.delta > 0).slice(0, 8);
+    const maxNow = Math.max(1, ...cmp.map(x => x.now || 0));
+    const cmpChart = cmp.length ? `<div class="tv" style="height:130px">${cmp.map(x => {
+      const hNow = Math.max(4, Math.round((x.now || 0) / maxNow * 100));
+      const hThen = Math.max(3, Math.round((x.then || 0) / maxNow * 100));
+      return `<span class="tvpair" title="${esc(x.path)} · ${t("sd.was", "当时")} ${x.then_h} → ${t("sd.now2", "现在")} ${x.now_h}">
+        <i style="height:${hThen}%;background:#94a3b8"></i>
+        <i style="height:${hNow}%"></i>
+        <b class="tvlab">${esc(segName(x.path).slice(0, 10))}</b></span>`;
+    }).join("")}</div>
+    <div class="tvlbl">${t("sd.cmpLbl", "增量对比（前 8）：灰=当时 · 蓝=现在")}</div>` : "";
     box.innerHTML = `
+      ${rankChart}${cmpChart}
       ${d0.length ? `<div class="t"><b>${t("sd.dirTitle", "目录体积变化（按增量降序）")}</b></div>` : ""}
       ${d0.length ? d0.map(x => `
       <div class="logrow">
@@ -6039,13 +6086,21 @@ async function openDownloadsAdvice() {
           <span class="hint">${t("dl.catAll", "勾选=整类参与归档")}</span>
           <span class="freed">${esc(g.size_h)}</span></div>
         ${g.hint ? `<div class="d" style="color:var(--ok)">${esc(g.hint)}</div>` : ""}
-        ${(g.items || []).length && g.cleanable ? `
-        <div class="d">${(g.items || []).map(it => `
-          <label style="display:block;cursor:pointer"><input type="checkbox"
-            class="dlChk" data-p="${esc(it.path)}"> ${esc(it.name)}
-            <span class="hint">${it.size_h}</span></label>`).join("")}</div>` : ""}
+        ${(g.items || []).length ? `
+        <div class="d">${(g.items || []).map(it => {
+          const w0 = Math.max(2, ((it.size || 0) / (g.size || 1) * 100)).toFixed(1);
+          return `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" class="dlChk" data-p="${esc(it.path)}">
+          <span style="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name)}</span>
+          <span class="vtrack" style="flex:0 0 28%"><i class="vfill" style="width:${w0}%"></i></span>
+          <span class="hint" style="flex:none">${it.size_h}</span></label>`;
+        }).join("")}</div>` : ""}
         ${g.names && g.names.length && !(g.items || []).length ? `<div class="d" style="word-break:break-all">
-          ${g.names.map(n => esc(n)).join(" · ")}</div>` : ""}
+          ${g.category === "子文件夹"
+            ? g.names.map(n => `<span style="display:inline-block;margin-right:10px">📁 ${esc(n)}
+              <a href="javascript:void(0)" class="dlReveal" data-n="${esc(n)}"
+                 style="margin-left:4px">${t("bf.reveal", "在资源管理器中打开位置")}</a></span>`).join("")
+            : g.names.map(n => esc(n)).join(" · ")}</div>` : ""}
       </div>`).join("") || `<div class="empty">${t("dl.empty", "下载目录是空的")}</div>`}
     <div style="text-align:right;padding-top:10px">
       <button class="go" id="dlGo" style="display:none">${t("dl.go", "清理选中项（移入回收站）")}</button>
@@ -6054,6 +6109,13 @@ async function openDownloadsAdvice() {
       <button class="tiny" id="dlUndo">${t("dl.undo", "撤销上次归档")}</button>
       <button class="tiny" id="dlClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("dlClose").addEventListener("click", closeModal);
+  [...document.querySelectorAll("#modal .dlReveal")].forEach(a0 =>
+    a0.addEventListener("click", () => {
+      apiJSON(`${API}/__oc__/reveal`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: r.path + "\\" + a0.dataset.n, select: true }),
+      });
+    }));
   const syncArcSel = () => {
     const n = document.querySelectorAll("#modal .dlChk:checked").length;
     const b0 = $("dlArcSel");
@@ -6331,7 +6393,10 @@ $("btnNone").addEventListener("click", () => {
 });
 $("btnClean").addEventListener("click", confirmDialog);
 $("btnMoveSel").addEventListener("click", () => {
-  JM_BATCH = [...selPaths];
+  JM_BATCH = [...selPaths].map(p0 => {
+    const n0 = (FS.nodes || []).find(n0 => n0.path === p0);
+    return { p: p0, s: (n0 && n0.size) || 0 };
+  });
   if (!JM_BATCH.length) { toast(t("jm.noneSel", "请先在占用排行勾选要搬家的目录")); return; }
   openAnalysis("jm");
 });
@@ -7273,6 +7338,9 @@ const I18N_EN = {
   "sd.nfOld": "Baseline snapshot predates the file list — compare again tomorrow",
   "dup.xdir": "Cross-directory copies — likely bundled with each app (removing may break it); unchecked by default",
   "dup.samedir": "Same-directory copies (backup/export), safe to clean",
+  "sd.rankLbl": "Increment ranking (top 12): warm = growth · green = shrink",
+  "sd.cmpLbl": "Then-vs-now (top 8): gray = before · blue = now",
+  "sd.now2": "now",
   "btn.ac": "App Deep Clean",
   "btn.tm": "Treemap",
   "ac.title": "App Deep Clean",
