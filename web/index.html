@@ -5565,9 +5565,11 @@ async function openDupFiles() {
     ${g2.length ? g2.map((g, i) => {
       const base = baseline(g);
       return `
-      <div class="logrow" data-gsize="${g.size || 0}">
+      <div class="logrow" data-gsize="${g.size || 0}" data-xdir="${g.xdir ? 1 : 0}">
         <div class="t"><b>${i + 1}</b>. <span>${t("dup.sameSize", "{n} 个互为副本，每个 {v}")
           .replace("{n}", g.dup_count).replace("{v}", g.size_h)}</span>
+          ${g.xdir ? `<span style="color:var(--warn-fg)">⚠ ${t("dup.xdir", "跨目录副本——可能是程序自带的多份拷贝（删除可能破坏对应程序），默认不勾选")}</span>`
+                   : `<span class="hint">${t("dup.samedir", "同目录副本（备份/导出类），可放心清理")}</span>`}
           <span class="freed">${t("dup.wasted", "可回收 {v}").replace("{v}", g.wasted_h)}</span></div>
         ${g.files.map(f => {
           if (f === base || f.path === base.path) {
@@ -5603,7 +5605,12 @@ async function openDupFiles() {
   };
   const allBtn = $("dupAll"), noneBtn = $("dupNone"), presetEl = $("dupPreset");
   if (allBtn) allBtn.addEventListener("click", () => {
-    document.querySelectorAll("#modal .dupChk").forEach(c => { c.checked = true; });
+    // 一键全选跳过跨目录组（data-xdir=1）：功能依赖而非冗余，需逐个确认
+    document.querySelectorAll("#modal .dupChk").forEach(c => {
+      const row0 = c.closest(".logrow");
+      if (row0 && row0.dataset.xdir === "1") return;
+      c.checked = true;
+    });
     syncPicked();
   });
   if (noneBtn) noneBtn.addEventListener("click", () => {
@@ -5642,7 +5649,7 @@ const AN_TOOLS = [
   ["dup", () => t("btn.dupFiles", "重复大文件"), openDupFiles],
   ["appclean", () => t("btn.ac", "应用专清"), openAppClean],
   ["bloat", () => t("btn.bloat", "毒瘤清除"), openBloatware],
-  ["snap", () => t("btn.snapDiff", "近期暴涨"), openSnapDiff],
+  ["snap", () => t("btn.snapDiff", "磁盘快照"), openSnapDiff],
   ["dl", () => t("btn.dlAdvice", "下载整理"), openDownloadsAdvice],
   ["jm", () => t("btn.jm", "磁盘迁移"), openJunctionMove],
 ];
@@ -5893,38 +5900,57 @@ async function openFsSearch(q) {
     }));
 }
 
-/* 近期暴涨（v2.12 Snapshot Diff）：对比两次扫描快照，按增量降序揪出回涨元凶 */
-async function openSnapDiff() {
-  $("modal").innerHTML = `<h2>${t("sd.title", "近期暴涨")}</h2>
-    <div class="mbody"><div class="empty"><span class="spin"></span>
-      ${t("sd.loading", "正在对比扫描快照…")}</div></div>`;
-  $("mask").classList.add("on");
-  const r = await apiJSON(`${API}/__oc__/snapshot/diff`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ drive, days: 7 }) }).catch(e => ({ error: String(e) }));
-  if (r.error) {
-    $("modal").innerHTML = `<h2>${t("sd.title", "近期暴涨")}</h2>
-      <div class="mbody"><div class="empty">${esc(r.error)}</div>
-      <div style="text-align:right;padding-top:10px">
-        <button class="tiny" id="sdClose">${t("cc.close", "关闭")}</button></div></div>`;
-    $("sdClose").addEventListener("click", closeModal);
-    return;
-  }
-  const d0 = r.diff || [];
-  $("modal").innerHTML = `<h2>${t("sd.title", "近期暴涨")}
-      <span class="hint">${esc(r.latest_date)} vs ${esc(r.past_date)}</span></h2>
-    <div class="mbody">${d0.length ? d0.map(x => `
+/* 磁盘快照（v2.12 Snapshot Diff）：对比两次扫描快照，按增量降序揪出回涨元凶 */
+async function openSnapDiff(selDrive) {
+  const drives = (STATE.drives || []).map(d0 => d0.letter);
+  const cur = String(selDrive || drive || "C");
+  const drvSel = cur.replace(/:$/, "").toUpperCase();
+  const drv0 = drvSel[0] || "C";
+  $("modal").innerHTML = `<h2>${t("sd.title", "磁盘快照")}
+      <span class="hint">${t("sd.sub", "两次扫描快照对比：谁在偷偷吃空间、新增了什么")}</span></h2>
+    <div class="mbody">
+      <div class="d" style="display:flex;gap:8px;align-items:center">
+        <label>${t("sd.drive", "盘符：")}</label>
+        <select id="sdDrive" style="width:auto">${drives.map(d0 => `<option${d0 === drv0 ? " selected" : ""}>${d0}</option>`).join("")}</select>
+        <span class="hint">${t("sd.days", "对比最近 7 天的快照")}</span>
+      </div>
+      <div id="sdBody"><div class="empty"><span class="spin"></span>
+        ${t("sd.loading", "正在对比扫描快照…")}</div></div>
+    </div>`;
+  const load0 = async () => {
+    const d0v = ($("sdDrive") || {}).value || drv0;
+    const r = await apiJSON(`${API}/__oc__/snapshot/diff`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ drive: d0v, days: 7 }) }).catch(e0 => ({ error: String(e0) }));
+    const box = $("sdBody");
+    if (!box) return;
+    if (r.error) { box.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
+    const d0 = r.diff || [];
+    const nf = r.new_files || [];
+    box.innerHTML = `
+      ${d0.length ? `<div class="t"><b>${t("sd.dirTitle", "目录体积变化（按增量降序）")}</b></div>` : ""}
+      ${d0.length ? d0.map(x => `
       <div class="logrow">
         <div class="t"><span style="word-break:break-all">${esc(x.path)}</span>
           <span class="freed" style="color:${x.delta > 0 ? "var(--warn-fg)" : "var(--ok-fg)"}">
             ${x.delta > 0 ? "+" : "−"}${x.delta_h}</span></div>
         <div class="d">${x.hot ? `<span style="color:var(--warn-fg)">🔄 ${t("sd.hot", "高频回涨（清理后会再长，建议进定时清理）")}</span> · ` : ""}${x.new ? t("sd.newDir", "新出现（上次快照没有）")
           : `${t("sd.was", "当时")} ${x.now_h}`}</div>
+      </div>`).join("") : `<div class="empty">${t("sd.noDiff", "两次快照之间没有目录体积变化")}</div>`}
+      <div class="t" style="margin-top:14px"><b>${t("sd.nfTitle", "新增文件")}</b>
+        ${nf.length ? `<span class="hint">${t("sd.nfN", "{n} 个 · 共 {v}")
+          .replace("{n}", r.new_files_total).replace("{v}", esc(r.new_files_size))}</span>` : ""}</div>
+      ${nf.length ? nf.map(x0 => `
+      <div class="logrow">
+        <div class="t"><span style="word-break:break-all">${esc(x0.path)}</span>
+          <span class="freed" style="color:var(--warn-fg)">${x0.size_h}</span></div>
       </div>`).join("")
-      : `<div class="empty">${t("sd.calm", "两次快照之间没有明显涨跌 ✓")}</div>`}
-    <div style="text-align:right;padding-top:10px">
-      <button class="tiny" id="sdClose">${t("cc.close", "关闭")}</button></div></div>`;
-  $("sdClose").addEventListener("click", closeModal);
+        : `<div class="empty">${r.files_available
+            ? t("sd.nfNone", "没有新增文件")
+            : t("sd.nfOld", "对比基线太老（当时还没有文件清单）——明天再对比即可看到新增文件")}</div>`}`;
+  };
+  $("sdDrive").addEventListener("change", load0);
+  await load0();
 }
 
 /* 应用专清（v2.15 方向三）：国民级大软件与开发者缓存结构化拆解。
@@ -6006,8 +6032,11 @@ async function openDownloadsAdvice() {
         💡 ${esc(r.headline)}</div>` : ""}
       ${(r.groups || []).map(g => `
       <div class="logrow">
-        <div class="t"><b>${g.category}</b>
+        <div class="t"><label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px">
+          <input type="checkbox" class="dlCatChk" data-cat="${esc(g.category)}">
+          <b>${g.category}</b></label>
           <span style="color:var(--dim2)">× ${g.count}</span>
+          <span class="hint">${t("dl.catAll", "勾选=整类参与归档")}</span>
           <span class="freed">${esc(g.size_h)}</span></div>
         ${g.hint ? `<div class="d" style="color:var(--ok)">${esc(g.hint)}</div>` : ""}
         ${(g.items || []).length && g.cleanable ? `
@@ -6020,10 +6049,46 @@ async function openDownloadsAdvice() {
       </div>`).join("") || `<div class="empty">${t("dl.empty", "下载目录是空的")}</div>`}
     <div style="text-align:right;padding-top:10px">
       <button class="go" id="dlGo" style="display:none">${t("dl.go", "清理选中项（移入回收站）")}</button>
+      <button class="go" id="dlArcSel" style="display:none">${t("dl.arcSel", "归档勾选项")}</button>
       <button class="tiny" id="dlArc">${t("dl.archive", "一键按类型归档")}</button>
       <button class="tiny" id="dlUndo">${t("dl.undo", "撤销上次归档")}</button>
       <button class="tiny" id="dlClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("dlClose").addEventListener("click", closeModal);
+  const syncArcSel = () => {
+    const n = document.querySelectorAll("#modal .dlChk:checked").length;
+    const b0 = $("dlArcSel");
+    if (b0) { b0.style.display = n ? "" : "none";
+      b0.textContent = t("dl.arcSelN", "归档勾选项（{n} 个）").replace("{n}", n); }
+  };
+  document.querySelectorAll("#modal .dlCatChk").forEach(c0 =>
+    c0.addEventListener("change", () => {
+      const cat = c0.dataset.cat;
+      document.querySelectorAll("#modal .dlChk").forEach(k => {
+        const row0 = k.closest(".logrow");
+        if (row0 && row0.querySelector(".dlCatChk") &&
+            row0.querySelector(".dlCatChk").dataset.cat === cat)
+          k.checked = c0.checked;
+      });
+      syncArcSel();
+    }));
+  document.querySelectorAll("#modal .dlChk").forEach(k =>
+    k.addEventListener("change", syncArcSel));
+  $("dlArcSel").addEventListener("click", async () => {
+    const picked = [...document.querySelectorAll("#modal .dlChk:checked")]
+      .map(x => x.dataset.p);
+    if (!picked.length) { toast(t("dl.noneSel", "请先勾选要归档的文件")); return; }
+    const b0 = $("dlArcSel");
+    b0.disabled = true;
+    const rr = await apiJSON(`${API}/__oc__/downloads-archive`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths: picked }) });
+    b0.disabled = false;
+    if (rr.error) { toast(rr.error); return; }
+    toast(t("dl.arcSelDone", "已归档 {n} 个文件到 {cats}")
+      .replace("{n}", rr.moved)
+      .replace("{cats}", (rr.by_category || []).join("、")));
+    openDownloadsAdvice();
+  });
   $("dlArc").addEventListener("click", async () => {
     if (!confirm(t("dl.arcConfirm", "把下载目录顶层的全部文件按类型移入分类子文件夹？（可在弹窗里一键撤销）"))) return;
     $("dlArc").disabled = true; $("dlArc").textContent = t("dl.archiving", "归档中…");
@@ -7160,7 +7225,7 @@ const I18N_EN = {
   "fs.searching": "Searching the scan cache…",
   "fs.searchNone2": "No matches in the scan cache",
   "btn.snapDiff": "Recent Spikes",
-  "sd.title": "Recent Spikes",
+  "sd.title": "Disk Snapshots",
   "sd.loading": "Comparing scan snapshots…",
   "sd.newDir": "New (not in the previous snapshot)",
   "sd.was": "was",
@@ -7192,6 +7257,22 @@ const I18N_EN = {
   "dup.prog": "Full-hash verification: {done}/{total} files",
   "jm.sub": "Target subfolder (optional, auto-created):",
   "jm.subPh": "Empty = relocate into the target drive root",
+  "dl.catAll": "tick = archive this whole category",
+  "dl.arcSel": "Archive checked",
+  "dl.arcSelN": "Archive checked ({n})",
+  "dl.arcSelDone": "Archived {n} files into {cats}",
+  "dl.noneSel": "Tick files to archive first",
+  "sd.sub": "Two-snapshot diff: who is eating space, what is new",
+  "sd.drive": "Drive:",
+  "sd.days": "Compares snapshots of the last 7 days",
+  "sd.dirTitle": "Directory size changes (by delta)",
+  "sd.noDiff": "No directory size change between the two snapshots",
+  "sd.nfTitle": "New files",
+  "sd.nfN": "{n} files · {v}",
+  "sd.nfNone": "No new files",
+  "sd.nfOld": "Baseline snapshot predates the file list — compare again tomorrow",
+  "dup.xdir": "Cross-directory copies — likely bundled with each app (removing may break it); unchecked by default",
+  "dup.samedir": "Same-directory copies (backup/export), safe to clean",
   "btn.ac": "App Deep Clean",
   "btn.tm": "Treemap",
   "ac.title": "App Deep Clean",

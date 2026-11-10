@@ -3107,9 +3107,16 @@ def _save_scan_snapshot(letter: str) -> None:
     try:
         SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         today = datetime.now().strftime("%Y-%m-%d")
+        file_items = []
+        for _parent, fitems in (cached["table"].get("files") or {}).items():
+            for name0, sz0, full0 in fitems:
+                if sz0 >= 10 * 1024 * 1024:
+                    file_items.append({"path": full0, "size": sz0})
+        file_items.sort(key=lambda x: -x["size"])
         _atomic_write(SNAPSHOTS_DIR / f"{letter}-{today}.json",
                       {"drive": letter, "date": today,
-                       "dirs": [{"path": k, "size": v} for k, v in items]})
+                       "dirs": [{"path": k, "size": v} for k, v in items],
+                       "files": file_items[:300]})
         try:
             # table["ext"] 的值是 [字节数, 个数] 列表（_ext_bump 维护）
             ext_items = []
@@ -3158,6 +3165,15 @@ def snapshot_diff(letter: str, days: int = 7) -> dict:
     past = snaps[past_date]
     now_map = {d["path"]: d["size"] for d in latest.get("dirs", [])}
     then_map = {d["path"]: d["size"] for d in past.get("dirs", [])}
+    # 新增文件（2026-11-10 用户要求「清楚直观看到新增文件和体积」）：
+    # 当前快照有、对比基线没有的文件，按体积降序。基线快照若太老没有
+    # 文件清单（files 字段是 2026-11-10 起才落盘的），则如实标注不可比。
+    cur_files = {f0["path"]: f0["size"] for f0 in latest.get("files", [])}
+    past_files = {f0["path"]: f0["size"] for f0 in past.get("files", [])}
+    files_available = bool(latest.get("files")) and bool(past.get("files"))
+    new_files = [{"path": p0, "size": s0}
+                 for p0, s0 in cur_files.items() if p0 not in past_files]
+    new_files.sort(key=lambda x: -x["size"])
     # 高频回涨（v2.15 方向二补完）：沿时间线统计每个目录「较上次增长」
     # 的次数，≥3 次标记 hot —— 清理后反复回涨的缓存目录值得进定时清理。
     timeline = [snaps[d] for d in sorted(snaps)]
@@ -3185,8 +3201,14 @@ def snapshot_diff(letter: str, days: int = 7) -> dict:
             diff.append({"path": path, "delta": -size, "now": None,
                          "then": size, "new": False})
     diff.sort(key=lambda x: -x["delta"])
+    nf_show = new_files[:50]
     return {"ok": True, "latest_date": str(dates[0]),
             "past_date": str(past_date),
+            "files_available": files_available,
+            "new_files": [{"path": x0["path"], "size": x0["size"],
+                           "size_h": human(x0["size"])} for x0 in nf_show],
+            "new_files_total": len(new_files),
+            "new_files_size": human(sum(x0["size"] for x0 in new_files)),
             "diff": [{"path": x["path"], "delta": x["delta"],
                       "delta_h": human(abs(x["delta"]))
                       + (" ↑" if x["delta"] > 0 else " ↓"),
@@ -5713,42 +5735,53 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
     DUP_PROGRESS["phase"] = "hashing"
 
     groups = []
+    # 两阶段进度（2026-11-10）：阶段一全部采样分桶（快，不计入进度），
+    # 得出确定的全量哈希总数后阶段二逐文件核验 —— total 一次到位，
+    # 不再出现 2/2 → 2/4 的递增式迷惑进度（用户反馈）。
+    work: list[tuple[int, list]] = []
+    total0 = 0
     for sz, fs in cand:
         fs = fs[:DUP_MAX_PER_GROUP]
         # 三级分桶（三轮审计 P0 修复）：同体积 → 采样哈希预筛 → 全文件
-        # SHA-256 二次证实。旧实现把「同体积桶内全部文件」塞进一组、只给
-        # 采样命中的打 dup 标记 —— 前端勾选清理上线后，dup=False 的全盘
-        # 唯一文件会被画上复选框、另一哈希组的副本可能被整组删光。
-        # 全量哈希防「首尾相同、中间不同」的固定大小镜像/稀疏文件误判；
-        # 只对采样命中的候选做，代价可控（用户手动触发，非全盘扫描）。
+        # SHA-256 二次证实。全量哈希防「首尾相同、中间不同」的固定大小
+        # 镜像/稀疏文件误判；只对采样命中的候选做（用户手动触发）。
         hashes: dict[str, list[tuple[str, str]]] = {}
         for full, name in fs:
             h = _sample_hash(full)
             if h:
                 hashes.setdefault(h, []).append((full, name))
-        DUP_PROGRESS["total"] += sum(len(p) for p in hashes.values()
-                                     if len(p) >= 2)
         for pairs in hashes.values():
-            if len(pairs) < 2:
+            if len(pairs) >= 2:
+                work.append((sz, pairs))
+                total0 += len(pairs)
+    DUP_PROGRESS["total"] = total0
+    DUP_PROGRESS["done"] = 0
+    for sz, pairs in work:
+        fulls: dict[str, list[tuple[str, str]]] = {}
+        for full, name in pairs:
+            DUP_PROGRESS["done"] += 1
+            fh = _full_sha256(full)
+            if fh:
+                fulls.setdefault(fh, []).append((full, name))
+        for fpairs in fulls.values():
+            if len(fpairs) < 2:
                 continue
-            fulls: dict[str, list[tuple[str, str]]] = {}
-            for full, name in pairs:
-                DUP_PROGRESS["done"] += 1
-                fh = _full_sha256(full)
-                if fh:
-                    fulls.setdefault(fh, []).append((full, name))
-            for fpairs in fulls.values():
-                if len(fpairs) < 2:
-                    continue
-                members = [{"path": full, "name": name, "dup": True}
-                           for full, name in fpairs]
-                n_dup = len(members)
-                groups.append({
-                    "size": sz, "size_h": human(sz),
-                    "dup_count": n_dup,
-                    "wasted": sz * (n_dup - 1), "wasted_h": human(sz * (n_dup - 1)),
-                    "files": members,
-                })
+            members = [{"path": full, "name": name, "dup": True}
+                       for full, name in fpairs]
+            n_dup = len(members)
+            # 跨目录标注（2026-11-10 用户反馈「识别有误」）：副本分布在
+            # 不同父目录＝大概率是程序/应用自带的多份拷贝（如 Telegram
+            # 各实例目录的 nw.dll）——字节一致但功能上是依赖，不是冗余。
+            # 前端据此打 ⚠ 并把跨目录组排除出一键全选。
+            parents0 = {os.path.dirname(os.path.abspath(f0))
+                        for f0, _n0 in fpairs}
+            xdir = len(parents0) > 1
+            groups.append({
+                "size": sz, "size_h": human(sz),
+                "dup_count": n_dup,
+                "wasted": sz * (n_dup - 1), "wasted_h": human(sz * (n_dup - 1)),
+                "files": members, "xdir": xdir,
+            })
     groups.sort(key=lambda g: -g["wasted"])
     DUP_PROGRESS["phase"] = "done"
     result = {"ok": True, "drive": letter, "floor_mb": DUP_FLOOR_MB,
@@ -7115,7 +7148,9 @@ class Handler(BaseHTTPRequestHandler):
                 _APPCLEAN_CACHE.update(ts=now0, r=r0)
             return self._json(r0)
         if route == "/__oc__/downloads-archive":
-            return self._json(downloads_archive())
+            p0 = body.get("paths")
+            only0 = [str(x) for x in p0] if isinstance(p0, list) else None
+            return self._json(downloads_archive(only=only0))
         if route == "/__oc__/downloads-archive/undo":
             return self._json(downloads_archive_undo())
         if route == "/__oc__/sync/save":
@@ -7394,7 +7429,8 @@ def _open_app_window(url: str) -> None:
 ARCHIVE_LOG_PATH = RUNTIME_DIR / "downloads-archive-log.json"
 
 
-def downloads_archive(root: str | None = None) -> dict:
+def downloads_archive(root: str | None = None,
+                      only: list[str] | None = None) -> dict:
     """下载目录按类型归档（v2.15 方向五后半）：顶层文件移入分类子目录。
 
     分类名与知识库识别一致；同名冲突自动重命名；移动清单写入
@@ -7409,9 +7445,13 @@ def downloads_archive(root: str | None = None) -> dict:
         entries = list(os.scandir(root))
     except OSError as e:
         return {"error": f"无法读取下载目录：{e}"}
+    only_set = {os.path.normpath(os.path.abspath(p0)) for p0 in only} \
+        if only else None
     for e in entries:
         try:
             if not e.is_file() or e.name.startswith("."):
+                continue
+            if only_set and os.path.normpath(os.path.abspath(e.path)) not in only_set:
                 continue
             info = identify(e.name, e.path, "file")
             cat = info.get("category") or "未识别"
