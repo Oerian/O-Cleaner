@@ -1893,3 +1893,5 @@ SECURITY 该处表述未动。
 - **事故**：openSnapDiff 重写混入 Python 习语 `.rstrip(":")`（JS 无此方法→unhandledrejection，页签静默不渲染）——探测捕获 window unhandledrejection 定位。教训：**JS 里禁用 Python 字符串方法，新前端代码必须过 unhandledrejection 探测**。
 - **i18n**：sd.title 重复定义（EN 词典 _en_dup 断言拦截）——去重；EN 补 17 键。
 - **测试**：unit_test **24-0** · selftest **595-0-6** · guard_matrix **50-0** · lint strict **0 错** · CDP 断言（xdir 标注/全选跳过/快照盘符/新增文件区/分类全选/归档勾选）· 打包 v2.15 · CI 全绿。
+
+**㉝补（2026-11-10）：磁盘卡三页签图表几何统一（用户「三个图表也要对齐」）**——趋势柱区 .tv 44px → 130px（与类型分布 .extv 同深基线）；#dwBody 统一 min-height 200px（趋势/清理记录/类型分布三视图切换时容器高度恒定不跳动）。CDP 实测：trend/ext 图高均 130px、clean 容器 200px。
