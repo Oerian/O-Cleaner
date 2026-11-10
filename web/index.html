@@ -445,10 +445,13 @@
     align-items:stretch;cursor:default}
   .extcol i{display:block;width:62%;max-width:30px;min-height:3px;
     border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--accent),var(--accent2))}
-  .extcol .extvval{height:22px;display:flex;align-items:flex-end;justify-content:center;
-    font-size:9px;line-height:1.1;color:var(--dim2);font-variant-numeric:tabular-nums;
-    overflow-wrap:anywhere;text-align:center}
-  .extcol .extvbar{flex:1;display:flex;align-items:flex-end;justify-content:center}
+  /* 2026-11-10：数值移入柱区、紧贴各自柱顶（经典柱状图式，不再固定顶带
+     悬空——用户截图「偏靠上不协调」）；柱高 calc(% - 18px) 给数值留行高。 */
+  .extcol .extvval{display:block;font-size:9px;line-height:1.1;
+    color:var(--dim2);font-variant-numeric:tabular-nums;
+    overflow-wrap:anywhere;text-align:center;margin-bottom:2px}
+  .extcol .extvbar{flex:1;display:flex;flex-direction:column;
+    align-items:center;justify-content:flex-end}
   .extcol .extvlab{height:24px;display:flex;align-items:flex-start;justify-content:center;
     font-size:9.5px;line-height:1.15;color:var(--dim);
     overflow-wrap:anywhere;text-align:center}
@@ -1991,8 +1994,7 @@ async function _dwRenderExt(body) {
       : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
     const tipc = `${label} · ${fmt(e.size || 0)} · ${Number(e.count || 0).toLocaleString()} ${t("fs.extFilesShort","个")}`;
     return `<div class="extcol" title="${tipc}">
-      <span class="extvval">${fmt(e.size || 0)}</span>
-      <span class="extvbar"><i style="height:${h}%"></i></span>
+      <span class="extvbar"><span class="extvval">${fmt(e.size || 0)}</span><i style="height:calc(${h}% - 18px)"></i></span>
       <span class="extvlab">${label}</span></div>`;
   }).join("")}</div>`;
 }
