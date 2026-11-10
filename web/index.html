@@ -437,7 +437,7 @@
   /* 扩展名分布（类型分布）竖向柱状图：每列一类型，柱高∝体积。
      2026-11-03 起从扫描概览的收起/展开器迁移为磁盘卡组件页签，
      .extbox/.exttoggle 退役；列结构保留（三段定高，共享基线）。 */
-  .extv{display:flex;align-items:flex-end;gap:6px;height:100px;margin-top:3px}
+  .extv{display:flex;align-items:flex-end;gap:6px;height:130px;margin-top:3px}
   /* 2026-11-03 对齐修复：列改三段固定区（数值 2 行高 / 弹性柱区 / 标签
      2 行高）—— 旧版标签换行会把柱子顶得高低不一（用户截图「换行导致
      柱状图错位」）；现在所有柱共享同一条基线，长标签在各自固定区内换行。 */
@@ -445,13 +445,10 @@
     align-items:stretch;cursor:default}
   .extcol i{display:block;width:62%;max-width:30px;min-height:3px;
     border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--accent),var(--accent2))}
-  /* 2026-11-10：数值移入柱区、紧贴各自柱顶（经典柱状图式，不再固定顶带
-     悬空——用户截图「偏靠上不协调」）；柱高 calc(% - 18px) 给数值留行高。 */
-  .extcol .extvval{display:block;font-size:9px;line-height:1.1;
-    color:var(--dim2);font-variant-numeric:tabular-nums;
-    overflow-wrap:anywhere;text-align:center;margin-bottom:2px}
-  .extcol .extvbar{flex:1;display:flex;flex-direction:column;
-    align-items:center;justify-content:flex-end}
+  .extcol .extvval{height:22px;display:flex;align-items:flex-end;justify-content:center;
+    font-size:9px;line-height:1.1;color:var(--dim2);font-variant-numeric:tabular-nums;
+    overflow-wrap:anywhere;text-align:center}
+  .extcol .extvbar{flex:1;display:flex;align-items:flex-end;justify-content:center}
   .extcol .extvlab{height:24px;display:flex;align-items:flex-start;justify-content:center;
     font-size:9.5px;line-height:1.15;color:var(--dim);
     overflow-wrap:anywhere;text-align:center}
@@ -1805,8 +1802,8 @@ function renderDisk(d) {
       </div>
     </div>
     <div id="dwHome">
-      <div class="segbtns" id="dwTabs" style="margin-top:8px;flex-wrap:wrap"></div>
-      <div id="dwBody" style="margin-top:3px"></div>
+      <div class="segbtns" id="dwTabs" style="margin-top:20px;flex-wrap:wrap"></div>
+      <div id="dwBody" style="margin-top:12px"></div>
     </div>`;
   // 磁盘概览直连扫描（#41）：概览卡上一步直达全盘扫描，不用回工具栏找按钮
   const bf = $("btnDiskFull");
@@ -1856,8 +1853,8 @@ function drawDiskTrend() {
   if (!host) return;                    // 磁盘卡未渲染（STATE 未就绪）
   if (dock && home && home.contains($("dwTabs"))) home.innerHTML = "";
   host.innerHTML =
-    `<div class="segbtns" id="dwTabs" style="flex-wrap:wrap"></div>` +
-    `<div id="dwBody" style="margin-top:3px"></div>`;
+    `<div class="segbtns" id="dwTabs" style="margin-top:20px;flex-wrap:wrap"></div>` +
+    `<div id="dwBody" style="margin-top:12px"></div>`;
   const tabsEl = $("dwTabs"), body = $("dwBody");
   const tabs = [
     ["trend", t("dw.trend", "剩余空间趋势")],
@@ -1994,7 +1991,8 @@ async function _dwRenderExt(body) {
       : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
     const tipc = `${label} · ${fmt(e.size || 0)} · ${Number(e.count || 0).toLocaleString()} ${t("fs.extFilesShort","个")}`;
     return `<div class="extcol" title="${tipc}">
-      <span class="extvbar"><span class="extvval">${fmt(e.size || 0)}</span><i style="height:calc(${h}% - 18px)"></i></span>
+      <span class="extvval">${fmt(e.size || 0)}</span>
+      <span class="extvbar"><i style="height:${h}%"></i></span>
       <span class="extvlab">${label}</span></div>`;
   }).join("")}</div>`;
 }
