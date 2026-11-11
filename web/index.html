@@ -237,6 +237,7 @@
   button:hover:not(:disabled){background:var(--panel-hover);border-color:var(--line2)}
   button:disabled{opacity:.45;cursor:not-allowed}
   button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.danger{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:600}
   button.primary:hover:not(:disabled){background:#2f74e0}
   button.go{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:600}
   button.go:hover:not(:disabled){background:#dc2626}
@@ -3445,6 +3446,9 @@ async function doClean() {
   }
   const t0 = Date.now();
   const trashBox = document.getElementById("mTrash");
+  _lastCleanReq = { ids: [...selected], paths: [...selPaths],
+    only_paths: only, allow_non_cleanable: !!hasNonCleanSel,
+    drive, custom_path: customPath };
   try {
     const res = await fetch(`${API}/__oc__/clean?lang=${langParam()}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -3593,6 +3597,13 @@ function showCleanResult(e, stats, t0, title) {
             <span style="font-size:11.5px;color:var(--dim2)">
               ${t("lk.scopeNote","只列出候选程序，关不关由你决定")}</span>
           </div>` : ""}
+        ${(e.results || []).some(r => ((r.error || "") + (r.skipped || []).join("、")).includes("容量上限")) ? `
+          <div style="margin-top:9px;display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+            <button id="btnPermRetry" class="danger" style="font-size:12.5px">
+              ${t("cr.permRetry", "永久删除这些超限项（不可恢复）")}</button>
+            <span style="font-size:11.5px;color:var(--dim2)">
+              ${t("cr.permNote", "跳过回收站直接删除；删除后无法从回收站还原，请确认里面没有要保留的文件")}</span>
+          </div>` : ""}
         <div id="lockPane"></div></div>` : ""}
       <div style="color:var(--dim2);font-size:12px;margin-top:12px">
         ${t("cr.cumulative","累计已释放 {v}，换算结果已更新到右侧面板。").replace("{v}", esc(STATE.stats?.total_freed_h || "0 B"))}
@@ -3603,6 +3614,21 @@ function showCleanResult(e, stats, t0, title) {
   $("mask").classList.add("on");
   const fl = $("btnFindLock");
   if (fl) fl.addEventListener("click", () => findLockHolders(bad, fl));
+  const pr = document.getElementById("btnPermRetry");
+  if (pr) pr.addEventListener("click", async () => {
+    if (!_lastCleanReq) { toast(t("cr.permNoReq", "找不到原始清理请求——请重新勾选后再试")); return; }
+    if (!confirm(t("cr.permConfirm",
+        "确定永久删除吗？将跳过回收站直接删除，无法从回收站还原！"))) return;
+    pr.disabled = true; pr.innerHTML = `<span class="spin"></span>${t("cc.cleaning", "清理中")}`;
+    try {
+      const rr = await apiJSON(`${API}/__oc__/clean?lang=${langParam()}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ..._lastCleanReq, trash: false }) });
+      showCleanResult(rr.entry || rr, rr.stats || {}, Date.now(),
+        t("clean.done", "清理完成"));
+    } catch (e0) { toast(String(e0)); pr.disabled = false;
+      pr.textContent = t("cr.permRetry", "永久删除这些超限项（不可恢复）"); }
+  });
   // 一键清空「所选项」的回收站：仅当本次清理确实有项进了回收站才出现。
   // 两段式确认（第一次点变成「确认清空」，第二次才执行）。后端按本次
   // 确切移入回收站的原始路径精确匹配，只删配对的 $I/$R 文件——用户
@@ -7377,6 +7403,10 @@ const I18N_EN = {
   "dup.samedir": "Same-directory copies (backup/export), safe to clean",
   "dup.xdirAck": "tick to confirm before checking the copies below",
   "api.dead": "Service not back — rerun O-Cleaner manually and refresh this page",
+  "cr.permRetry": "Permanently delete these over-limit items (unrecoverable)",
+  "cr.permNote": "Skips the Recycle Bin and deletes directly; cannot be restored afterwards",
+  "cr.permConfirm": "Permanently delete? This skips the Recycle Bin and CANNOT be undone!",
+  "cr.permNoReq": "Original request not found — re-select and try again",
   "sd.rankLbl": "Increment ranking (top 12): warm = growth · green = shrink",
   "sd.cmpLbl": "Then-vs-now (top 8): gray = before · blue = now",
   "sd.now2": "now",
@@ -7626,6 +7656,7 @@ function langParam() {
 
 /** fetch + JSON 解析的统一入口。网络异常仍由调用方 try/catch 处理 ——
     这里只收拢「取回再 .json()」这段样板，不吞错误。 */
+let _lastCleanReq = null;   // 最近一次清理的请求载荷（结果弹窗「永久删除」重试用）
 let _apiDownSince = 0;
 async function apiJSON(url, opts) {
   let r;
