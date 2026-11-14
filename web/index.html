@@ -615,11 +615,16 @@
   .sdchart .extcol{height:100%}
   .sdchart .extcol .extvbar{border-bottom:none}
   .sdcmpbar{display:flex;flex-direction:row;align-items:flex-end;
-    justify-content:center;gap:3px;width:62%;max-width:34px;height:100%}
+    justify-content:center;gap:3px;width:62%;max-width:34px;height:130px}
   .sdcmpbar i{display:block;width:44%;min-height:3px;
     border-radius:3px 3px 0 0;
     background:linear-gradient(180deg,var(--accent),var(--accent2))}
   .sdchart .extvlab{height:auto;max-height:26px}
+  .sdchart .nfcol{cursor:pointer}
+  .sdchart .nfcol:hover .extvbar i,
+  .sdchart .nfcol.on .extvbar i{outline:2px solid var(--accent);outline-offset:-1px}
+  .nfdetail{border-left:2px solid var(--accent);margin:6px 0 10px;
+    padding-left:8px;background:var(--panel2);border-radius:0 8px 8px 0}
   .tvpair{flex:0 1 48px;min-width:6px;height:100%;display:flex;
     flex-direction:row;align-items:flex-end;justify-content:center;gap:3px;
     cursor:default;position:relative}
@@ -6067,17 +6072,68 @@ async function openSnapDiff(selDrive) {
       ${growthChart}${shrinkChart}${cmpChart}
       <div class="t" style="margin-top:14px"><b>${t("sd.nfTitle", "新增文件")}</b>
         ${nf.length ? `<span class="hint">${t("sd.nfN", "{n} 个 · 共 {v}")
-          .replace("{n}", r.new_files_total).replace("{v}", esc(r.new_files_size))}</span>` : ""}</div>
-      ${nf.length ? nf.map(x0 => `
-      <div class="logrow">
-        <div class="t"><span style="word-break:break-all">${esc(x0.path)}</span>
-          <span class="freed" style="color:var(--warn-fg)">${x0.size_h}</span></div>
-      </div>`).join("")
+          .replace("{n}", r.new_files_total).replace("{v}", esc(r.new_files_size))}
+          · ${t("sd.nfHint", "点击柱形展开该目录的新增文件明细")}</span>` : ""}</div>
+      ${nf.length ? (() => {
+        // 按顶层目录聚合（扫描概览同款交互：柱形点击展开子项明细）
+        const gmap = new Map();
+        for (const f0 of nf) {
+          const seg0 = f0.path.replace(/^.:\\/, "").split(/[\\/]/)[0] || "其他";
+          const g0 = gmap.get(seg0) || { name: seg0, size: 0, count: 0, files: [] };
+          g0.size += f0.size; g0.count += 1;
+          if (g0.files.length < 80) g0.files.push(f0);
+          gmap.set(seg0, g0);
+        }
+        const garr = [...gmap.values()].sort((a, b) => b.size - a.size);
+        const top = garr.slice(0, 12);
+        const rest = garr.slice(12);
+        if (rest.length) top.push({
+          name: t("sd.nfOther", "其他目录"), size: rest.reduce((a, g0) => a + g0.size, 0),
+          count: rest.reduce((a, g0) => a + g0.count, 0),
+          files: rest.flatMap(g0 => g0.files).slice(0, 80), merged: true });
+        const maxG = Math.max(1, ...top.map(g0 => g0.size));
+        return `<div class="sdchart">${top.map((g0, gi) => {
+          const h0 = Math.max(4, Math.round(g0.size / maxG * 100));
+          return `<span class="extcol nfcol" data-nf="${gi}" title="${esc(g0.name)} · ${g0.count} ${t("fs.extFilesShort", "个")} · ${fmt(g0.size)}">
+            <span class="extvval">${fmt(g0.size)}</span>
+            <span class="extvbar"><i style="height:${h0}%"></i></span>
+            <span class="extvlab">${esc(g0.name.slice(0, 12))}</span></span>`;
+        }).join("")}</div>
+        <div class="tvlbl">${t("sd.nfLbl", "新增文件分布（按顶层目录，点击柱形展开明细）")}</div>
+        ${top.map((g0, gi) => `
+        <div class="nfdetail" id="nfd${gi}" style="display:none">
+          <div class="tvlbl"><b>${esc(g0.name)}</b> · ${g0.count} ${t("fs.extFilesShort", "个")} · ${fmt(g0.size)}
+            ${g0.merged ? ` · ${t("sd.nfMerged", "多个目录合并")}` : ""}</div>
+          ${g0.files.map(f0 => `
+          <div class="logrow">
+            <div class="t"><span style="word-break:break-all">${esc(f0.path)}</span>
+              <span class="freed" style="color:var(--warn-fg)">${f0.size_h}</span></div>
+          </div>`).join("")}
+          ${g0.count > g0.files.length ? `<div class="hint" style="padding:4px 8px">
+            ${t("sd.nfTrunc", "仅展示前 {n} 个，其余略").replace("{n}", g0.files.length)}</div>` : ""}
+        </div>`).join("")}`;
+      })()
         : `<div class="empty">${r.files_available
             ? t("sd.nfNone", "没有新增文件")
             : t("sd.nfOld", "对比基线太老（当时还没有文件清单）——明天再对比即可看到新增文件")}</div>`}`;
   };
   $("sdDrive").addEventListener("change", load0);
+  // 新增文件柱形：点击展开/收起该顶层目录的子项明细
+  const sdBodyEl = document.getElementById("sdBody");
+  if (sdBodyEl) sdBodyEl.addEventListener("click", e0 => {
+    const col0 = e0.target.closest(".nfcol");
+    if (!col0) return;
+    const pan0 = document.getElementById("nfd" + col0.dataset.nf);
+    if (!pan0) return;
+    const open0 = pan0.style.display !== "none";
+    sdBodyEl.querySelectorAll(".nfdetail").forEach(d0 => { d0.style.display = "none"; });
+    sdBodyEl.querySelectorAll(".nfcol").forEach(c0 => c0.classList.remove("on"));
+    if (!open0) {
+      pan0.style.display = "";
+      col0.classList.add("on");
+      pan0.scrollIntoView({ block: "nearest" });
+    }
+  });
   await load0();
 }
 
@@ -7428,6 +7484,11 @@ const I18N_EN = {
   "sd.growthLbl": "Space growth ranking (top 12)",
   "sd.shrinkLbl": "Space shrink ranking (top 12)",
   "dup.useGlobal": "Tick items, then use the global “Clean selected” button at the bottom",
+  "sd.nfHint": "click a column to expand its new files",
+  "sd.nfLbl": "New files by top-level directory (click a column for details)",
+  "sd.nfOther": "Other directories",
+  "sd.nfMerged": "multiple directories merged",
+  "sd.nfTrunc": "showing first {n} only",
   "cc.dupNote": "Duplicate file copy (full SHA-256 verified against the kept baseline)",
   "dup.xdirAck": "tick to confirm before checking the copies below",
   "api.dead": "Service not back — rerun O-Cleaner manually and refresh this page",
