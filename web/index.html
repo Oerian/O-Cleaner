@@ -90,6 +90,7 @@
   @keyframes vin-l{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:none}}
   @keyframes vin-r{from{opacity:0;transform:translateX(-18px)}to{opacity:1;transform:none}}
   .fspanel.slide-l{animation:vin-l .18s ease-out}
+  .slide-l,.slide-r{will-change:transform}
   .fspanel.slide-r{animation:vin-r .18s ease-out}
   @media (prefers-reduced-motion:reduce){.fspanel.slide-l,.fspanel.slide-r{animation:none}}
   /* 小视口吸顶头收敛（#42）：矮窗口里头部压到一行、去副标题与毛玻璃重绘，
@@ -481,6 +482,10 @@
 
   /* 柱状图：柱上直接显示文件名 */
   .vchart{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+  /* 流畅度（2026-11-14）：排行/弹窗长列表离屏行跳过渲染与绘制——
+     content-visibility 让百行级清单的初次渲染与滚动绘制只处理可见区。 */
+  .vrow-wrap{content-visibility:auto;contain-intrinsic-size:auto 92px}
+  #modal .logrow{content-visibility:auto;contain-intrinsic-size:auto 52px}
   .vrow{cursor:pointer;border-radius:8px;padding:6px 8px;transition:.13s;
         border:1px solid transparent}
   /* 行密度两档（#39）：紧凑档压缩行距与说明行，一屏多看约一倍行数。
@@ -2238,11 +2243,18 @@ function applyPreset(p) {
 }
 
 /* ==================== 选择与统计 ==================== */
+let _rrPending = false;
+function renderRulesSoon() {
+  // 连续勾选时规则面板重绘合并到帧——每次 toggle 都同步重绘会拖慢跟手性
+  if (_rrPending) return;
+  _rrPending = true;
+  requestAnimationFrame(() => { _rrPending = false; renderRules(); });
+}
 function setSel(id, on) {
   if (on) selected.add(id); else selected.delete(id);
   $("presets").querySelectorAll(".preset").forEach(b => b.classList.remove("act"));
   updateFooter();
-  renderRules();          // 同步「保存当前勾选为规则」按钮的可用状态
+  renderRulesSoon();      // 同步「保存当前勾选为规则」按钮的可用状态（rAF 合并）
 }
 function selTotal() {
   // 汇总每条选中项的 (真实路径, 体积)，随后做包含关系去重：
@@ -3867,6 +3879,7 @@ async function startFullScan() {
     // 同上：缓存命中也不抢视图，用户在游戏占用页就别踢回扫描概览
     if (view !== "steam" && view !== "analysis") switchView("full");
     renderOverview(); renderChart();
+    requestAnimationFrame(() => drawDiskTrend());
     const mins = Math.max(1, Math.round((Date.now() - hit.at) / 60000));
     $("fsHint").textContent =
       t("fs.cachedResult","{drive}: 盘 · {mins} 分钟前的扫描结果（点「全盘扫描本盘」强制重扫）")
@@ -3961,7 +3974,8 @@ async function startFullScan() {
     if (view !== "steam" && view !== "analysis") switchView("full");
     renderOverview();
     renderChart();     // 概览与排行必须一起渲染，否则只有统计没有列表
-    drawDiskTrend();   // 组件槽（类型分布页签）吃到新 FS.by_ext，立即出图
+    requestAnimationFrame(() =>
+      drawDiskTrend());  // 组件槽图表延一帧：扫描完成的长任务分两帧，不卡滚动
   } catch (e) {
     if (ac.signal.aborted) return;   // 被换盘作废：界面已交给新扫描，静默退出
     $("fsOverview").innerHTML =

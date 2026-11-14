@@ -1921,3 +1921,11 @@ SECURITY 该处表述未动。
 - 增长/减少柱图同步顶层目录聚合（标签从哈希名变为 steam/软件 等可读名）。
 - 教训：横条排序按 |增量|、条宽按现值归一——两把尺子并存时每行内部自洽（灰彩差值=增量），排行语义由徽章数值承载。
 - 测试：unit_test **24-0** · selftest **595-0-6** · lint strict **0 错** · CDP 断言（6 排行行/灰彩双条/10 徽章/三图标题/零错误）。
+
+**㊷补（2026-11-14）：流畅度与跟手性优化**——
+- **长列表离屏跳绘**：.vrow-wrap（排行行）与 #modal .logrow（弹窗清单）加 content-visibility:auto + contain-intrinsic-size——百行级清单的初次渲染与滚动绘制只处理可见区（CDP 实测 31 行排行生效）。
+- **勾选跟手性**：setSel 的 renderRules（规则面板全量重绘）合并到 rAF 帧——连续勾选不逐次重绘。
+- **扫描完成分帧**：drawDiskTrend（组件槽图表）延一帧执行，扫描完成的长任务分两帧，不卡滚动。
+- **切换动画 GPU 层**：slide-l/slide-r 加 will-change:transform。
+- 排除项审计：header/footer 的 backdrop-filter 不覆盖滚动容器（#leftcol 在 main 内部滚动）无需移除；搜索为回车触发非逐键热点；勾选 toggle 已是轻量路径（无全量重绘）。
+- 测试：unit_test **24-0** · selftest **595-0-6** · lint strict **0 错** · CDP 断言（31 行 cv:auto 生效/勾选联动/零错误）。
