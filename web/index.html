@@ -620,6 +620,11 @@
     border-radius:3px 3px 0 0;
     background:linear-gradient(180deg,var(--accent),var(--accent2))}
   .sdchart .extvlab{height:auto;max-height:26px}
+  .sdtrack{position:relative;height:17px;border-radius:4px;
+    background:var(--panel-hover);overflow:hidden}
+  .sdtrack .vthen{position:absolute;left:0;top:0;height:100%;
+    border-radius:4px;background:#9aa7b8;opacity:.55}
+  .sdtrack .vfill{position:absolute;left:0;top:0}
   .sdchart .nfcol{cursor:pointer}
   .sdchart .nfcol:hover .extvbar i,
   .sdchart .nfcol.on .extvbar i{outline:2px solid var(--accent);outline-offset:-1px}
@@ -6025,51 +6030,74 @@ async function openSnapDiff(selDrive) {
     if (r.error) { box.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
     const d0 = r.diff || [];
     const nf = r.new_files || [];
-    // 2026-11-14 用户反馈：增长和减少做两张图（不再混用颜色区分），删除
-    // 「目录体积变化」文字清单（无用信息且不直观）；图表全部用 .extcol
-    // 三段定高结构（数值带/柱区/标签带）。盘根排除：整盘基数巨大压扁柱形。
+    // 2026-11-14 两轮迭代定稿：三图表全部只显示顶层目录（哈希/深路径
+    // 目录名对用户无意义）；今昔对比重构为扫描概览排行行风格
+    // （vrow + 双色横条：灰条=当时、彩条=现在，配色沿用可清理绿/建议保留橙）。
     const dff = d0.filter(x => x.path.replace(/[\\/]$/, "").length > 2);
-    const segName = p0 => (p0.replace(/^.:\\/, "").split(/[\\/]/).pop() || p0);
-    const barChart = (items, valFn, color, lblKey, lblZh) => {
+    const segName = p0 => (p0.replace(/^.:\\/, "").split(/[\\/]/)[0] || p0);
+    // 顶层目录聚合：delta/then/now 按首段路径归并
+    const aggTop = rows0 => {
+      const m0 = new Map();
+      for (const x of rows0) {
+        const nm = segName(x.path);
+        const g0 = m0.get(nm) || { name: nm, delta: 0, then: 0, now: 0,
+          new: false, path: x.path };
+        g0.delta += x.delta; g0.now += x.now || 0; g0.then += x.then || 0;
+        if (x.new) g0.new = true;
+        m0.set(nm, g0);
+      }
+      return [...m0.values()];
+    };
+    const barChart = (items, color, lblKey, lblZh) => {
       if (!items.length) return "";
-      const maxV = Math.max(1, ...items.map(x => Math.abs(valFn(x))));
+      const maxV = Math.max(1, ...items.map(x => Math.abs(x.delta)));
       return `<div class="sdchart">${items.map(x => {
-        const h0 = Math.max(4, Math.round(Math.abs(valFn(x)) / maxV * 100));
-        return `<span class="extcol" title="${esc(x.path)} · ${valFn(x) > 0 ? "+" : "−"}${x.delta_h}">
-          <span class="extvval">${valFn(x) > 0 ? "+" : "−"}${x.delta_h}</span>
+        const h0 = Math.max(4, Math.round(Math.abs(x.delta) / maxV * 100));
+        return `<span class="extcol" title="${esc(x.path)} · ${x.delta > 0 ? "+" : "−"}${fmt(Math.abs(x.delta))}">
+          <span class="extvval">${x.delta > 0 ? "+" : "−"}${fmt(Math.abs(x.delta))}</span>
           <span class="extvbar"><i style="height:${h0}%;background:${color}"></i></span>
-          <span class="extvlab">${esc(segName(x.path).slice(0, 12))}</span></span>`;
+          <span class="extvlab">${esc(x.name.slice(0, 12))}</span></span>`;
       }).join("")}</div>
       <div class="tvlbl">${t(lblKey, lblZh)}</div>`;
     };
     // 增长图：delta > 0，按增量降序，暖色
-    const growth = dff.filter(x => x.delta > 0)
+    const growth = aggTop(dff.filter(x => x.delta > 0))
       .sort((a, b) => b.delta - a.delta).slice(0, 12);
-    const growthChart = barChart(growth, x => x.delta,
+    const growthChart = barChart(growth,
       "linear-gradient(180deg,var(--warn),var(--danger))",
-      "sd.growthLbl", "空间增长排行（前 12）");
+      "sd.growthLbl", "空间增长排行（前 12 顶层目录）");
     // 减少图：delta < 0，按回落体积降序，绿色
-    const shrink = dff.filter(x => x.delta < 0)
+    const shrink = aggTop(dff.filter(x => x.delta < 0))
       .sort((a, b) => a.delta - b.delta).slice(0, 12);
-    const shrinkChart = barChart(shrink, x => x.delta,
+    const shrinkChart = barChart(shrink,
       "linear-gradient(180deg,var(--ok),var(--ok2))",
-      "sd.shrinkLbl", "空间回落排行（前 12）");
-    // 今昔对比图：增量>0 的真实目录，双柱（灰=当时 / 蓝=现在），
-    // 同 .extcol 三段结构——数值带/双柱区/标签带，柱高以组内最大现值为基准
-    const cmp = dff.filter(x => x.then !== null && x.delta > 0)
-      .sort((a, b) => b.delta - a.delta).slice(0, 8);
-    const maxNow = Math.max(1, ...cmp.map(x => x.now || 0));
-    const cmpChart = cmp.length ? `<div class="sdchart">${cmp.map(x => {
-      const hNow = Math.max(4, Math.round((x.now || 0) / maxNow * 100));
-      const hThen = Math.max(3, Math.round((x.then || 0) / maxNow * 100));
-      return `<span class="extcol" title="${esc(x.path)} · ${t("sd.was", "当时")} ${x.then_h} → ${t("sd.now2", "现在")} ${x.now_h}">
-        <span class="extvval">${x.now_h}</span>
-        <span class="extvbar"><span class="sdcmpbar"><i style="height:${hThen}%;background:#94a3b8"></i><i style="height:${hNow}%"></i></span></span>
-        <span class="extvlab">${esc(segName(x.path).slice(0, 12))}</span></span>`;
-    }).join("")}</div>
-    <div class="tvlbl">${t("sd.cmpLbl", "今昔对比（前 8）：灰=当时 · 蓝=现在")}</div>` : "";
+      "sd.shrinkLbl", "空间回落排行（前 12 顶层目录）");
+    // 今昔对比：排行行风格（vrow），顶层目录按 |增量| 降序 top 10；
+    // 横条双层：灰=当时、彩=现在（增长=橙红、回落=绿），一眼看出涨了多少
+    const cmpRows = aggTop(dff)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)).slice(0, 10);
+    const maxNow = Math.max(1, ...cmpRows.map(x => x.now || 0));
+    const cmpChart = cmpRows.length ? cmpRows.map(x => {
+      const up = x.delta > 0;
+      const wn = Math.max(2, ((x.now || 0) / maxNow * 100)).toFixed(1);
+      const wt = Math.max(1, ((x.then || 0) / maxNow * 100)).toFixed(1);
+      return `<div class="logrow vrow ${up ? "c-keep" : "c-clean"}" style="cursor:default">
+        <div class="vtop">
+          <b class="fname">${esc(x.name)}</b>
+          <span class="vbadge ${up ? "keep" : "clean"}">${up ? "+" : "−"}${fmt(Math.abs(x.delta))}</span>
+          ${x.new ? `<span class="vbadge unk">${t("sd.newDir", "新出现")}</span>` : ""}
+          <span class="fsize">${t("sd.was", "当时")} ${fmt(x.then || 0)} → ${t("sd.now2", "现在")} ${fmt(x.now || 0)}</span>
+        </div>
+        <div class="vtrack sdtrack">
+          <i class="vthen" style="width:${wt}%"></i>
+          <i class="vfill" style="width:${wn}%"></i>
+        </div>
+      </div>`;
+    }).join("") : `<div class="empty">${t("sd.noDiff", "两次快照之间没有目录体积变化")}</div>`;
     box.innerHTML = `
-      ${growthChart}${shrinkChart}${cmpChart}
+      ${growthChart}${shrinkChart}
+      ${cmpRows.length ? `<div class="t" style="margin:16px 0 8px"><b>${t("sd.cmpTitle", "今昔对比（顶层目录 · 灰条=当时 · 彩条=现在）")}</b></div>` : ""}
+      ${cmpChart}
       <div class="t" style="margin-top:14px"><b>${t("sd.nfTitle", "新增文件")}</b>
         ${nf.length ? `<span class="hint">${t("sd.nfN", "{n} 个 · 共 {v}")
           .replace("{n}", r.new_files_total).replace("{v}", esc(r.new_files_size))}
@@ -7489,6 +7517,7 @@ const I18N_EN = {
   "sd.nfOther": "Other directories",
   "sd.nfMerged": "multiple directories merged",
   "sd.nfTrunc": "showing first {n} only",
+  "sd.cmpTitle": "Then vs now (top-level dirs · gray = before · colored = now)",
   "cc.dupNote": "Duplicate file copy (full SHA-256 verified against the kept baseline)",
   "dup.xdirAck": "tick to confirm before checking the copies below",
   "api.dead": "Service not back — rerun O-Cleaner manually and refresh this page",
