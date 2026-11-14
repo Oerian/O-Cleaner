@@ -614,16 +614,12 @@
     margin:10px 0 6px;flex-wrap:nowrap;overflow-x:auto}
   .sdchart .extcol{height:100%}
   .sdchart .extcol .extvbar{border-bottom:none}
-  .sdcmp{flex:0 1 48px;min-width:6px;height:100%;display:flex;
-    flex-direction:column;align-items:center;justify-content:flex-end;
-    cursor:default}
   .sdcmpbar{display:flex;flex-direction:row;align-items:flex-end;
-    justify-content:center;gap:3px;width:100%;height:130px;
-    border-bottom:1px solid var(--line)}
+    justify-content:center;gap:3px;width:62%;max-width:34px;height:100%}
   .sdcmpbar i{display:block;width:44%;min-height:3px;
     border-radius:3px 3px 0 0;
     background:linear-gradient(180deg,var(--accent),var(--accent2))}
-  .sdcmp .extvlab,.sdchart .extvlab{height:auto;max-height:26px}
+  .sdchart .extvlab{height:auto;max-height:26px}
   .tvpair{flex:0 1 48px;min-width:6px;height:100%;display:flex;
     flex-direction:row;align-items:flex-end;justify-content:center;gap:3px;
     cursor:default;position:relative}
@@ -2258,7 +2254,7 @@ function selTotal() {
   const nodes = FS?.nodes || [];
   for (const p of selPaths) {
     const n = nodes.find(x => x.path === p);
-    entries.push([p, n ? (n.size || 0) : 0]);
+    entries.push([p, n ? (n.size || 0) : (_dupSizes.get(p) || 0)]);
   }
   const real = entries.map(e => normKey(e[0])).filter(Boolean);
   // kind=files 的目标只清本层匹配文件、不覆盖子目录，不能当「外层容器」。
@@ -3213,13 +3209,19 @@ function confirmDialog() {
   const nodes = FS?.nodes || [];
   for (const p of selPaths) {
     const n = nodes.find(x => x.path === p);
-    rows.push({ id: "path:" + p, label: (n && n.name) || p,
-                risk: (n && n.risk) || "中", size: (n && n.size) || 0,
+    const isDup = _dupSelPaths.has(p);
+    rows.push({ id: "path:" + p,
+                label: isDup ? (_dupSizes.get(p) || p) : (n && n.name) || p,
+                risk: (n && n.risk) || "中",
+                size: isDup ? (_dupSizes.get(p) || 0) : ((n && n.size) || 0),
                 files: 0,
-                note: (n && !n.cleanable)
-                  ? t("cc.nonCleanNote","非工具推荐项（建议保留/未识别）：你已明确勾选，服务端将按系统目录保护执行")
-                  : t("cc.pathNote","清空目录内容（服务端会重新识别校验）"),
-                path: p, admin: false, nonClean: !!(n && !n.cleanable) });
+                note: isDup
+                  ? t("cc.dupNote", "重复文件副本（全量 SHA-256 已证实与保留基准一致）")
+                  : (n && !n.cleanable)
+                    ? t("cc.nonCleanNote","非工具推荐项（建议保留/未识别）：你已明确勾选，服务端将按系统目录保护执行")
+                    : t("cc.pathNote","清空目录内容（服务端会重新识别校验）"),
+                path: p, admin: false,
+                nonClean: isDup || !!(n && !n.cleanable) });
   }
   // 回收建议面板的勾选项：与常规清理同一个确认弹窗、同一次执行。
   // 整目录删除（逐个走 clean-game 的服务端二次校验），不进回收站。
@@ -5513,6 +5515,7 @@ function renderBfRows() {
       : t("bf.empty", "没有超过门槛的大文件")}</div>`;
 }
 async function openBigFiles() {
+  const anSeq = ++_anSeq;
   $("modal").innerHTML = `<h2>${t("bf.title", "全盘大文件排行")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
       ${t("bf.loading", "正在全盘遍历大文件（管理员 + NTFS 时由 MFT 引擎秒级完成）…")}</div></div>`;
@@ -5526,6 +5529,7 @@ async function openBigFiles() {
   } catch (e) {
     r = { error: String(e) };
   }
+  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
   if (!r || r.error) {
     $("modal").innerHTML = `<h2>${t("bf.title", "全盘大文件排行")}</h2>
       <div class="mbody"><div class="empty">${esc((r && r.error) || t("up.fail", "检查失败"))}</div>
@@ -5566,6 +5570,7 @@ async function openBigFiles() {
    哈希证实。只报哈希一致的组（同体积内容不同不算），杜绝误导删除。
    只读不删 —— 删哪个由用户拿着路径自己决定。 */
 async function openDupFiles() {
+  const anSeq = ++_anSeq;
   $("modal").innerHTML = `<h2>${t("dup.title", "重复大文件")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
       ${t("dup.loading", "正在核对采样哈希（基于扫描缓存，很快）…")}</div>
@@ -5588,6 +5593,7 @@ async function openDupFiles() {
   } catch (e) {
     r = { error: String(e) };
   }
+  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
   clearInterval(progTimer);
   if (!r || r.error) {
     $("modal").innerHTML = `<h2>${t("dup.title", "重复大文件")}</h2>
@@ -5598,6 +5604,13 @@ async function openDupFiles() {
     return;
   }
   const g2 = (r.groups || []);
+  // dup 勾选与全局 selPaths 联动的簿记：当前全部副本路径 + 各自体积
+  // （供底部全局「清理选中项」的确认弹窗标注语义与体积估算）。
+  _dupAllPaths = new Set(g2.flatMap(g0 => (g0.files || []).map(f0 => f0.path)));
+  _dupSizes = new Map(g2.flatMap(g0 => (g0.files || []).map(f0 => [f0.path, g0.size])));
+  _dupSelPaths = new Set([...selPaths].filter(p0 => _dupAllPaths.has(p0)));
+  for (const p0 of [...selPaths])
+    if (_dupAllPaths.has(p0) && !_dupSelPaths.has(p0)) selPaths.delete(p0);
   // 二轮审计方向 2：每组标一个「保留基准」（路径最短的一份，加锁不可勾），
   // 其余副本提供勾选框；勾选后走 /__oc__/delete-paths 批量移入回收站
   // （逐个过 check_deletable 护栏链，默认回收站，绝不静默永久删除）。
@@ -5644,7 +5657,7 @@ async function openDupFiles() {
       : `<div class="empty">${t("dup.empty", "没有发现互为副本的大文件（≥ {v} 且内容一致）")
           .replace("{v}", fmt((r.floor_mb || 100) * 1024 * 1024))}</div>`}
     <div style="text-align:right;padding-top:10px">
-      ${g2.length ? `<button class="go" id="dupGo">${t("dup.go", "清理选中项（移入回收站）")}</button>` : ""}
+      <span class="hint">${t("dup.useGlobal", "勾选后用底部全局「清理选中项」按钮执行")}</span>
       <button class="tiny" id="dupClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("dupClose").addEventListener("click", closeModal);
   const syncPicked = () => {
@@ -5659,7 +5672,10 @@ async function openDupFiles() {
       if (c.disabled) return;
       const grp = c.closest(".logrow") && c.closest(".logrow").dataset.gsize;
       c.checked = !!grp && Number(grp) >= minv;
+      if (c.checked) selPaths.add(c.dataset.p);
+      else selPaths.delete(c.dataset.p);
     });
+    updateFooter();
     syncPicked();
   };
   const allBtn = $("dupAll"), noneBtn = $("dupNone"), presetEl = $("dupPreset");
@@ -5669,11 +5685,17 @@ async function openDupFiles() {
       const row0 = c.closest(".logrow");
       if (row0 && row0.dataset.xdir === "1") return;
       c.checked = true;
+      selPaths.add(c.dataset.p);
     });
+    updateFooter();
     syncPicked();
   });
   if (noneBtn) noneBtn.addEventListener("click", () => {
-    document.querySelectorAll("#modal .dupChk").forEach(c => { c.checked = false; });
+    document.querySelectorAll("#modal .dupChk").forEach(c => {
+      c.checked = false;
+      selPaths.delete(c.dataset.p);
+    });
+    updateFooter();
     syncPicked();
   });
   if (presetEl) presetEl.addEventListener("change", applyPreset);
@@ -5682,27 +5704,19 @@ async function openDupFiles() {
       const row0 = a0.closest(".logrow");
       row0.querySelectorAll(".dupChk").forEach(c0 => {
         c0.disabled = !a0.checked;
-        if (!a0.checked) c0.checked = false;
+        if (!a0.checked) { c0.checked = false; selPaths.delete(c0.dataset.p); }
       });
+      updateFooter();
       syncPicked();
     }));
   document.querySelectorAll("#modal .dupChk").forEach(c =>
-    c.addEventListener("change", syncPicked));
+    c.addEventListener("change", () => {
+      if (c.checked) selPaths.add(c.dataset.p);
+      else selPaths.delete(c.dataset.p);
+      updateFooter();
+      syncPicked();
+    }));
   syncPicked();
-  const goBtn = $("dupGo");
-  if (goBtn) goBtn.addEventListener("click", async () => {
-    const picked = [...document.querySelectorAll("#modal .dupChk:checked")]
-      .map(x => x.dataset.p);
-    if (!picked.length) { toast(t("dup.none", "请先勾选要清理的副本")); return; }
-    if (!confirm(t("dup.confirm", "把选中的 {n} 个副本移入回收站？（可随时还原）").replace("{n}", picked.length))) return;
-    goBtn.disabled = true; goBtn.textContent = t("dup.working", "正在移入回收站…");
-    const rr = await apiJSON(`${API}/__oc__/delete-paths`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paths: picked }) });
-    if (rr.error) { toast(rr.error); goBtn.disabled = false; goBtn.textContent = t("dup.go", "清理选中项（移入回收站）"); return; }
-    toast(t("dup.done", "已移入回收站 {n}/{total} 个").replace("{n}", rr.done).replace("{total}", rr.total));
-    openDupFiles();   // 重新拉取，剩余副本刷新
-  });
   [...document.querySelectorAll("#modal .rcpt")].forEach(a =>
     a.addEventListener("click", () => {
       apiJSON(`${API}/__oc__/reveal`, {
@@ -5753,6 +5767,7 @@ function openAnalysis(tool) {
 /* 毒瘤软件完整清除：两段式 —— 先跑官方卸载程序，再由用户点「清扫残留」
    做目录/注册表精准清理。扫描只读不删。 */
 async function openBloatware() {
+  const anSeq = ++_anSeq;
   $("modal").innerHTML = `<h2>${t("bw.title", "毒瘤软件清除")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
       ${t("bw.loading", "正在对照签名库扫描（注册表卸载项 + 已知目录）…")}</div></div>`;
@@ -5979,6 +5994,7 @@ async function openFsSearch(q) {
 
 /* 磁盘快照（v2.12 Snapshot Diff）：对比两次扫描快照，按增量降序揪出回涨元凶 */
 async function openSnapDiff(selDrive) {
+  const anSeq = ++_anSeq;
   const drives = (STATE.drives || []).map(d0 => d0.letter);
   const cur = String(selDrive || drive || "C");
   const drvSel = cur.replace(/:$/, "").toUpperCase();
@@ -6004,49 +6020,51 @@ async function openSnapDiff(selDrive) {
     if (r.error) { box.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
     const d0 = r.diff || [];
     const nf = r.new_files || [];
-    // 增量排行图（.tv 同款风格，柱高 ∝ |增量|，增长=暖色/回落=绿色）
-    // 排除盘根（d:\ 这类整盘根目录体积基数巨大，微小增量在图上不可见，
-    // 还会压扁其他目录的柱形——图表只画真实目录）。
+    // 2026-11-14 用户反馈：增长和减少做两张图（不再混用颜色区分），删除
+    // 「目录体积变化」文字清单（无用信息且不直观）；图表全部用 .extcol
+    // 三段定高结构（数值带/柱区/标签带）。盘根排除：整盘基数巨大压扁柱形。
     const dff = d0.filter(x => x.path.replace(/[\\/]$/, "").length > 2);
-    const rank = [...dff].sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
-      .slice(0, 12);
-    const maxAbs = Math.max(1, ...rank.map(x => Math.abs(x.delta)));
     const segName = p0 => (p0.replace(/^.:\\/, "").split(/[\\/]/).pop() || p0);
-    // 三段定高柱列（数值带/柱区/标签带，同类型分布 .extcol 结构）——
-    // 标签在自己的固定带内换行，不再溢出互踩。
-    const rankChart = rank.length ? `<div class="sdchart">${rank.map(x => {
-      const h0 = Math.max(4, Math.round(Math.abs(x.delta) / maxAbs * 100));
-      const color = x.delta > 0
-        ? "linear-gradient(180deg,var(--warn),var(--danger))"
-        : "linear-gradient(180deg,var(--ok),var(--ok2))";
-      return `<span class="extcol" title="${esc(x.path)} · ${x.delta > 0 ? "+" : "−"}${x.delta_h}">
-        <span class="extvval">${x.delta > 0 ? "+" : "−"}${x.delta_h}</span>
-        <span class="extvbar"><i style="height:${h0}%;background:${color}"></i></span>
-        <span class="extvlab">${esc(segName(x.path).slice(0, 12))}</span></span>`;
-    }).join("")}</div>
-    <div class="tvlbl">${t("sd.rankLbl", "增量排行（前 12）：暖色=增长 · 绿色=回落")}</div>` : "";
-    // 今昔对比图：增量>0 的真实目录，双柱（灰=当时 / 蓝=现在）
-    const cmp = dff.filter(x => x.then !== null && x.delta > 0).slice(0, 8);
+    const barChart = (items, valFn, color, lblKey, lblZh) => {
+      if (!items.length) return "";
+      const maxV = Math.max(1, ...items.map(x => Math.abs(valFn(x))));
+      return `<div class="sdchart">${items.map(x => {
+        const h0 = Math.max(4, Math.round(Math.abs(valFn(x)) / maxV * 100));
+        return `<span class="extcol" title="${esc(x.path)} · ${valFn(x) > 0 ? "+" : "−"}${x.delta_h}">
+          <span class="extvval">${valFn(x) > 0 ? "+" : "−"}${x.delta_h}</span>
+          <span class="extvbar"><i style="height:${h0}%;background:${color}"></i></span>
+          <span class="extvlab">${esc(segName(x.path).slice(0, 12))}</span></span>`;
+      }).join("")}</div>
+      <div class="tvlbl">${t(lblKey, lblZh)}</div>`;
+    };
+    // 增长图：delta > 0，按增量降序，暖色
+    const growth = dff.filter(x => x.delta > 0)
+      .sort((a, b) => b.delta - a.delta).slice(0, 12);
+    const growthChart = barChart(growth, x => x.delta,
+      "linear-gradient(180deg,var(--warn),var(--danger))",
+      "sd.growthLbl", "空间增长排行（前 12）");
+    // 减少图：delta < 0，按回落体积降序，绿色
+    const shrink = dff.filter(x => x.delta < 0)
+      .sort((a, b) => a.delta - b.delta).slice(0, 12);
+    const shrinkChart = barChart(shrink, x => x.delta,
+      "linear-gradient(180deg,var(--ok),var(--ok2))",
+      "sd.shrinkLbl", "空间回落排行（前 12）");
+    // 今昔对比图：增量>0 的真实目录，双柱（灰=当时 / 蓝=现在），
+    // 同 .extcol 三段结构——数值带/双柱区/标签带，柱高以组内最大现值为基准
+    const cmp = dff.filter(x => x.then !== null && x.delta > 0)
+      .sort((a, b) => b.delta - a.delta).slice(0, 8);
     const maxNow = Math.max(1, ...cmp.map(x => x.now || 0));
     const cmpChart = cmp.length ? `<div class="sdchart">${cmp.map(x => {
       const hNow = Math.max(4, Math.round((x.now || 0) / maxNow * 100));
       const hThen = Math.max(3, Math.round((x.then || 0) / maxNow * 100));
-      return `<span class="sdcmp" title="${esc(x.path)} · ${t("sd.was", "当时")} ${x.then_h} → ${t("sd.now2", "现在")} ${x.now_h}">
-        <span class="sdcmpbar"><i style="height:${hThen}%;background:#94a3b8"></i><i style="height:${hNow}%"></i></span>
+      return `<span class="extcol" title="${esc(x.path)} · ${t("sd.was", "当时")} ${x.then_h} → ${t("sd.now2", "现在")} ${x.now_h}">
+        <span class="extvval">${x.now_h}</span>
+        <span class="extvbar"><span class="sdcmpbar"><i style="height:${hThen}%;background:#94a3b8"></i><i style="height:${hNow}%"></i></span></span>
         <span class="extvlab">${esc(segName(x.path).slice(0, 12))}</span></span>`;
     }).join("")}</div>
-    <div class="tvlbl">${t("sd.cmpLbl", "增量对比（前 8）：灰=当时 · 蓝=现在")}</div>` : "";
+    <div class="tvlbl">${t("sd.cmpLbl", "今昔对比（前 8）：灰=当时 · 蓝=现在")}</div>` : "";
     box.innerHTML = `
-      ${rankChart}${cmpChart}
-      ${d0.length ? `<div class="t"><b>${t("sd.dirTitle", "目录体积变化（按增量降序）")}</b></div>` : ""}
-      ${d0.length ? d0.map(x => `
-      <div class="logrow">
-        <div class="t"><span style="word-break:break-all">${esc(x.path)}</span>
-          <span class="freed" style="color:${x.delta > 0 ? "var(--warn-fg)" : "var(--ok-fg)"}">
-            ${x.delta > 0 ? "+" : "−"}${x.delta_h}</span></div>
-        <div class="d">${x.hot ? `<span style="color:var(--warn-fg)">🔄 ${t("sd.hot", "高频回涨（清理后会再长，建议进定时清理）")}</span> · ` : ""}${x.new ? t("sd.newDir", "新出现（上次快照没有）")
-          : `${t("sd.was", "当时")} ${x.now_h}`}</div>
-      </div>`).join("") : `<div class="empty">${t("sd.noDiff", "两次快照之间没有目录体积变化")}</div>`}
+      ${growthChart}${shrinkChart}${cmpChart}
       <div class="t" style="margin-top:14px"><b>${t("sd.nfTitle", "新增文件")}</b>
         ${nf.length ? `<span class="hint">${t("sd.nfN", "{n} 个 · 共 {v}")
           .replace("{n}", r.new_files_total).replace("{v}", esc(r.new_files_size))}</span>` : ""}</div>
@@ -6066,6 +6084,7 @@ async function openSnapDiff(selDrive) {
 /* 应用专清（v2.15 方向三）：国民级大软件与开发者缓存结构化拆解。
    cache 项可一键移入回收站；data 项给处理建议；core 项锁定警示。 */
 async function openAppClean() {
+  const anSeq = ++_anSeq;
   $("modal").innerHTML = `<h2>${t("ac.title", "应用专清")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
       ${t("ac.loading", "正在测量各应用的数据目录…")}</div></div>`;
@@ -6116,6 +6135,7 @@ async function openAppClean() {
 /* 下载目录整理建议（#35）：按知识库归类顶层文件，给可执行建议。
    只读不动文件 —— 删/转移由用户自己决定。 */
 async function openDownloadsAdvice() {
+  const anSeq = ++_anSeq;
   $("modal").innerHTML = `<h2>${t("dl.title", "下载目录整理建议")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
       ${t("dl.loading", "正在归类下载目录…")}</div></div>`;
@@ -6126,6 +6146,10 @@ async function openDownloadsAdvice() {
   } catch (e) {
     r = { error: String(e) };
   }
+  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
+  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
+  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
+  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
   if (!r || r.error) {
     $("modal").innerHTML = `<h2>${t("dl.title", "下载目录整理建议")}</h2>
       <div class="mbody"><div class="empty">${esc((r && r.error) || t("up.fail", "检查失败"))}</div>
@@ -7401,13 +7425,15 @@ const I18N_EN = {
   "sd.nfOld": "Baseline snapshot predates the file list — compare again tomorrow",
   "dup.xdir": "Cross-directory copies — likely bundled with each app (removing may break it); unchecked by default",
   "dup.samedir": "Same-directory copies (backup/export), safe to clean",
+  "sd.growthLbl": "Space growth ranking (top 12)",
+  "sd.shrinkLbl": "Space shrink ranking (top 12)",
+  "cc.dupNote": "Duplicate file copy (full SHA-256 verified against the kept baseline)",
   "dup.xdirAck": "tick to confirm before checking the copies below",
   "api.dead": "Service not back — rerun O-Cleaner manually and refresh this page",
   "cr.permRetry": "Permanently delete these over-limit items (unrecoverable)",
   "cr.permNote": "Skips the Recycle Bin and deletes directly; cannot be restored afterwards",
   "cr.permConfirm": "Permanently delete? This skips the Recycle Bin and CANNOT be undone!",
   "cr.permNoReq": "Original request not found — re-select and try again",
-  "sd.rankLbl": "Increment ranking (top 12): warm = growth · green = shrink",
   "sd.cmpLbl": "Then-vs-now (top 8): gray = before · blue = now",
   "sd.now2": "now",
   "btn.ac": "App Deep Clean",
@@ -7656,7 +7682,11 @@ function langParam() {
 
 /** fetch + JSON 解析的统一入口。网络异常仍由调用方 try/catch 处理 ——
     这里只收拢「取回再 .json()」这段样板，不吞错误。 */
+let _anSeq = 0;              // 分析工具时序号：切页签即递增，旧 fetch 结果作废
 let _lastCleanReq = null;   // 最近一次清理的请求载荷（结果弹窗「永久删除」重试用）
+let _dupAllPaths = new Set();   // 重复大文件面板当前的全部副本路径
+let _dupSelPaths = new Set();   // 其中被勾选的（确认弹窗标注副本语义用）
+let _dupSizes = new Map();      // 副本路径 -> 组体积（底部预估释放用）
 let _apiDownSince = 0;
 async function apiJSON(url, opts) {
   let r;
