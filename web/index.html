@@ -2244,7 +2244,7 @@ function applyPreset(p) {
 
 /* ==================== 选择与统计 ==================== */
 let _rrPending = false;
-function renderRulesSoon() {
+function scheduleRulesSync() {
   // 连续勾选时规则面板重绘合并到帧——每次 toggle 都同步重绘会拖慢跟手性
   if (_rrPending) return;
   _rrPending = true;
@@ -2254,7 +2254,7 @@ function setSel(id, on) {
   if (on) selected.add(id); else selected.delete(id);
   $("presets").querySelectorAll(".preset").forEach(b => b.classList.remove("act"));
   updateFooter();
-  renderRulesSoon();      // 同步「保存当前勾选为规则」按钮的可用状态（rAF 合并）
+  scheduleRulesSync();      // 同步「保存当前勾选为规则」按钮的可用状态（rAF 合并）
 }
 function selTotal() {
   // 汇总每条选中项的 (真实路径, 体积)，随后做包含关系去重：
