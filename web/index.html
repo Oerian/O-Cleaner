@@ -630,11 +630,6 @@
   .sdtrack .vthen{position:absolute;left:0;top:0;height:100%;
     border-radius:4px;background:#9aa7b8;opacity:.55}
   .sdtrack .vfill{position:absolute;left:0;top:0}
-  .sdchart .nfcol{cursor:pointer}
-  .sdchart .nfcol:hover .extvbar i,
-  .sdchart .nfcol.on .extvbar i{outline:2px solid var(--accent);outline-offset:-1px}
-  .nfdetail{border-left:2px solid var(--accent);margin:6px 0 10px;
-    padding-left:8px;background:var(--panel2);border-radius:0 8px 8px 0}
   .tvpair{flex:0 1 48px;min-width:6px;height:100%;display:flex;
     flex-direction:row;align-items:flex-end;justify-content:center;gap:3px;
     cursor:default;position:relative}
@@ -6114,10 +6109,9 @@ async function openSnapDiff(selDrive) {
       ${cmpChart}
       <div class="t" style="margin-top:14px"><b>${t("sd.nfTitle", "新增文件")}</b>
         ${nf.length ? `<span class="hint">${t("sd.nfN", "{n} 个 · 共 {v}")
-          .replace("{n}", r.new_files_total).replace("{v}", esc(r.new_files_size))}
-          · ${t("sd.nfHint", "点击柱形展开该目录的新增文件明细")}</span>` : ""}</div>
+          .replace("{n}", r.new_files_total).replace("{v}", esc(r.new_files_size))}</span>` : ""}</div>
       ${nf.length ? (() => {
-        // 按顶层目录聚合（扫描概览同款交互：柱形点击展开子项明细）
+        // 按顶层目录聚合（扫描概览同款：排行行横条 + 展开▾ 内联子项）
         const gmap = new Map();
         for (const f0 of nf) {
           const seg0 = f0.path.replace(/^.:\\/, "").split(/[\\/]/)[0] || "其他";
@@ -6134,18 +6128,20 @@ async function openSnapDiff(selDrive) {
           count: rest.reduce((a, g0) => a + g0.count, 0),
           files: rest.flatMap(g0 => g0.files).slice(0, 80), merged: true });
         const maxG = Math.max(1, ...top.map(g0 => g0.size));
-        return `<div class="sdchart">${top.map((g0, gi) => {
-          const h0 = Math.max(4, Math.round(g0.size / maxG * 100));
-          return `<span class="extcol nfcol" data-nf="${gi}" title="${esc(g0.name)} · ${g0.count} ${t("fs.extFilesShort", "个")} · ${fmt(g0.size)}">
-            <span class="extvval">${fmt(g0.size)}</span>
-            <span class="extvbar"><i style="height:${h0}%"></i></span>
-            <span class="extvlab">${esc(g0.name.slice(0, 12))}</span></span>`;
-        }).join("")}</div>
-        <div class="tvlbl">${t("sd.nfLbl", "新增文件分布（按顶层目录，点击柱形展开明细）")}</div>
-        ${top.map((g0, gi) => `
-        <div class="nfdetail" id="nfd${gi}" style="display:none">
-          <div class="tvlbl"><b>${esc(g0.name)}</b> · ${g0.count} ${t("fs.extFilesShort", "个")} · ${fmt(g0.size)}
-            ${g0.merged ? ` · ${t("sd.nfMerged", "多个目录合并")}` : ""}</div>
+        return top.map((g0, gi) => {
+          const w0 = Math.max(2, (g0.size / maxG * 100)).toFixed(1);
+          return `<div class="vrow-wrap"><div class="vrow" data-nf="${gi}">
+          <div class="vtop">
+            <b class="fname">${esc(g0.name)}</b>
+            <span class="vbadge clean">${g0.count} ${t("fs.extFilesShort", "个")}</span>
+            ${g0.merged ? `<span class="vbadge unk">${t("sd.nfMerged", "多目录合并")}</span>` : ""}
+            <button class="tiny ghost nfexp" data-nf="${gi}">${t("sub.expand", "展开 ▾")}</button>
+            <span class="fsize">${fmt(g0.size)}</span>
+          </div>
+          <div class="vtrack"><i class="vfill" style="width:${w0}%;background:linear-gradient(90deg,var(--accent),var(--accent2))"></i></div>
+          <div class="vdesc">${t("sd.nfDesc", "新增文件 · 点击「展开」查看子项明细")}</div>
+        </div>
+        <div class="vrow-kids" id="nfk${gi}" style="display:none">
           ${g0.files.map(f0 => `
           <div class="logrow">
             <div class="t"><span style="word-break:break-all">${esc(f0.path)}</span>
@@ -6153,28 +6149,25 @@ async function openSnapDiff(selDrive) {
           </div>`).join("")}
           ${g0.count > g0.files.length ? `<div class="hint" style="padding:4px 8px">
             ${t("sd.nfTrunc", "仅展示前 {n} 个，其余略").replace("{n}", g0.files.length)}</div>` : ""}
-        </div>`).join("")}`;
+        </div></div>`;
+        }).join("");
       })()
         : `<div class="empty">${r.files_available
             ? t("sd.nfNone", "没有新增文件")
             : t("sd.nfOld", "对比基线太老（当时还没有文件清单）——明天再对比即可看到新增文件")}</div>`}`;
   };
   $("sdDrive").addEventListener("change", load0);
-  // 新增文件柱形：点击展开/收起该顶层目录的子项明细
+  // 新增文件行「展开 ▾」：内联显示该顶层目录的新增文件明细
   const sdBodyEl = document.getElementById("sdBody");
   if (sdBodyEl) sdBodyEl.addEventListener("click", e0 => {
-    const col0 = e0.target.closest(".nfcol");
-    if (!col0) return;
-    const pan0 = document.getElementById("nfd" + col0.dataset.nf);
-    if (!pan0) return;
-    const open0 = pan0.style.display !== "none";
-    sdBodyEl.querySelectorAll(".nfdetail").forEach(d0 => { d0.style.display = "none"; });
-    sdBodyEl.querySelectorAll(".nfcol").forEach(c0 => c0.classList.remove("on"));
-    if (!open0) {
-      pan0.style.display = "";
-      col0.classList.add("on");
-      pan0.scrollIntoView({ block: "nearest" });
-    }
+    const btn0 = e0.target.closest(".nfexp");
+    if (!btn0) return;
+    const kids0 = document.getElementById("nfk" + btn0.dataset.nf);
+    if (!kids0) return;
+    const open0 = kids0.style.display !== "none";
+    kids0.style.display = open0 ? "none" : "";
+    btn0.textContent = open0 ? t("sub.expand", "展开 ▾") : t("sub.collapse", "收起 ▴");
+    if (!open0) kids0.scrollIntoView({ block: "nearest" });
   });
   await load0();
 }
@@ -7526,11 +7519,10 @@ const I18N_EN = {
   "sd.growthLbl": "Space growth ranking (top 12)",
   "sd.shrinkLbl": "Space shrink ranking (top 12)",
   "dup.useGlobal": "Tick items, then use the global “Clean selected” button at the bottom",
-  "sd.nfHint": "click a column to expand its new files",
-  "sd.nfLbl": "New files by top-level directory (click a column for details)",
   "sd.nfOther": "Other directories",
   "sd.nfMerged": "multiple directories merged",
   "sd.nfTrunc": "showing first {n} only",
+  "sd.nfDesc": "New files · click “Expand” for details",
   "sd.cmpTitle": "Then vs now (top-level dirs · gray = before · colored = now)",
   "cc.dupNote": "Duplicate file copy (full SHA-256 verified against the kept baseline)",
   "dup.xdirAck": "tick to confirm before checking the copies below",
