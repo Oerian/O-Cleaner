@@ -6082,7 +6082,7 @@ async function openSnapDiff(selDrive) {
       <div class="t" style="margin-top:14px"><b>${t("sd.nfTitle", "新增文件")}</b>
         ${nf.length ? `<span class="hint">${t("sd.nfN", "{n} 个 · 共 {v}")
           .replace("{n}", r.new_files_total).replace("{v}", esc(r.new_files_size))}</span>` : ""}</div>
-      ${nf.length ? (() => {
+      ${nf.length && r.files_available ? (() => {
         // 按顶层目录聚合（扫描概览同款：排行行横条 + 展开▾ 内联子项）
         const gmap = new Map();
         for (const f0 of nf) {

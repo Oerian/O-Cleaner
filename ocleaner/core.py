@@ -3113,10 +3113,16 @@ def _save_scan_snapshot(letter: str) -> None:
                 if sz0 >= 10 * 1024 * 1024:
                     file_items.append({"path": full0, "size": sz0})
         file_items.sort(key=lambda x: -x["size"])
+        # 截断线：第 300 名的体积。对比时，体积低于基线截断线的文件无法
+        # 确认「当时是否存在」（可能只是跌出基线清单），不算新增——否则
+        # Steam 等目录会因其他文件消长而在清单间进出，把存量误判成新增
+        # （2026-11-15 用户反馈 Steam 180 GB 假新增的根因）。
+        files_cutoff = file_items[299]["size"] if len(file_items) >= 300 else 0
         _atomic_write(SNAPSHOTS_DIR / f"{letter}-{today}.json",
                       {"drive": letter, "date": today,
                        "dirs": [{"path": k, "size": v} for k, v in items],
-                       "files": file_items[:300]})
+                       "files": file_items[:300],
+                       "files_cutoff": files_cutoff})
         try:
             # table["ext"] 的值是 [字节数, 个数] 列表（_ext_bump 维护）
             ext_items = []
@@ -3171,8 +3177,13 @@ def snapshot_diff(letter: str, days: int = 7) -> dict:
     cur_files = {f0["path"]: f0["size"] for f0 in latest.get("files", [])}
     past_files = {f0["path"]: f0["size"] for f0 in past.get("files", [])}
     files_available = bool(latest.get("files")) and bool(past.get("files"))
+    # 截断线过滤：体积低于基线截断线的文件无法确认「当时是否存在」，
+    # 保守排除（宁少报不误报）。基线不足 300 个文件（截断线为 0=全量
+    # 覆盖）时不过滤。
+    past_cutoff = past.get("files_cutoff") or 0
     new_files = [{"path": p0, "size": s0}
-                 for p0, s0 in cur_files.items() if p0 not in past_files]
+                 for p0, s0 in cur_files.items()
+                 if p0 not in past_files and s0 >= past_cutoff]
     new_files.sort(key=lambda x: -x["size"])
     # 高频回涨（v2.15 方向二补完）：沿时间线统计每个目录「较上次增长」
     # 的次数，≥3 次标记 hot —— 清理后反复回涨的缓存目录值得进定时清理。
