@@ -3212,7 +3212,9 @@ def snapshot_diff(letter: str, days: int = 7) -> dict:
             "diff": [{"path": x["path"], "delta": x["delta"],
                       "delta_h": human(abs(x["delta"]))
                       + (" ↑" if x["delta"] > 0 else " ↓"),
+                      "now": x["now"] or 0, "then": x["then"] or 0,
                       "now_h": human(x["now"]) if x["now"] else "—",
+                      "then_h": human(x["then"]) if x["then"] else "—",
                       "new": x["new"],
                       "hot": growth.get(x["path"], 0) >= 3}
                      for x in diff[:50]]}

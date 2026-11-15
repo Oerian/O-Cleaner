@@ -619,6 +619,22 @@
     margin:10px 0 6px;flex-wrap:nowrap;overflow-x:auto}
   .sdchart .extcol{height:100%}
   .sdchart .extcol .extvbar{border-bottom:none}
+  /* 中线柱状图（2026-11-15 用户定稿）：中央基线，增长向上暖色/回落向下绿色 */
+  .spinechart{display:flex;gap:8px;overflow-x:auto;margin:12px 0 6px;padding:4px 2px 2px}
+  .scol{flex:0 0 auto;width:72px;display:flex;flex-direction:column;align-items:stretch}
+  .shalf{height:110px;display:flex;flex-direction:column;align-items:center}
+  .shalf.up{justify-content:flex-end}
+  .shalf.down{justify-content:flex-start}
+  .shalf i{display:block;width:60%;min-height:3px}
+  .shalf.up i{border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--warn),var(--danger))}
+  .shalf.down i{border-radius:0 0 3px 3px;background:linear-gradient(180deg,var(--ok2),var(--ok))}
+  .saxis{height:2px;background:var(--line2)}
+  .sval{font-size:9.5px;color:var(--dim2);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .shalf.up .sval{margin-bottom:2px}
+  .shalf.down .sval{margin-top:2px}
+  .slab{font-size:9.5px;line-height:1.2;color:var(--dim);text-align:center;
+    overflow:hidden;max-height:28px;font-weight:normal;overflow-wrap:anywhere}
+  .sdchart .nfcol{cursor:pointer}
   .sdcmpbar{display:flex;flex-direction:row;align-items:flex-end;
     justify-content:center;gap:3px;width:62%;max-width:34px;height:130px}
   .sdcmpbar i{display:block;width:44%;min-height:3px;
@@ -6021,34 +6037,29 @@ async function openSnapDiff(selDrive) {
   $("modal").innerHTML = `<h2>${t("sd.title", "磁盘快照")}
       <span class="hint">${t("sd.sub", "两次扫描快照对比：谁在偷偷吃空间、新增了什么")}</span></h2>
     <div class="mbody">
-      <div class="d" style="display:flex;gap:8px;align-items:center">
-        <label>${t("sd.drive", "盘符：")}</label>
-        <select id="sdDrive" style="width:auto">${drives.map(d0 => `<option${d0 === drv0 ? " selected" : ""}>${d0}</option>`).join("")}</select>
-        <span class="hint">${t("sd.days", "对比最近 7 天的快照")}</span>
-      </div>
+      <div class="d hint">${t("sd.days", "对比最近 7 天的快照 · 盘符跟随上方磁盘卡切换")}</div>
       <div id="sdBody"><div class="empty"><span class="spin"></span>
         ${t("sd.loading", "正在对比扫描快照…")}</div></div>
     </div>`;
   const load0 = async () => {
-    const d0v = ($("sdDrive") || {}).value || drv0;
     const r = await apiJSON(`${API}/__oc__/snapshot/diff`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ drive: d0v, days: 7 }) }).catch(e0 => ({ error: String(e0) }));
+      body: JSON.stringify({ drive, days: 7 }) }).catch(e0 => ({ error: String(e0) }));
     const box = $("sdBody");
     if (!box) return;
     if (r.error) { box.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
     const d0 = r.diff || [];
     const nf = r.new_files || [];
-    // 2026-11-14 两轮迭代定稿：三图表全部只显示顶层目录（哈希/深路径
-    // 目录名对用户无意义）；今昔对比重构为扫描概览排行行风格
-    // （vrow + 双色横条：灰条=当时、彩条=现在，配色沿用可清理绿/建议保留橙）。
+    // 2026-11-15 用户定稿：变化区重构为**中线柱状图**——共用中央基线，
+    // 增长向上（暖色）、回落向下（绿色），每根柱即今昔对比条柱
+    // （tooltip：当时 → 现在）；两级路径聚合让条目更丰富（修复「只显示
+    // 较少条目」）；盘根排除：整盘基数巨大压扁柱形。
     const dff = d0.filter(x => x.path.replace(/[\\/]$/, "").length > 2);
-    const segName = p0 => (p0.replace(/^.:\\/, "").split(/[\\/]/)[0] || p0);
-    // 顶层目录聚合：delta/then/now 按首段路径归并
-    const aggTop = rows0 => {
+    const agg2 = rows0 => {
       const m0 = new Map();
       for (const x of rows0) {
-        const nm = segName(x.path);
+        const parts = x.path.replace(/^.:\\/, "").split(/[\\/]/);
+        const nm = (parts[0] || "根目录") + (parts[1] ? "\\" + parts[1] : "");
         const g0 = m0.get(nm) || { name: nm, delta: 0, then: 0, now: 0,
           new: false, path: x.path };
         g0.delta += x.delta; g0.now += x.now || 0; g0.then += x.then || 0;
@@ -6057,56 +6068,20 @@ async function openSnapDiff(selDrive) {
       }
       return [...m0.values()];
     };
-    const barChart = (items, color, lblKey, lblZh) => {
-      if (!items.length) return "";
-      const maxV = Math.max(1, ...items.map(x => Math.abs(x.delta)));
-      return `<div class="sdchart">${items.map(x => {
-        const h0 = Math.max(4, Math.round(Math.abs(x.delta) / maxV * 100));
-        return `<span class="extcol" title="${esc(x.path)} · ${x.delta > 0 ? "+" : "−"}${fmt(Math.abs(x.delta))}">
-          <span class="extvval">${x.delta > 0 ? "+" : "−"}${fmt(Math.abs(x.delta))}</span>
-          <span class="extvbar"><i style="height:${h0}%;background:${color}"></i></span>
-          <span class="extvlab">${esc(x.name.slice(0, 12))}</span></span>`;
-      }).join("")}</div>
-      <div class="tvlbl">${t(lblKey, lblZh)}</div>`;
-    };
-    // 增长图：delta > 0，按增量降序，暖色
-    const growth = aggTop(dff.filter(x => x.delta > 0))
-      .sort((a, b) => b.delta - a.delta).slice(0, 12);
-    const growthChart = barChart(growth,
-      "linear-gradient(180deg,var(--warn),var(--danger))",
-      "sd.growthLbl", "空间增长排行（前 12 顶层目录）");
-    // 减少图：delta < 0，按回落体积降序，绿色
-    const shrink = aggTop(dff.filter(x => x.delta < 0))
-      .sort((a, b) => a.delta - b.delta).slice(0, 12);
-    const shrinkChart = barChart(shrink,
-      "linear-gradient(180deg,var(--ok),var(--ok2))",
-      "sd.shrinkLbl", "空间回落排行（前 12 顶层目录）");
-    // 今昔对比：排行行风格（vrow），顶层目录按 |增量| 降序 top 10；
-    // 横条双层：灰=当时、彩=现在（增长=橙红、回落=绿），一眼看出涨了多少
-    const cmpRows = aggTop(dff)
-      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)).slice(0, 10);
-    const maxNow = Math.max(1, ...cmpRows.map(x => x.now || 0));
-    const cmpChart = cmpRows.length ? cmpRows.map(x => {
+    const spine = agg2(dff).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+      .slice(0, 14);
+    const maxAbs = Math.max(1, ...spine.map(x => Math.abs(x.delta)));
+    const spineChart = spine.length ? `<div class="spinechart">${spine.map(x => {
       const up = x.delta > 0;
-      const wn = Math.max(2, ((x.now || 0) / maxNow * 100)).toFixed(1);
-      const wt = Math.max(1, ((x.then || 0) / maxNow * 100)).toFixed(1);
-      return `<div class="logrow vrow ${up ? "c-keep" : "c-clean"}" style="cursor:default">
-        <div class="vtop">
-          <b class="fname">${esc(x.name)}</b>
-          <span class="vbadge ${up ? "keep" : "clean"}">${up ? "+" : "−"}${fmt(Math.abs(x.delta))}</span>
-          ${x.new ? `<span class="vbadge unk">${t("sd.newDir", "新出现")}</span>` : ""}
-          <span class="fsize">${t("sd.was", "当时")} ${fmt(x.then || 0)} → ${t("sd.now2", "现在")} ${fmt(x.now || 0)}</span>
-        </div>
-        <div class="vtrack sdtrack">
-          <i class="vthen" style="width:${wt}%"></i>
-          <i class="vfill" style="width:${wn}%"></i>
-        </div>
-      </div>`;
-    }).join("") : `<div class="empty">${t("sd.noDiff", "两次快照之间没有目录体积变化")}</div>`;
+      const h0 = Math.max(4, Math.round(Math.abs(x.delta) / maxAbs * 100));
+      const tip = `${esc(x.path)} · ${t("sd.was", "当时")} ${fmt(x.then)} → ${t("sd.now2", "现在")} ${fmt(x.now)}`;
+      const col = up
+        ? `<div class="shalf up"><span class="sval">+${fmt(Math.abs(x.delta))}</span><i style="height:${h0}%"></i></div><div class="shalf down"></div>`
+        : `<div class="shalf up"></div><div class="shalf down"><i style="height:${h0}%"></i><span class="sval">−${fmt(Math.abs(x.delta))}</span></div>`;
+      return `<div class="scol" title="${tip}">${col}<div class="saxis"></div><b class="slab">${esc(x.name.slice(0, 18))}</b></div>`;
+    }).join("")}</div>` : `<div class="empty">${t("sd.noDiff", "两次快照之间没有目录体积变化")}</div>`;
     box.innerHTML = `
-      ${growthChart}${shrinkChart}
-      ${cmpRows.length ? `<div class="t" style="margin:16px 0 8px"><b>${t("sd.cmpTitle", "今昔对比（顶层目录 · 灰条=当时 · 彩条=现在）")}</b></div>` : ""}
-      ${cmpChart}
+      ${spineChart}
       <div class="t" style="margin-top:14px"><b>${t("sd.nfTitle", "新增文件")}</b>
         ${nf.length ? `<span class="hint">${t("sd.nfN", "{n} 个 · 共 {v}")
           .replace("{n}", r.new_files_total).replace("{v}", esc(r.new_files_size))}</span>` : ""}</div>
@@ -6138,7 +6113,7 @@ async function openSnapDiff(selDrive) {
             <button class="tiny ghost nfexp" data-nf="${gi}">${t("sub.expand", "展开 ▾")}</button>
             <span class="fsize">${fmt(g0.size)}</span>
           </div>
-          <div class="vtrack"><i class="vfill" style="width:${w0}%;background:linear-gradient(90deg,var(--accent),var(--accent2))"></i></div>
+          <div class="vtrack"><i class="vfill" style="width:${w0}%;background:linear-gradient(90deg,var(--warn),var(--danger))"></i></div>
           <div class="vdesc">${t("sd.nfDesc", "新增文件 · 点击「展开」查看子项明细")}</div>
         </div>
         <div class="vrow-kids" id="nfk${gi}" style="display:none">
@@ -6156,19 +6131,19 @@ async function openSnapDiff(selDrive) {
             ? t("sd.nfNone", "没有新增文件")
             : t("sd.nfOld", "对比基线太老（当时还没有文件清单）——明天再对比即可看到新增文件")}</div>`}`;
   };
-  $("sdDrive").addEventListener("change", load0);
-  // 新增文件行「展开 ▾」：内联显示该顶层目录的新增文件明细
-  const sdBodyEl = document.getElementById("sdBody");
-  if (sdBodyEl) sdBodyEl.addEventListener("click", e0 => {
-    const btn0 = e0.target.closest(".nfexp");
-    if (!btn0) return;
-    const kids0 = document.getElementById("nfk" + btn0.dataset.nf);
-    if (!kids0) return;
-    const open0 = kids0.style.display !== "none";
-    kids0.style.display = open0 ? "none" : "";
-    btn0.textContent = open0 ? t("sub.expand", "展开 ▾") : t("sub.collapse", "收起 ▴");
-    if (!open0) kids0.scrollIntoView({ block: "nearest" });
-  });
+  if (!_nfExpBound) {
+    _nfExpBound = true;
+    $("modal").addEventListener("click", e0 => {
+      const btn0 = e0.target.closest(".nfexp");
+      if (!btn0) return;
+      const kids0 = document.getElementById("nfk" + btn0.dataset.nf);
+      if (!kids0) return;
+      const open0 = kids0.style.display !== "none";
+      kids0.style.display = open0 ? "none" : "";
+      btn0.textContent = open0 ? t("sub.expand", "展开 ▾") : t("sub.collapse", "收起 ▴");
+      if (!open0) kids0.scrollIntoView({ block: "nearest" });
+    });
+  }
   await load0();
 }
 
@@ -7522,6 +7497,7 @@ const I18N_EN = {
   "sd.nfOther": "Other directories",
   "sd.nfMerged": "multiple directories merged",
   "sd.nfTrunc": "showing first {n} only",
+  "sd.cmpTitle": "Then vs now (top-level dirs · gray bar = before · colored bar = now)",
   "sd.nfDesc": "New files · click “Expand” for details",
   "sd.cmpTitle": "Then vs now (top-level dirs · gray = before · colored = now)",
   "cc.dupNote": "Duplicate file copy (full SHA-256 verified against the kept baseline)",
@@ -7780,6 +7756,7 @@ function langParam() {
 /** fetch + JSON 解析的统一入口。网络异常仍由调用方 try/catch 处理 ——
     这里只收拢「取回再 .json()」这段样板，不吞错误。 */
 let _anSeq = 0;              // 分析工具时序号：切页签即递增，旧 fetch 结果作废
+let _nfExpBound = false;     // 快照面板「展开▾」modal 级委托（sdBody 每次重绘都会重建，不能绑在那里）
 let _lastCleanReq = null;   // 最近一次清理的请求载荷（结果弹窗「永久删除」重试用）
 let _dupAllPaths = new Set();   // 重复大文件面板当前的全部副本路径
 let _dupSelPaths = new Set();   // 其中被勾选的（确认弹窗标注副本语义用）
