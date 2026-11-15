@@ -504,6 +504,10 @@
                font-variant-numeric:tabular-nums;white-space:nowrap}
   .vrow .vtrack{height:17px;border-radius:4px;background:var(--panel-hover);overflow:hidden;
                 display:flex;align-items:center}
+  .logrow .vtrack{height:14px;border-radius:4px;background:var(--panel-hover);
+    overflow:hidden;display:flex;align-items:center;flex:0 0 28%}
+  .logrow .vfill{height:100%;border-radius:4px;min-width:3px;
+    background:linear-gradient(90deg,var(--ok),var(--ok2))}
   .vrow .vfill{height:100%;border-radius:4px;min-width:3px;
                background:linear-gradient(90deg,var(--accent),var(--accent2));transition:.24s}
   .vrow.c-clean .vfill{background:linear-gradient(90deg,var(--ok),var(--ok2))}
@@ -5946,7 +5950,21 @@ async function openJunctionMove() {
   });
   $("jmClose").addEventListener("click", closeModal);
   $("jmGo").addEventListener("click", async () => {
-    const src = $("jmSrc").value.trim();
+  // 源盘联动：源路径的盘符与目标盘相同时自动跳到下一目标盘
+  $("jmSrc").addEventListener("input", () => {
+    const sDrv = ($("jmSrc").value.trim().match(/^([A-Za-z]):/) || [])[1];
+    if (!sDrv) return;
+    const sel = $("jmDrive");
+    if (!sel) return;
+    const opt = [...sel.options].find(o0 => o0.value.toUpperCase() === sDrv.toUpperCase());
+    if (opt) { opt.disabled = true; }
+    else [...sel.options].forEach(o0 => { o0.disabled = false; });
+    if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
+      const first = [...sel.options].find(o0 => !o0.disabled);
+      if (first) sel.value = first.value;
+    }
+  });
+  const src = $("jmSrc").value.trim();
     if (!src) { toast(t("jm.needSrc", "请填源目录")); return; }
     const mode = $("jmMode").value;
     let dst;
