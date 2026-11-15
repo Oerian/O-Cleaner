@@ -6034,10 +6034,8 @@ async function openSnapDiff(selDrive) {
   const cur = String(selDrive || drive || "C");
   const drvSel = cur.replace(/:$/, "").toUpperCase();
   const drv0 = drvSel[0] || "C";
-  $("modal").innerHTML = `<h2>${t("sd.title", "磁盘快照")}
-      <span class="hint">${t("sd.sub", "两次扫描快照对比：谁在偷偷吃空间、新增了什么")}</span></h2>
+  $("modal").innerHTML = `<h2>${t("sd.title", "磁盘快照")}</h2>
     <div class="mbody">
-      <div class="d hint">${t("sd.days", "对比最近 7 天的快照 · 盘符跟随上方磁盘卡切换")}</div>
       <div id="sdBody"><div class="empty"><span class="spin"></span>
         ${t("sd.loading", "正在对比扫描快照…")}</div></div>
     </div>`;
@@ -6058,8 +6056,7 @@ async function openSnapDiff(selDrive) {
     const agg2 = rows0 => {
       const m0 = new Map();
       for (const x of rows0) {
-        const parts = x.path.replace(/^.:\\/, "").split(/[\\/]/);
-        const nm = (parts[0] || "根目录") + (parts[1] ? "\\" + parts[1] : "");
+        const nm = x.path.replace(/^.:\\/, "").split(/[\\/]/)[0] || "根目录";
         const g0 = m0.get(nm) || { name: nm, delta: 0, then: 0, now: 0,
           new: false, path: x.path };
         g0.delta += x.delta; g0.now += x.now || 0; g0.then += x.then || 0;
