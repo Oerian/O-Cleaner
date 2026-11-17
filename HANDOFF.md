@@ -1963,3 +1963,8 @@ SECURITY 该处表述未动。
 - **确认非缺陷**（截图误读）：游戏页顶部磁盘卡为常驻左栏元素（游戏卡片在其下方）；迁移下拉 C: 为 others 排除 is_system 后的正常值；dup 组 xdir 判定与当前缓存数据一致（旧截图疑点为旧数据）。
 - 审计正常项：扫描概览布局/趋势图/类型分布/游戏行徽章/应用专清与毒瘤空态/快照中线图/下载分类头全选/迁移表单。
 - 测试：unit_test **24-0** · selftest **595-0-6** · lint strict **0 错** · CDP 截图前后对比（横条从不可见→按比例渲染）。
+
+**㊿补二（2026-11-17）：图表标签单行省略化**——
+- 用户反馈图表目录名长（deliveryoptimization）换行影响美观——中线图 .slab 与类型分布 .extvlab 由「换行（max-height+overflow-wrap）」改为「单行省略号（white-space:nowrap+text-overflow:ellipsis）」；清除 sdchart 的换行放宽覆写；新增文件行目录名加 title 悬浮全名。
+- 教训：图表固定宽度容器内的文本标签一律 nowrap+ellipsis（换行破坏柱形对齐），全称用 title/展开明细承载。
+- 测试：unit_test **24-0** · selftest **595-0-6** · lint strict **0 错** · CDP 截图确认（deliveryoptim… 单行省略/无换行/零错误）。

@@ -454,7 +454,7 @@
   .extcol .extvbar{flex:1;display:flex;align-items:flex-end;justify-content:center}
   .extcol .extvlab{height:24px;display:flex;align-items:flex-start;justify-content:center;
     font-size:9.5px;line-height:1.15;color:var(--dim);
-    overflow-wrap:anywhere;text-align:center}
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;max-width:100%}
 
   /* 磁盘卡组件槽（2026-11-03）：剩余空间趋势（类型分布同款竖柱）/
      清理记录 / 类型分布，页签切换，图表在占比环右侧。 */
@@ -637,14 +637,15 @@
   .shalf.up .sval{margin-bottom:2px}
   .shalf.down .sval{margin-top:2px}
   .slab{font-size:9.5px;line-height:1.2;color:var(--dim);text-align:center;
-    overflow:hidden;max-height:28px;font-weight:normal;overflow-wrap:anywhere}
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    font-weight:normal}
   .sdchart .nfcol{cursor:pointer}
   .sdcmpbar{display:flex;flex-direction:row;align-items:flex-end;
     justify-content:center;gap:3px;width:62%;max-width:34px;height:130px}
   .sdcmpbar i{display:block;width:44%;min-height:3px;
     border-radius:3px 3px 0 0;
     background:linear-gradient(180deg,var(--accent),var(--accent2))}
-  .sdchart .extvlab{height:auto;max-height:26px}
+
   .sdtrack{position:relative;height:17px;border-radius:4px;
     background:var(--panel-hover);overflow:hidden}
   .sdtrack .vthen{position:absolute;left:0;top:0;height:100%;
@@ -6122,7 +6123,7 @@ async function openSnapDiff(selDrive) {
           const w0 = Math.max(2, (g0.size / maxG * 100)).toFixed(1);
           return `<div class="vrow-wrap"><div class="vrow" data-nf="${gi}">
           <div class="vtop">
-            <b class="fname">${esc(g0.name)}</b>
+            <b class="fname" title="${esc(g0.name)}">${esc(g0.name)}</b>
             <span class="vbadge clean">${g0.count} ${t("fs.extFilesShort", "个")}</span>
             ${g0.merged ? `<span class="vbadge unk">${t("sd.nfMerged", "多目录合并")}</span>` : ""}
             <button class="tiny ghost nfexp" data-nf="${gi}">${t("sub.expand", "展开 ▾")}</button>
