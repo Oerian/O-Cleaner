@@ -1968,3 +1968,10 @@ SECURITY 该处表述未动。
 - 用户反馈图表目录名长（deliveryoptimization）换行影响美观——中线图 .slab 与类型分布 .extvlab 由「换行（max-height+overflow-wrap）」改为「单行省略号（white-space:nowrap+text-overflow:ellipsis）」；清除 sdchart 的换行放宽覆写；新增文件行目录名加 title 悬浮全名。
 - 教训：图表固定宽度容器内的文本标签一律 nowrap+ellipsis（换行破坏柱形对齐），全称用 title/展开明细承载。
 - 测试：unit_test **24-0** · selftest **595-0-6** · lint strict **0 错** · CDP 截图确认（deliveryoptim… 单行省略/无换行/零错误）。
+
+**㊿补三（2026-11-17）：UX 第十二轮——分析中心排行行统一（本地提交，未推送）**——
+- **大文件排行**：改扫描概览同款排行行（勾选→selPaths→底部全局按钮；勾选的大文件在 doClean 分流走 delete-paths 文件通道并 toast 结果；体积经 _bfSizes 精确回填底部预估）。
+- **重复大文件**：改组级排行行（组勾选=整组副本联动 selPaths/横条 ∝ 可回收/展开▾ 内联副本明细/跨目录确认门保留于组头）——扁平路径列表退役。
+- **事故**：UX-12 补丁的 EOL 写盘把 web/index.html 全文变成「每行间双空行」（写盘链 \r\n→\n→\r\n 往返遇既有 \r\r\n 残留放大）——git checkout 恢复 HEAD 后按段重应用，写盘后 wc -l + grep '\r\r' 校验。
+- **CI 推送策略变更（用户指示）**：日常迭代只本地提交，攒到推送大版本时一并 push 触发 CI。
+- 测试：unit_test **24-0** · selftest **595-0-6** · lint strict **0 错** · CDP 断言（bf 30 行/勾选联动 32.0GB/dup 3 组行/展开明细/组勾选联动/零错误）。
