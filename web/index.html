@@ -90,7 +90,7 @@
   @keyframes vin-l{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:none}}
   @keyframes vin-r{from{opacity:0;transform:translateX(-18px)}to{opacity:1;transform:none}}
   .fspanel.slide-l{animation:vin-l .18s ease-out}
-  .slide-l,.slide-r{will-change:transform}
+  /* will-change 已移除：大面板常驻合成层在 Edge 上偶发整屏黑块（点击消失复现），切换动画无需它 */
   .fspanel.slide-r{animation:vin-r .18s ease-out}
   @media (prefers-reduced-motion:reduce){.fspanel.slide-l,.fspanel.slide-r{animation:none}}
   /* 小视口吸顶头收敛（#42）：矮窗口里头部压到一行、去副标题与毛玻璃重绘，
@@ -5578,7 +5578,7 @@ function renderBfRows() {
   // 2026-11-17 用户要求：只显示顶层目录（聚合），可展开查看目录内的大文件
   const gmap = new Map();
   for (const f0 of list) {
-    const nm0 = f0.dir.replace(/^.:\\/, "").split(/[\\/]/)[0] || "根目录";
+    const nm0 = f0.dir.replace(/^.:\\/, "").split(/[\\/]/)[0] || "盘根散落文件";
     const g0 = gmap.get(nm0) || { name: nm0, size: 0, count: 0, files: [] };
     g0.size += f0.size || 0; g0.count += 1;
     if (g0.files.length < 40) g0.files.push(f0);
@@ -6210,7 +6210,7 @@ async function openSnapDiff(selDrive) {
     const agg2 = rows0 => {
       const m0 = new Map();
       for (const x of rows0) {
-        const nm = x.path.replace(/^.:\\/, "").split(/[\\/]/)[0] || "根目录";
+        const nm = x.path.replace(/^.:\\/, "").split(/[\\/]/)[0] || "盘根散落文件";
         const g0 = m0.get(nm) || { name: nm, delta: 0, then: 0, now: 0,
           new: false, path: x.path };
         g0.delta += x.delta; g0.now += x.now || 0; g0.then += x.then || 0;
