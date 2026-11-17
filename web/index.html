@@ -5777,6 +5777,15 @@ async function openDupFiles() {
     });
     updateFooter();
     syncPicked();
+    expandAllDupKids();
+  };
+  const expandAllDupKids = () => {
+    // 勾选结果在收起的明细里看不见——操作后自动展开全部组（2026-11-17）
+    document.querySelectorAll("#modal .vrow-wrap[data-gsize] .vrow-kids")
+      .forEach(k0 => { k0.style.display = ""; });
+    document.querySelectorAll("#modal .dupexp").forEach(b0 => {
+      b0.textContent = t("sub.collapse", "收起 ▴");
+    });
   };
   const allBtn = $("dupAll"), noneBtn = $("dupNone"), presetEl = $("dupPreset");
   if (allBtn) allBtn.addEventListener("click", () => {
@@ -5789,6 +5798,7 @@ async function openDupFiles() {
     });
     updateFooter();
     syncPicked();
+    expandAllDupKids();
   });
   if (noneBtn) noneBtn.addEventListener("click", () => {
     document.querySelectorAll("#modal .dupChk").forEach(c => {
@@ -6222,21 +6232,6 @@ async function openSnapDiff(selDrive) {
             ? t("sd.nfNone", "没有新增文件")
             : t("sd.nfOld", "对比基线太老（当时还没有文件清单）——明天再对比即可看到新增文件")}</div>`}`;
   };
-  if (!_nfExpBound) {
-    _nfExpBound = true;
-    $("modal").addEventListener("click", e0 => {
-      const btn0 = e0.target.closest(".nfexp,.dupexp");
-      if (!btn0) return;
-      const kids0 = btn0.classList.contains("nfexp")
-        ? document.getElementById("nfk" + btn0.dataset.nf)
-        : document.getElementById("dupk" + btn0.dataset.i);
-      if (!kids0) return;
-      const open0 = kids0.style.display !== "none";
-      kids0.style.display = open0 ? "none" : "";
-      btn0.textContent = open0 ? t("sub.expand", "展开 ▾") : t("sub.collapse", "收起 ▴");
-      if (!open0) kids0.scrollIntoView({ block: "nearest" });
-    });
-  }
   await load0();
 }
 
@@ -6337,8 +6332,7 @@ async function openDownloadsAdvice() {
           const w0 = Math.max(2, ((it.size || 0) / (g.size || 1) * 100)).toFixed(1);
           return `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" class="dlChk" data-p="${esc(it.path)}">
-          <span style="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name)}</span>
-          <span class="vtrack" style="flex:0 0 28%"><i class="vfill" style="width:${w0}%"></i></span>
+          <span style="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(it.path)}">${esc(it.name)}</span>
           <span class="hint" style="flex:none">${it.size_h}</span></label>`;
         }).join("")}</div>` : ""}
         ${g.names && g.names.length && !(g.items || []).length ? `<div class="d" style="word-break:break-all">
@@ -7853,7 +7847,21 @@ function langParam() {
 /** fetch + JSON 解析的统一入口。网络异常仍由调用方 try/catch 处理 ——
     这里只收拢「取回再 .json()」这段样板，不吞错误。 */
 let _anSeq = 0;              // 分析工具时序号：切页签即递增，旧 fetch 结果作废
-let _nfExpBound = false;     // 快照面板「展开▾」modal 级委托（sdBody 每次重绘都会重建，不能绑在那里）
+// 展开▾（快照新增文件/重复组）modal 级事件委托：脚本加载即绑定一次——
+// modal 元素持久，子内容重绘不影响；此前绑在工具函数里导致「未打开过
+// 快照页签时重复组的展开▾ 完全失效」（2026-11-17 用户反馈）。
+document.getElementById("modal").addEventListener("click", e0 => {
+  const btn0 = e0.target.closest(".nfexp,.dupexp");
+  if (!btn0) return;
+  const kids0 = btn0.classList.contains("nfexp")
+    ? document.getElementById("nfk" + btn0.dataset.nf)
+    : document.getElementById("dupk" + btn0.dataset.i);
+  if (!kids0) return;
+  const open0 = kids0.style.display !== "none";
+  kids0.style.display = open0 ? "none" : "";
+  btn0.textContent = open0 ? t("sub.expand", "展开 ▾") : t("sub.collapse", "收起 ▴");
+  if (!open0) kids0.scrollIntoView({ block: "nearest" });
+});
 let _lastCleanReq = null;   // 最近一次清理的请求载荷（结果弹窗「永久删除」重试用）
 let _bfAllPaths = new Set();    // 大文件排行当前的全部文件路径
 let _bfSelPaths = new Set();    // 其中被勾选的（文件级清理走 delete-paths）
