@@ -4362,13 +4362,19 @@ function renderChart() {
       || ((b.size || 0) - (a.size || 0)));
     // 合并展示：一行汇总 + 可展开成员（成员行复用主列表 vrow 渲染）
     const hSize = rows.reduce((a, n0) => a + (n0.size || 0), 0);
-    rows.splice(0, rows.length, {
+    const hAgg = {
       name: t("fs.hiddenAggName", "系统隐藏项"), hidden_agg: true,
       agg_count: rows.length, agg_members: rows.slice(0, 40),
       path: "__oc_hidden_tab__", type: "dir", depth: 1,
       size: hSize, size_h: fmt(hSize), modified: "", recognized: false,
       cleanable: false, category: "", hidden_sys: true,
-    });
+    };
+    rows.splice(0, rows.length, hAgg);
+    // 2026-11-17 修复：隐藏页签的汇总行此前无法展开——hidden 分支每次
+    // 重渲染都会覆盖 rows，hiddenAggOpen 的成员注入从未生效。补上注入。
+    if (hiddenAggOpen) {
+      rows.splice(1, 0, ...hAgg.agg_members.map(m => ({ ...m, hid_member: true })));
+    }
   }
   else if (fsMode === "biggest") {
     // 全盘最大项目：纯按体积降序，把中间容器（steamapps/common 等）剔掉，
@@ -5578,7 +5584,7 @@ function renderBfRows() {
   // 2026-11-17 用户要求：只显示顶层目录（聚合），可展开查看目录内的大文件
   const gmap = new Map();
   for (const f0 of list) {
-    const nm0 = f0.dir.replace(/^.:\\/, "").split(/[\\/]/)[0] || "盘根散落文件";
+    const nm0 = f0.dir.replace(/^.:\\/, "").split(/[\\/]/)[0] || "系统隐藏项";
     const g0 = gmap.get(nm0) || { name: nm0, size: 0, count: 0, files: [] };
     g0.size += f0.size || 0; g0.count += 1;
     if (g0.files.length < 40) g0.files.push(f0);
@@ -6210,7 +6216,7 @@ async function openSnapDiff(selDrive) {
     const agg2 = rows0 => {
       const m0 = new Map();
       for (const x of rows0) {
-        const nm = x.path.replace(/^.:\\/, "").split(/[\\/]/)[0] || "盘根散落文件";
+        const nm = x.path.replace(/^.:\\/, "").split(/[\\/]/)[0] || "系统隐藏项";
         const g0 = m0.get(nm) || { name: nm, delta: 0, then: 0, now: 0,
           new: false, path: x.path };
         g0.delta += x.delta; g0.now += x.now || 0; g0.then += x.then || 0;
