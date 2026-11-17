@@ -1925,7 +1925,11 @@ function drawDiskTrend() {
       }));
   }
   const dk = STATE.disk || {};
-  if (!dk || !dk.total) { body.innerHTML = ""; return; }
+  if (!dk || !dk.total) {
+    body.innerHTML = `<div class="tvlbl">${t("dw.pending",
+      "等待扫描数据——扫描完成后这里会显示图表")}</div>`;
+    return;
+  }
   if (_dwWid === "ext") { _dwRenderExt(body); return; }
   if (_dwWid === "clean") { _dwRenderCleanups(body); return; }
   _dwRenderTrend(body, dk);
@@ -1959,11 +1963,15 @@ function _dwRenderTrend(body, dk) {
   if (span > 0) { lo -= span * 0.18; hi += span * 0.18; }
   else { const zpad = Math.max((dk.total || 0) * 0.01, 2 * 1024 ** 3); lo -= zpad; hi += zpad; }
   const tipFree = t("trend.tipFree", "剩余");
+  // 2026-11-17 用户要求：数值带常显（三段定高，同一基线对齐）+ 悬停 title
   body.innerHTML =
-    `<div class="tv">${pts.map((p, i) => {
+    `<div class="sdchart" style="height:170px">${pts.map((p, i) => {
       const h = Math.max(4, Math.round((p.free - lo) / (hi - lo) * 100));
-      return `<span class="tvcol${i === pts.length - 1 ? " last" : ""}"` +
-        ` title="${md(p.t)} · ${tipFree} ${fmt(p.free)}"><i style="height:${h}%"></i></span>`;
+      return `<span class="extcol" title="${md(p.t)} · ${tipFree} ${fmt(p.free)}"` +
+        `${i === pts.length - 1 ? ' data-last="1"' : ""}>
+        <span class="extvval">${fmt(p.free)}</span>
+        <span class="extvbar"><i style="height:${h}%${i === pts.length - 1 ? ";opacity:1" : ""}"></i></span>
+        <span class="extvlab">${md(p.t)}</span></span>`;
     }).join("")}</div>` +
     `<div class="tvlbl">${esc(t("trend.freeLbl",
         "剩余空间趋势（{d1} ~ {d2}）：{a} → {b} · 最低 {min} · 最高 {max}")
@@ -4348,10 +4356,19 @@ function renderChart() {
       seen.add(k);
       return true;
     });
-    // 2026-11-10 用户反馈：隐藏项里混着大量「不可清理」的 NTFS 元文件
-    // （$Recycle.Bin 元数据、System Volume Information 等）—— 把可清理
-    // 的排在前面，不可清理的沉底弱化，别让元文件淹没真正有用的候选。
-    rows.sort((a, b) => (b.cleanable ? 1 : 0) - (a.cleanable ? 1 : 0));
+    // 2026-11-17 用户要求：隐藏项合并展示——不再逐行平铺，合成一行汇总
+    // （可展开成员），成员按体积降序、可清理优先。
+    rows.sort((a, b) => ((b.cleanable ? 1 : 0) - (a.cleanable ? 1 : 0))
+      || ((b.size || 0) - (a.size || 0)));
+    // 合并展示：一行汇总 + 可展开成员（成员行复用主列表 vrow 渲染）
+    const hSize = rows.reduce((a, n0) => a + (n0.size || 0), 0);
+    rows.splice(0, rows.length, {
+      name: t("fs.hiddenAggName", "系统隐藏项"), hidden_agg: true,
+      agg_count: rows.length, agg_members: rows.slice(0, 40),
+      path: "__oc_hidden_tab__", type: "dir", depth: 1,
+      size: hSize, size_h: fmt(hSize), modified: "", recognized: false,
+      cleanable: false, category: "", hidden_sys: true,
+    });
   }
   else if (fsMode === "biggest") {
     // 全盘最大项目：纯按体积降序，把中间容器（steamapps/common 等）剔掉，
@@ -5558,26 +5575,49 @@ function renderBfRows() {
   const days = sel ? parseInt(sel.value || "0", 10) : 0;
   const cut = _bfCutoff(days);
   const list = cut ? _bfFiles.filter(f => (f.mtime || "") >= cut) : _bfFiles;
-  const maxBf = Math.max(1, ...list.map(f => f.size || 0));
-  const rows = list.map((f, i) => {
-    const w0 = Math.max(2, ((f.size || 0) / maxBf * 100)).toFixed(1);
+  // 2026-11-17 用户要求：只显示顶层目录（聚合），可展开查看目录内的大文件
+  const gmap = new Map();
+  for (const f0 of list) {
+    const nm0 = f0.dir.replace(/^.:\\/, "").split(/[\\/]/)[0] || "根目录";
+    const g0 = gmap.get(nm0) || { name: nm0, size: 0, count: 0, files: [] };
+    g0.size += f0.size || 0; g0.count += 1;
+    if (g0.files.length < 40) g0.files.push(f0);
+    gmap.set(nm0, g0);
+  }
+  const garr = [...gmap.values()].sort((a, b) => b.size - a.size);
+  const maxBf = Math.max(1, ...garr.map(g0 => g0.size));
+  const rows = garr.map((g0, i) => {
+    const w0 = Math.max(2, (g0.size / maxBf * 100)).toFixed(1);
     return `
-    <div class="logrow vrow-wrap"><div class="vrow ${f.cleanable ? "c-clean" : "c-keep"}" data-bf="${i}">
+    <div class="logrow vrow-wrap" data-bfg="${i}"><div class="vrow" data-bf="${i}">
       <div class="vtop">
-        <input type="checkbox" class="bfChk" data-p="${esc(f.path)}"
-          ${_bfSelPaths.has(f.path) ? "checked" : ""}
-          title="${t("fs.tickTitle", "勾选这项参与清理")}">
-        <b class="fname" title="${esc(f.path)}">${esc(f.name)}</b>
-        ${f.cleanable ? `<span class="vbadge clean">${t("badge.clean", "可清理")}</span>`
-                      : `<span class="vbadge keep">${t("badge.keep", "建议保留")}</span>`}
-        ${f.title ? `<span class="vbadge unk">${esc(f.title)}</span>` : ""}
-        <button class="tiny ghost rcpt" data-p="${esc(f.path)}">${t("bf.reveal", "打开位置")}</button>
-        <span class="fsize">${fmt(f.size)}</span>
+        <input type="checkbox" class="bfGChk" data-i="${i}"
+          title="${t("bf.gChkTitle", "勾选=选中本目录全部大文件")}">
+        <button class="tiny ghost bfexp" data-i="${i}">${t("sub.expand", "展开 ▾")}</button>
+        <b class="fname" title="${esc(g0.name)}">${esc(g0.name)}</b>
+        <span class="vbadge clean">${g0.count} ${t("fs.extFilesShort", "个")}</span>
+        <span class="fsize">${fmt(g0.size)}</span>
       </div>
       <div class="vtrack"><i class="vfill" style="width:${w0}%"></i></div>
-      <div class="vdesc"><b>${i + 1}</b> · ${esc(f.dir)}
-        ${f.mtime ? ` · ${esc(f.mtime)}` : ""}
-        ${f.what ? ` · ${esc(f.what)}` : ""}</div>
+      <div class="vdesc">${i + 1} · ${t("bf.gDesc", "大文件聚合 · 点击「展开」查看目录内的大文件")}</div>
+    </div>
+    <div class="vrow-kids" id="bfk${i}" style="display:none">
+      ${g0.files.map(f0 => `
+      <div class="logrow">
+        <div class="t"><label style="cursor:pointer;display:flex;align-items:center;gap:8px">
+        <input type="checkbox" class="bfChk" data-p="${esc(f0.path)}"
+          ${_bfSelPaths.has(f0.path) ? "checked" : ""}>
+        <span style="min-width:0;flex:1;word-break:break-all" title="${esc(f0.path)}">${esc(f0.name)}</span></label>
+        ${f0.cleanable ? `<span class="vbadge clean">${t("badge.clean", "可清理")}</span>`
+                       : `<span class="vbadge keep">${t("badge.keep", "建议保留")}</span>`}
+        <a href="javascript:void(0)" class="rcpt" data-p="${esc(f0.path)}"
+           style="margin-left:6px">${t("bf.reveal", "打开位置")}</a>
+        <span class="freed" style="margin-left:10px">${fmt(f0.size)}</span></div>
+        <div class="d" style="word-break:break-all">${esc(f0.dir)}
+          ${f0.mtime ? ` · <span style="color:var(--dim2)">${esc(f0.mtime)}</span>` : ""}</div>
+      </div>`).join("")}
+      ${g0.count > g0.files.length ? `<div class="hint" style="padding:4px 8px">
+        ${t("sd.nfTrunc", "仅展示前 {n} 个，其余略").replace("{n}", g0.files.length)}</div>` : ""}
     </div></div>`;
   }).join("");
   $("bfRows").innerHTML = rows ||
@@ -5633,8 +5673,18 @@ async function openBigFiles() {
   $("bfAge").addEventListener("change", renderBfRows);
   [...document.querySelectorAll("#modal .bfChk")].forEach(c =>
     c.addEventListener("change", () => {
-      if (c.checked) selPaths.add(c.dataset.p);
-      else selPaths.delete(c.dataset.p);
+      if (c.checked) { selPaths.add(c.dataset.p); _bfSelPaths.add(c.dataset.p); }
+      else { selPaths.delete(c.dataset.p); _bfSelPaths.delete(c.dataset.p); }
+      updateFooter();
+    }));
+  [...document.querySelectorAll("#modal .bfGChk")].forEach(g0 =>
+    g0.addEventListener("change", () => {
+      const w0 = g0.closest(".vrow-wrap");
+      w0.querySelectorAll(".bfChk").forEach(c0 => {
+        c0.checked = g0.checked;
+        if (g0.checked) { selPaths.add(c0.dataset.p); _bfSelPaths.add(c0.dataset.p); }
+        else { selPaths.delete(c0.dataset.p); _bfSelPaths.delete(c0.dataset.p); }
+      });
       updateFooter();
     }));
   $("bfClose").addEventListener("click", closeModal);
@@ -7590,6 +7640,9 @@ const I18N_EN = {
   "dup.xdirAck2": "confirm redundant",
   "bf.done": "Moved {n}/{total} big files to the Recycle Bin",
   "cc.bfNote": "Big-file ranking selection: file-level cleanup, restorable from the Recycle Bin",
+  "bf.gChkTitle": "tick = select all big files in this directory",
+  "bf.gDesc": "Aggregated big files · click Expand for the files inside",
+  "dw.pending": "Waiting for scan data — charts appear when the scan finishes",
   "sd.nfDesc": "New files · click “Expand” for details",
   "cc.dupNote": "Duplicate file copy (full SHA-256 verified against the kept baseline)",
   "dup.xdirAck": "tick to confirm before checking the copies below",
@@ -7851,11 +7904,13 @@ let _anSeq = 0;              // 分析工具时序号：切页签即递增，旧
 // modal 元素持久，子内容重绘不影响；此前绑在工具函数里导致「未打开过
 // 快照页签时重复组的展开▾ 完全失效」（2026-11-17 用户反馈）。
 document.getElementById("modal").addEventListener("click", e0 => {
-  const btn0 = e0.target.closest(".nfexp,.dupexp");
+  const btn0 = e0.target.closest(".nfexp,.dupexp,.bfexp");
   if (!btn0) return;
   const kids0 = btn0.classList.contains("nfexp")
     ? document.getElementById("nfk" + btn0.dataset.nf)
-    : document.getElementById("dupk" + btn0.dataset.i);
+    : btn0.classList.contains("bfexp")
+      ? document.getElementById("bfk" + btn0.dataset.i)
+      : document.getElementById("dupk" + btn0.dataset.i);
   if (!kids0) return;
   const open0 = kids0.style.display !== "none";
   kids0.style.display = open0 ? "none" : "";
