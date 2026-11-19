@@ -140,7 +140,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 | `config/kb-en.json` | 内置知识库与资源包长文本的英文译文 |
 | `packs\` | 内置资源包（5 组 172 条释义扩展，支持导入第三方包与在线更新） |
 | `data\` | 运行数据目录（`history.json`、`schedule.json`、`disk-trend.json`、`pending-deletes.json`、`receipts\`） |
-| `tools\` | 质量门禁与打包脚本（`lint_rules.py` 校验知识库与资源包安全闸门、`guard_matrix.py` 50 项删除护栏矩阵、`unit_test.py` 秒级纯逻辑单测、`selftest.py` 全量功能自测、`cdp_check.js` 浏览器渲染检查、`make_package.py` / `make_exe.py` 发行打包；贡献规则或修改配置前必须通过闸门） |
+| `tools\` | 质量门禁与打包脚本（`lint_rules.py` 校验知识库与资源包安全闸门、`guard_matrix.py` 50 项删除护栏矩阵、`unit_test.py` 秒级纯逻辑单测、`selftest.py` 全量功能自测、`check_undefined.py` 跨模块引用完整性、`doctor.py` 跨机环境自检、`cdp_check.js` 浏览器渲染检查、`make_package.py` / `make_exe.py` 发行打包；贡献规则或修改配置前必须通过闸门） |
 
 ## 文档索引
 
