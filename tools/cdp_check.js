@@ -737,7 +737,7 @@ class CDP {
     const onId = (segs.find(s => s.classList.contains('on'))||{dataset:{}}).dataset.dw || '';
     const n = (typeof DISK_TREND !== 'undefined' && Array.isArray(DISK_TREND)) ? DISK_TREND.length : -1;
     return { hasBody: !!body, segs: segs.length, on, onId, n, lbl,
-             bars: body ? body.querySelectorAll('.tvcol').length : 0 };
+             bars: body ? body.querySelectorAll('.extcol, .tvcol').length : 0 };
   })()`);
   checkScan("磁盘卡组件槽：三页签、趋势默认选中且柱状图就位",
         dtr.hasBody && dtr.segs === 3 && dtr.on && dtr.onId === "trend"
@@ -767,7 +767,7 @@ class CDP {
       const nm = r.querySelector('.fname');
       const fill = r.querySelector('.vfill');
       const track = r.querySelector('.vtrack');
-      if (!nm || !nm.innerText.trim()) out.noName++;
+      if (!nm || !(nm.textContent || "").trim()) out.noName++;
       if (!fill || !track) { out.noFill++; continue; }
       const nb = nm.getBoundingClientRect(), tb = track.getBoundingClientRect();
       if (nb.bottom <= tb.top + 2) out.nameAbove++;
@@ -821,24 +821,31 @@ class CDP {
     const label = s.innerText.trim();
     s.click();
     const on = (document.querySelector('#fsModes .seg.on') || {}).dataset?.m;
-    const rows = document.querySelectorAll('#fsChart .vrow').length;
+    const agg = document.querySelector('#fsChart .vrow-wrap.hagg .vrow');
+    let rows = document.querySelectorAll('#fsChart .vrow').length;
+    let expandedRows = rows;
+    if (agg) {
+      agg.click();
+      expandedRows = document.querySelectorAll('#fsChart .vrow-wrap.hidm').length;
+      const agg2 = document.querySelector('#fsChart .vrow-wrap.hagg .vrow');
+      if (agg2) agg2.click();
+    }
     const back = document.querySelector('#fsModes .seg[data-m="' + before + '"]');
     if (back) back.click();
     const after = (document.querySelector('#fsModes .seg.on') || {}).dataset?.m;
-    return { ok: true, label, on, rows, before, after };
+    return { ok: true, label, on, rows, expandedRows, hasAgg: !!agg, before, after };
   })()`);
   check("占用排行有「隐藏项」页签且可切换",
         hidTab.ok && hidTab.on === "hidden", JSON.stringify(hidTab));
   check("从隐藏项页签能一键切回原视图",
         !!hidTab.before && hidTab.after === hidTab.before,
         `${hidTab.before} → ${hidTab.after}`);
-  // 页签上的计数必须和实际渲染的行数对得上（超过 30 行时只取前 30，属正常截断）。
-  // 计数改成按路径去重就是为了这一条：下钻过之后 /subdirs 会把同一目录再补一份，
-  // 不去重时会出现「页签写 14 项、只列出 12 行」的自相矛盾。
+  // UX-13 起隐藏项页签默认折叠为 1 行汇总（点击展开为成员行，超过 30 截断）。
   const hidN = Number((String(hidTab.label || "").match(/(\d+)/) || [])[1]);
+  const hidShown = hidTab.hasAgg ? hidTab.expandedRows : hidTab.rows;
   check("隐藏项页签的计数与实际行数一致",
-        Number.isFinite(hidN) && (hidN === hidTab.rows || hidTab.rows >= 30),
-        `页签=${hidN} 行数=${hidTab.rows}「${hidTab.label}」`);
+        Number.isFinite(hidN) && (hidN === hidShown || hidShown >= 30),
+        `页签=${hidN} 展开成员=${hidShown} 折叠行数=${hidTab.rows}「${hidTab.label}」`);
   // 模块头吸顶（2026-10-29）：「占用排行」标题 + 返回上一级/面包屑/当前目录 +
   // 视图页签 + 排序行整体 sticky 在模块顶部，列表再长导航也不离手。
   const sticky = await evaluate(`(() => {

@@ -22,15 +22,11 @@
   - 本机门禁终态（2026-11-17）：`py_compile` PASS / pyflakes 0 / `check_undefined.py` 61 个跨模块符号全可达 / `lint_rules.py --strict` 0 错 0 警 / **`guard_matrix.py` 50 项 + 规则单元自检** / 编码契约全符 / `unit_test.py` 24 通过 0 失败 / `selftest.py` 595 通过 0 失败 6 跳过 / CI（快慢两级）全绿。
   - 分发产物：`dist/O-Cleaner-v2.16.zip`（便携版）；发布走 **GitHub Releases**（tag + zip + 说明）。
   - 剩余规划内任务：**无既定未完项**。v2.8 → v2.16 的完整演进见第一节 REQ-22 ~ REQ-30 与第十节版本演进总览。
-- **三条最容易踩的纪律**：
+- **四条最容易踩的纪律**：
   1. 提交说明首行只写「这次改动做了什么」，不写评价性文字、不写 `[ci]`（详见第六节第 13 条）；
   2. 断言总数依环境浮动且持续增长，文档/CI/提交说明**一律不写死数字**，判定标准是「失败 0」；
-  3. 改 `check_deletable` / `identify` / `run_ps` / `auto_discovered_targets` / `_looks_like_installed_program` 任何一个之前，先读第五节踩坑历史——它们都是被真实缺陷逼出来的。
-  4. 修改 `web/index.html` 的补丁一律用 Edit/Write 工具（禁 bash heredoc 直写），写盘后必须 `node --check` 整脚本 + `wc -l` 行数校验 + 查 `` 残留——EOL 往返已三次损坏全文（详见第五节与尾部日志）。
-- **三条最容易踩的纪律**：
-  1. 提交说明首行只写「这次改动做了什么」，不写评价性文字、不写 `[ci]`（详见第六节第 13 条）；
-  2. 断言总数依环境浮动且持续增长，文档/CI/提交说明**一律不写死数字**，判定标准是「失败 0」；
-  3. 改 `check_deletable` / `identify` / `run_ps` / `auto_discovered_targets` / `_looks_like_installed_program` 任何一个之前，先读第五节踩坑历史——它们都是被真实缺陷逼出来的。
+  3. 改 `check_deletable` / `identify` / `run_ps` / `auto_discovered_targets` / `_looks_like_installed_program` 任何一个之前，先读第五节踩坑历史——它们都是被真实缺陷逼出来的；
+  4. 修改 `web/index.html` 的补丁一律用 Edit/Write 工具（禁 bash heredoc 直写），写盘后必须 `node --check` 整脚本 + `audit_dead.py` + `fix-encoding.ps1 -Check`。
 
 ---
 
@@ -2034,3 +2030,15 @@ SECURITY 该处表述未动。
 - 测试：unit_test **24-0** · selftest **595-0-6** · lint strict **0 错** · CDP 断言（汇总行点击 1→7 行/零错误）。
 
 **v2.16 发布（2026-11-17）**——版本升级 v2.15→v2.16（APP_VERSION+drives.json 两处同步）；README 功能表更新（分析中心/磁盘快照/磁盘迁移/隐藏项合并/趋势数值常显，三个功能视图表述）；USAGE.md 十一章更名与增补（磁盘快照/磁盘迁移/分析中心/组级重复文件行，移除树图条目）；推送本地 5 个未推送提交 + 本提交，打 tag v2.16 + Release；make_package 分发包。
+
+**㊿补八（2026-11-19）：接手全量审计修复 + 交互 UI 优化**——
+- **P0/P1 安全与兼容修复**：
+  1. `guard.py` `check_deletable` 在 `allow_user_data=True` 时不再提前 `return True`，确保 `BASE_DIR` 自保护与 `os.path.realpath` Junction 复检永不被绕过；`unit_test.py` 补两项对抗回归断言。
+  2. `guard.py` / `engines.py` 补齐 `from __future__ import annotations`（修复 Python 3.8/3.9 启动崩溃），`unit_test.py` 增 AST 守卫。
+  3. `engines.py` `acquire_wiztree` 验签失败时清盘并作废 `_WIZ_CACHE`；`find_wiztree` 修正各盘 `\WizTree` 拼接；`/__oc__/ext-cache` 改用 `q.get("drive")` 并校验单字母盘符。
+- **P1 功能闭环修复**：
+  1. **应用专清**：`appclean_scan` 扫描全部匹配 `bases`（含微信 `<wxid>` 子目录）并改 `_py_tree_size` 递归测量；缓存按 `drive` 分键并支持 `fresh` 强刷；新增专用安全清理端点 `/__oc__/appclean/clean`（白名单限定 `kind=="cache"` 项 + 护栏 + 移入回收站），前端改调该端点、补「重新扫描」按钮与真实错误/体积提示。
+  2. **毒瘤软件清除**：`bloatware_scan` 修复 HKCU 键被 HKLM 误跳、句柄未关闭与盘符只扫 `A:/B:/C:` 缺陷；`/__oc__/bloatware/uninstall` 修复截掉 `SOFTWARE\` 与 `os.startfile` 带参失败问题；`bloatware_sweep` 补 Uninstall 白名单校验、改 `allow_user_data=True` + `rm_trash` 移入回收站并刷新缓存；前端补「重新扫描」与真实结果反馈。
+  3. **下载整理与文件级清理**：`/__oc__/delete-paths` 放行用户显式勾选的普通文件（`allow_user_data=True` + 仅移入回收站，历史 `freed=0` 避免与清空回收站双重统计）；`downloads_archive` 一键归档只动顶层文件不嵌套已有子目录、`only_set` 忽略大小写、`undo` 防覆盖并加锁；前端恢复子文件夹行内「打开位置」、`dlCatChk` 同步双按钮。
+  4. **其他后端修复**：`/__oc__/snapshot/diff` 修复未定义 `drive` 致 500 与 `days` 校验；`junction_restore` 补 `busy` 校验与半途失败防 `FileExistsError`、`junction_move` 补异常捕获与 `_lock`；`run_auto_clean` 补去重与 `append_history`；`_tray_worker` 修复双击多开标签；`_open_app_window` 修复 `Edge\Application` 路径；`packs/toggle`、`packs/delete`、`ai/config` 补 `_lock`；`deleter.py` 适配 Python 3.12+ `rmtree(onexc=)` 与 Junction 摘除。
+- **前端与工程卫生**：修正分析中心 `_anSeq` 守卫（去 3 条重复、补齐 AppClean/Bloatware/SnapDiff/JunctionMove）、清除 9 个废弃 CSS 类与重复工具栏分隔线；`config/moved-junctions.json` 移出 git 跟踪并入 `.gitignore`（补 `portable/`）；清理 `hostok.tmp`、`tools/_tmp_*.py` 及旧版 `dist/` 包；更新 `make_package.py`（纳 `USAGE-en.md`、全模块语法检查）、`ci.yml`（接入 `packs_ci_validate.py`、修正失败产物目录）、`ocleaner/__init__.py`、`README.md`、`docs/USAGE.md`、`docs/USAGE-en.md`。

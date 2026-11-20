@@ -53,6 +53,7 @@ INCLUDE = [
     "启动 O-Cleaner.bat",
     "README.md",
     "docs/USAGE.md",
+    "docs/USAGE-en.md",
     "docs/CUSTOMIZE.md",
     "LICENSE",
     "CONTRIBUTING.md",
@@ -124,12 +125,17 @@ def load_version() -> str:
 
 
 def syntax_check_app() -> None:
-    src = (ROOT / "app.py").read_text(encoding="utf-8")
-    try:
-        compile(src, "app.py", "exec")   # 内存编译，不落 .pyc
-    except SyntaxError as e:
-        fail(f"app.py 语法错误：{e}")
-    print("  app.py 语法校验通过")
+    targets = [ROOT / "app.py", ROOT / "ps_scripts.py",
+               *sorted((ROOT / "ocleaner").glob("*.py"))]
+    for p in targets:
+        if not p.exists():
+            continue
+        src = p.read_text(encoding="utf-8")
+        try:
+            compile(src, str(p.relative_to(ROOT)), "exec")   # 内存编译，不落 .pyc
+        except SyntaxError as e:
+            fail(f"{p.relative_to(ROOT)} 语法错误：{e}")
+    print(f"  Python 源码语法校验通过（{len(targets)} 个模块）")
 
 
 def build_zip(out_path: Path, ver: str) -> None:

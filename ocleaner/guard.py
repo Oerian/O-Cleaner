@@ -11,6 +11,7 @@ selftest / guard_matrix 的 50 项护栏矩阵断言直接落到本模块。
 对 core 与其他域的依赖（identify / games 安装目录 / _long_path /
 BASE_DIR）经 `_core.` 惰性引用 —— monkeypatch 对这里可见。
 """
+from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import os
 import re
 
@@ -355,6 +356,10 @@ def check_deletable(path: str, kind: str = "tree",
     if leaf in PROTECTED_DIR_NAMES and leaf not in ALLOWED_CONTAINER_NAMES:
         return False, f"拒绝：{parts[-1]} 属于受保护的目录"
 
+    # 显式选择个人/程序数据目录时不提前 return：必须继续走完 home、
+    # BASE_DIR 自保护与 realpath 重解析点复检，最后统一返回 (True, optin_note)。
+    optin_note = ""
+
     # 受保护域（2026-10-21 护栏升级）：整目录删除默认拒绝，需显式勾选。
     # 上面两条规则只比对**末级段名 / Users 一级位置**，保护住的是树根；
     # 用户在实际界面上勾的是下钻之后的子目录（Documents\Adobe 这种），
@@ -372,19 +377,21 @@ def check_deletable(path: str, kind: str = "tree",
         _is_cache = any(p.lower() in _ex for p in parts)
         if not _is_cache:
             if allow_user_data:
-                return True, f"用户已明确选择：{_ZONE_LABEL[zone]}"
-            return False, (f"拒绝：{parts[-1]} 位于{_ZONE_LABEL[zone]}内，"
-                           "整目录删除默认不做"
-                           "（可在界面上显式勾选后清理，将移入回收站）")
+                optin_note = optin_note or f"用户已明确选择：{_ZONE_LABEL[zone]}"
+            else:
+                return False, (f"拒绝：{parts[-1]} 位于{_ZONE_LABEL[zone]}内，"
+                               "整目录删除默认不做"
+                               "（可在界面上显式勾选后清理，将移入回收站）")
 
     # 用户数据目录（2026-10-21）：默认拒绝，用户显式勾选时放行。
     # 「不做删，做成可选」—— 工具不主动推荐、不进预设、不进定时清理，
     # 但只要用户在界面上明确选了它，就按用户的意愿执行。
     if leaf in USER_DATA_DIR_NAMES and leaf not in ALLOWED_CONTAINER_NAMES:
         if allow_user_data:
-            return True, "用户已明确选择：个人数据目录"
-        return False, (f"拒绝：{parts[-1]} 属于个人数据目录，默认不清理"
-                       "（可在界面上显式勾选后清理）")
+            optin_note = optin_note or "用户已明确选择：个人数据目录"
+        else:
+            return False, (f"拒绝：{parts[-1]} 属于个人数据目录，默认不清理"
+                           "（可在界面上显式勾选后清理）")
 
     # 位置保护（2026-10-21）：C:\Users\<用户名>\ 的直接子目录默认不许整体删除。
     # 光靠上面的名字名单挡不干净 —— 中文系统的「文档 / 桌面 / 下载」在磁盘上
@@ -396,9 +403,10 @@ def check_deletable(path: str, kind: str = "tree",
             and leaf not in ALLOWED_CONTAINER_NAMES \
             and leaf not in {"appdata", "local settings"}:
         if allow_user_data:
-            return True, "用户已明确选择：个人数据目录"
-        return False, (f"拒绝：{parts[1]}\\{parts[2]} 是用户 Home 下的一级目录，"
-                       f"属于个人数据，默认不清理（可在界面上显式勾选后清理）")
+            optin_note = optin_note or "用户已明确选择：个人数据目录"
+        else:
+            return False, (f"拒绝：{parts[1]}\\{parts[2]} 是用户 Home 下的一级目录，"
+                           f"属于个人数据，默认不清理（可在界面上显式勾选后清理）")
 
     # P0-3（外部审计 2026-10-13）：末级目录名是 cache/temp/logs 这类通用容器
     # **不代表**它是系统缓存 —— 许多程序把 cache/temp 放在安装目录里
@@ -455,11 +463,14 @@ def check_deletable(path: str, kind: str = "tree",
         # allow_user_data 要透传，否则「用户显式选了一个普通目录、但它是
         # 指向自己 Documents 的符号链接」会被重新判死；
         # 反过来 junction 指向 C:\Windows 时，递归后仍然命中系统目录规则。
-        return check_deletable(real, kind, allow_user_data)
+        ok_r, why_r = check_deletable(real, kind, allow_user_data)
+        if not ok_r:
+            return False, why_r
+        return True, optin_note or why_r
 
     # 不可读时不在这里判定拒绝，交由上层报「需要管理员权限」，
     # 这样 C:\\Windows\\Temp 能给出可读提示而不是硬性拒绝
-    return True, ""
+    return True, optin_note
 
 def _looks_like_installed_program(path: str) -> bool:
     """判断目录里装的是**程序本体**（而不是缓存）。

@@ -153,6 +153,99 @@ def main() -> int:
         else:
             print("  [SKIP] Junction 护栏（本机无法创建 junction）")
 
+    # ---- P0 护栏回归：allow_user_data=True 不得绕过自保护与 Junction 复检 ----
+    orig_base = app.BASE_DIR
+    desktop_dir = Path(os.path.expanduser("~")) / "Desktop"
+    if desktop_dir.is_dir():
+        try:
+            app.BASE_DIR = desktop_dir
+            ok_self, why_self = app.check_deletable(str(desktop_dir), "tree",
+                                                    allow_user_data=True)
+            check("护栏自保护：allow_user_data=True 仍拒绝 BASE_DIR",
+                  not ok_self and "自身" in why_self, f"{ok_self} {why_self}")
+        finally:
+            app.BASE_DIR = orig_base
+    with tempfile.TemporaryDirectory(prefix="oc_ut_jguard_") as td:
+        # 模拟受保护目录名（Documents）实为指向 C:\Windows 的 Junction
+        _jdocs = Path(td) / "Documents"
+        _win_dir = Path(os.environ.get("WINDIR", r"C:\Windows"))
+        if _win_dir.is_dir():
+            try:
+                import _winapi
+                _winapi.CreateJunction(str(_win_dir), str(_jdocs))
+                _jok2 = _jdocs.exists()
+            except Exception:
+                _jok2 = False
+            if _jok2:
+                try:
+                    ok_j, why_j = app.check_deletable(str(_jdocs), "tree",
+                                                      allow_user_data=True)
+                    check("护栏 Junction 复检：allow_user_data=True 仍拒绝指向 Windows 的链接",
+                          not ok_j, f"{ok_j} {why_j}")
+                finally:
+                    try:
+                        os.rmdir(str(_jdocs))
+                    except OSError:
+                        pass
+
+    # ---- Python 3.8/3.9 兼容守卫：ocleaner/*.py 使用 PEP 585/604 注解必带 __future__ ----
+    import ast as _ast
+    _repo_root = Path(__file__).resolve().parent.parent
+    missing_future = []
+    for _mp in sorted((_repo_root / "ocleaner").glob("*.py")):
+        _tree = _ast.parse(_mp.read_text(encoding="utf-8"), str(_mp))
+        _has_f = any(isinstance(n, _ast.ImportFrom) and n.module == "__future__"
+                     and any(a.name == "annotations" for a in n.names)
+                     for n in _tree.body)
+        if _has_f:
+            continue
+        for _node in _ast.walk(_tree):
+            if isinstance(_node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                _anns = [a.annotation for a in _node.args.args + _node.args.kwonlyargs if a.annotation]
+                if _node.returns:
+                    _anns.append(_node.returns)
+                for _ann in _anns:
+                    for _sub in _ast.walk(_ann):
+                        if (isinstance(_sub, _ast.Subscript) and isinstance(_sub.value, _ast.Name)
+                                and _sub.value.id in ("list", "dict", "tuple", "set", "frozenset", "type")) \
+                                or (isinstance(_sub, _ast.BinOp) and isinstance(_sub.op, _ast.BitOr)):
+                            missing_future.append(_mp.name)
+                            break
+    check("兼容守卫：ocleaner 子模块 PEP 585/604 注解均含 future annotations",
+          not missing_future, f"missing={sorted(set(missing_future))}")
+
+    # ---- 卸载注册表键白名单校验 ----
+    check("注册表白名单：合法 HKLM Uninstall 放行",
+          app._parse_uninstall_reg_key(
+              r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\App1")
+          == ("HKLM", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\App1"))
+    check("注册表白名单：合法 HKCU Uninstall 放行",
+          app._parse_uninstall_reg_key(
+              r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\App2")
+          == ("HKCU", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\App2"))
+    check("注册表白名单：拒绝非 Uninstall 子树（Run）",
+          app._parse_uninstall_reg_key(
+              r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Evil") is None)
+    check("注册表白名单：拒绝 .. 目录穿越",
+          app._parse_uninstall_reg_key(
+              r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\..\Run\Evil") is None)
+
+    # ---- 下载归档不误套已有子目录 ----
+    with tempfile.TemporaryDirectory(prefix="oc_ut_dl_") as td:
+        (Path(td) / "安装包").mkdir()
+        (Path(td) / "demo.exe").write_bytes(b"MZ" + b"\x00" * 64)
+        orig_log = app.ARCHIVE_LOG_PATH
+        try:
+            app.ARCHIVE_LOG_PATH = Path(td) / ".archive-log.json"
+            ar = app.downloads_archive(root=td, only=None)
+            check("下载归档：一键归档只移动顶层文件、不嵌套已有子目录",
+                  ar.get("ok") and ar.get("moved") == 1
+                  and (Path(td) / "安装包").is_dir()
+                  and not (Path(td) / "未识别" / "安装包").exists(),
+                  f"{ar}")
+        finally:
+            app.ARCHIVE_LOG_PATH = orig_log
+
     # ---- 版本一致性 ----
     import json
     dv = json.load(open("config/drives.json", encoding="utf-8")) \

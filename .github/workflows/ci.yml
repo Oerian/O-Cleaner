@@ -98,6 +98,9 @@ jobs:
       - name: 跨模块符号完整性检查（防域拆分漏 re-export）
         run: python -X utf8 tools/check_undefined.py
 
+      - name: 资源包索引与摘要校验
+        run: python -X utf8 tools/packs_ci_validate.py
+
       # 必须检查**全部** script 块：旧版用 [regex]::Match 只取第一个匹配，
       # 而 index.html 的第一个 script 块只有 400 多字节（一小段初始化），
       # 真正 200 KB+ 的应用主体是第二个块 —— 主脚本写坏语法，这道闸门照样绿。
@@ -151,8 +154,7 @@ jobs:
         with:
           name: selftest-leftovers
           path: |
-            history.json
-            schedule.json
+            data/
             config/targets.json
           if-no-files-found: ignore
 

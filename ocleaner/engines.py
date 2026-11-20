@@ -10,6 +10,7 @@
 _human 等）经 `_core.` 惰性引用；`_WIZ_DIRS` 留在 core（扫描编排、
 dupfiles、快照钩子都要读写它），引擎内经 `_core.` 引用同一字典对象。
 """
+from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import os
 import re
 import time
@@ -64,7 +65,7 @@ def find_wiztree() -> str | None:
             return p
     # 2) 常见安装位置 + 各盘符根下的 \WizTree。逐盘探测而不是把某台
     #    机器的安装盘位写死进源码 —— 有人习惯把它装在数据盘根目录。
-    drives = tuple(f"{c}:\\" for c in "CDEFGH")
+    drives = tuple(f"{c}:\\WizTree" for c in "CDEFGH")
     for d in (*WIZTREE_HINTS, *drives):
         for n in WIZTREE_NAMES:
             p = os.path.join(d, n)
@@ -241,9 +242,17 @@ def acquire_wiztree(timeout: int = 300) -> dict:
         return result
     sig = _core._authenticode_status(st["path"])
     if sig != "Valid":
+        # 验签不通过必须清理已解压的未签名二进制并作废缓存，
+        # 否则下次扫描会直接执行 portable/WizTree/ 里的可疑文件。
+        import shutil as _sh
+        try:
+            _sh.rmtree(str(_core.WIZTREE_PORTABLE_DIR), ignore_errors=True)
+        except OSError:
+            pass
+        _WIZ_CACHE = None
         result["error"] = (f"解压出的 WizTree64.exe 数字签名校验未通过"
-                           f"（Authenticode 状态：{sig}），为防运行被篡改的"
-                           f"二进制已中止。请从官方地址重新下载后重试")
+                           f"（Authenticode 状态：{sig}），已清理下载文件并中止。"
+                           f"请从官方地址重新下载后重试")
         return result
     result["log"].append("WizTree64.exe 签名校验通过（Authenticode: Valid）")
     result.update(ok=True, path=st["path"], version=st["version"])

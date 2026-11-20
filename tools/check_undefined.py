@@ -9,7 +9,6 @@
 纯标准库，零依赖。CI 快级与本地均可随时运行（<1 秒）。
 """
 import ast
-import os
 import sys
 from pathlib import Path
 

@@ -2979,7 +2979,6 @@ def _recycle_capacity_bytes(drive_root: str) -> int:
 def _parse_i_file(ipath: str):
     """解析一个 $I 元数据文件 → (原始路径, 字节数, 配对的 $R 路径)。
     解析不了（损坏/未知版本）返回 None，调用方跳过。"""
-    import struct
     try:
         with open(ipath, "rb") as f:
             data = f.read(2048)
@@ -4876,7 +4875,6 @@ def _is_unsafe_remote(u: str) -> str:
     if host in ("localhost", "localhost.localdomain", "::1", "0.0.0.0", "[::1]"):
         return "拒绝访问本机回环地址"
     try:
-        import ipaddress
         ip = ipaddress.ip_address(host)
         if ip.is_loopback or ip.is_unspecified or ip.is_link_local:
             return "拒绝访问回环/链路本地地址"
@@ -5297,6 +5295,35 @@ def _load_bloatware() -> dict:
     return builtin
 
 
+_UNINSTALL_REG_PREFIXES = (
+    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+    r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+)
+
+
+def _parse_uninstall_reg_key(reg_key: str) -> tuple[str, str] | None:
+    """解析并校验卸载注册表键，仅允许 HKLM/HKCU 下的 Uninstall 子树。
+    返回 (hive_prefix, sub_path)，非法返回 None。"""
+    raw = str(reg_key or "").strip().strip("\\")
+    if not raw:
+        return None
+    parts = raw.split("\\")
+    if ".." in parts:
+        return None
+    if parts[0].upper() in ("HKLM", "HKCU"):
+        hive_prefix = parts[0].upper()
+        sub_path = "\\".join(parts[1:])
+    else:
+        hive_prefix = "HKLM"
+        sub_path = raw
+    low_sub = sub_path.lower()
+    ok = any(low_sub.startswith(p.lower() + "\\")
+             for p in _UNINSTALL_REG_PREFIXES)
+    if not ok:
+        return None
+    return hive_prefix, sub_path
+
+
 def bloatware_scan() -> dict:
     """扫描已安装的「毒瘤软件」：注册表卸载项签名匹配 + 已知目录探测。
 
@@ -5308,72 +5335,70 @@ def bloatware_scan() -> dict:
     found = []
     if IS_WINDOWS:
         import winreg
-        hives = [(winreg.HKEY_LOCAL_MACHINE,
-                  r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-                 (winreg.HKEY_LOCAL_MACHINE,
-                  r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
-                 (winreg.HKEY_CURRENT_USER,
-                  r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")]
-        entries = []
-        for hive, sub in hives:
+        hives = [
+            ("HKLM", winreg.HKEY_LOCAL_MACHINE,
+             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+            ("HKLM", winreg.HKEY_LOCAL_MACHINE,
+             r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+            ("HKCU", winreg.HKEY_CURRENT_USER,
+             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        ]
+        seen_keys = set()
+        for hprefix, hive, sub in hives:
             try:
-                k = winreg.OpenKey(hive, sub)
+                with winreg.OpenKey(hive, sub) as root_k:
+                    i = 0
+                    sub_names = []
+                    while True:
+                        try:
+                            sub_names.append(winreg.EnumKey(root_k, i))
+                            i += 1
+                        except OSError:
+                            break
             except OSError:
                 continue
-            try:
-                i = 0
-                while True:
-                    try:
-                        entries.append(winreg.EnumKey(k, i))
-                        i += 1
-                    except OSError:
-                        break
-            finally:
-                k.Close()
-        seen_keys = set()
-        for sub_key in entries:
-            for hive, sub in hives:
+            for sub_key in sub_names:
                 full = f"{sub}\\{sub_key}"
-                if full in seen_keys:
+                full_id = f"{hprefix}\\{full}"
+                if full_id.lower() in seen_keys:
                     continue
-                seen_keys.add(full)
+                seen_keys.add(full_id.lower())
                 try:
-                    k = winreg.OpenKey(hive, full)
+                    with winreg.OpenKey(hive, full) as k:
+                        try:
+                            disp = str(winreg.QueryValueEx(k, "DisplayName")[0])
+                        except OSError:
+                            continue
+                        for app in apps:
+                            if any(m.lower() in disp.lower()
+                                   for m in app.get("match", [])):
+                                try:
+                                    ustr = str(winreg.QueryValueEx(
+                                        k, "UninstallString")[0])
+                                except OSError:
+                                    ustr = ""
+                                try:
+                                    qstr = str(winreg.QueryValueEx(
+                                        k, "QuietUninstallString")[0])
+                                except OSError:
+                                    qstr = ""
+                                try:
+                                    loc = str(winreg.QueryValueEx(
+                                        k, "InstallLocation")[0])
+                                except OSError:
+                                    loc = ""
+                                found.append({
+                                    "id": app["id"], "name": app["name"],
+                                    "display": disp, "reg_key": full_id,
+                                    "uninstall": ustr, "quiet": qstr,
+                                    "install_location": loc,
+                                    "dirs": app.get("dirs", []),
+                                })
+                                break
                 except OSError:
                     continue
-                try:
-                    disp = str(winreg.QueryValueEx(k, "DisplayName")[0])
-                except OSError:
-                    continue
-                for app in apps:
-                    if any(m.lower() in disp.lower() for m in app.get("match", [])):
-                        try:
-                            ustr = str(winreg.QueryValueEx(k, "UninstallString")[0])
-                        except OSError:
-                            ustr = ""
-                        try:
-                            qstr = str(winreg.QueryValueEx(
-                                k, "QuietUninstallString")[0])
-                        except OSError:
-                            qstr = ""
-                        try:
-                            loc = str(winreg.QueryValueEx(k, "InstallLocation")[0])
-                        except OSError:
-                            loc = ""
-                        found.append({
-                            "id": app["id"], "name": app["name"],
-                            "display": disp, "reg_key": full,
-                            "uninstall": ustr, "quiet": qstr,
-                            "install_location": loc,
-                            "dirs": app.get("dirs", []),
-                        })
-                        break
-    # 已知残留目录探测（不受注册表匹配限制 —— 卸载后残留照样能扫到）
-    drive_roots = []
-    for letter in string.ascii_uppercase:
-        drive_roots.append(f"{letter}:\\")
-        if letter == "C":
-            break
+    # 已知残留目录探测（扫描全部真实存在的盘符，不再误探 A:/B: 或漏掉数据盘）
+    drive_roots = [f"{d['letter']}:\\" for d in list_drives()] or ["C:\\"]
     prog_variants = ["Program Files", "Program Files (x86)"]
     for app in apps:
         hits = []
@@ -5401,8 +5426,9 @@ def bloatware_sweep(reg_key: str, dirs: list) -> dict:
     """清扫残留：已知目录走护栏链+回收站，注册表键精准删除。
 
     两段式清除的第二段 —— 官方卸载程序跑完之后调用。目录经完整
-    check_deletable 护栏链（M-01/M-05 同源），注册表只删精确命中的
-    Uninstall 子键，绝不模糊匹配。
+    check_deletable(allow_user_data=True) 护栏链（系统目录/自保护/Junction
+    仍硬拒绝）并移入回收站（可恢复）；注册表只删白名单内的 Uninstall 子键，
+    绝不模糊匹配或越界删除。
     """
     results = []
     for d in dirs or []:
@@ -5414,40 +5440,42 @@ def bloatware_sweep(reg_key: str, dirs: list) -> dict:
                 results.append({"path": norm, "ok": False,
                                 "error": "存在被占用的文件（先跑官方卸载程序）"})
             else:
-                ok, why = check_deletable(norm)
+                ok, why = check_deletable(norm, "tree", allow_user_data=True)
                 if not ok:
                     results.append({"path": norm, "ok": False, "error": why})
                 else:
-                    full, partial, _note = rm_tree_strict(norm)
-                    results.append({"path": norm, "ok": bool(full),
-                                    "error": None if full else f"部分残留（{partial} 项）"})
+                    ok2, why2 = rm_trash(norm)
+                    results.append({"path": norm, "ok": bool(ok2),
+                                    "trashed": bool(ok2),
+                                    "error": None if ok2 else (why2 or "移入回收站失败")})
         except Exception as exc:  # noqa: BLE001
             results.append({"path": norm, "ok": False,
                             "error": f"{type(exc).__name__}: {exc}"})
     reg_done = 0
+    reg_error = ""
     if reg_key and IS_WINDOWS:
-        import winreg
-        hive_map = {winreg.HKEY_LOCAL_MACHINE: "HKLM",
-                    winreg.HKEY_CURRENT_USER: "HKCU"}
-        parts = reg_key.split("\\")
-        for hive, prefix in hive_map.items():
-            if parts[0] != prefix:
-                continue
+        parsed = _parse_uninstall_reg_key(reg_key)
+        if not parsed:
+            reg_error = "reg_key 不在 Uninstall 白名单子树内，已拒绝删除"
+        else:
+            import winreg
+            hprefix, sub_path = parsed
+            hive = (winreg.HKEY_LOCAL_MACHINE if hprefix == "HKLM"
+                    else winreg.HKEY_CURRENT_USER)
+            parent_sub, _, leaf_key = sub_path.rpartition("\\")
             try:
-                k = winreg.OpenKey(hive, "\\".join(parts[1:-1]), 0,
-                                   winreg.KEY_SET_VALUE | winreg.KEY_ENUMERATE_SUB_KEYS
-                                   | winreg.DELETE)
-                sub = parts[-1]
-                try:
-                    winreg.DeleteKey(k, sub)
+                with winreg.OpenKey(
+                    hive, parent_sub, 0,
+                    winreg.KEY_SET_VALUE | winreg.KEY_ENUMERATE_SUB_KEYS
+                    | winreg.DELETE
+                ) as k:
+                    winreg.DeleteKey(k, leaf_key)
                     reg_done += 1
-                except OSError:
-                    pass
-                finally:
-                    k.Close()
-            except OSError:
-                pass
-    return {"ok": True, "results": results, "reg_deleted": reg_done}
+            except OSError as exc:
+                reg_error = f"注册表键删除失败（可能需要管理员权限）：{exc}"
+    all_ok = all(r.get("ok") for r in results) and not reg_error
+    return {"ok": all_ok, "results": results, "reg_deleted": reg_done,
+            "reg_error": reg_error}
 
 
 def junction_move(src: str, dst: str, merge: bool = False,
@@ -5528,7 +5556,10 @@ def junction_move(src: str, dst: str, merge: bool = False,
     backup = src.rstrip("\\/") + ".oc-mv-backup"
     if os.path.exists(backup):
         return {"error": f"暂存目录 {backup} 已存在，请先处理上次残留"}
-    os.rename(src, backup)
+    try:
+        os.rename(src, backup)
+    except OSError as exc:
+        return {"error": f"源目录被占用或无法改名，原目录未动：{exc}"}
     try:
         import _winapi
         _winapi.CreateJunction(str(dst), str(src))
@@ -5538,18 +5569,23 @@ def junction_move(src: str, dst: str, merge: bool = False,
         if not isinstance(probe, list):
             raise RuntimeError("Junction 内容异常")
     except Exception as exc:  # noqa: BLE001
-        os.rename(backup, src)
+        try:
+            if not os.path.exists(src) and os.path.exists(backup):
+                os.rename(backup, src)
+        except OSError:
+            pass
         return {"error": f"Junction 建立失败，已还原原目录：{exc}"}
     # 4) 删除暂存（走 rm_tree_strict：断电可恢复）
-    full, partial, _note = rm_tree_strict(backup)
+    full, _partial, note = rm_tree_strict(backup)
     if not full:
-        return {"ok": True, "note": f"搬家完成，但暂存目录删除不彻底"
-                f"（剩 {partial} 项，见 pending-deletes.json）",
+        return {"ok": True, "note": f"搬家完成，但暂存目录删除不彻底（{note}）",
                 "src": src, "dst": str(dst)}
     # 5) 记录（支持一键迁回）
     try:
-        recs = _load_json(MOVED_JUNCTIONS_PATH, [])
-        if isinstance(recs, list):
+        with _lock:
+            recs = _load_json(MOVED_JUNCTIONS_PATH, [], use_cache=False)
+            if not isinstance(recs, list):
+                recs = []
             recs.insert(0, {"src": src, "dst": str(dst),
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
             _atomic_write(MOVED_JUNCTIONS_PATH, recs[:50])
@@ -5562,8 +5598,9 @@ def junction_move(src: str, dst: str, merge: bool = False,
 def junction_restore(src: str) -> dict:
     """一键迁回：摘除 Junction，把真实目录从目标位置移回原位。"""
     src = os.path.normpath(os.path.expandvars(src))
-    recs = _load_json(MOVED_JUNCTIONS_PATH, [])
-    rec = next((r for r in recs
+    with _lock:
+        recs = _load_json(MOVED_JUNCTIONS_PATH, [], use_cache=False)
+    rec = next((r for r in (recs if isinstance(recs, list) else [])
                 if os.path.normcase(str(r.get("src"))) == os.path.normcase(src)), None)
     if not rec:
         return {"error": "搬家记录里没有这个目录"}
@@ -5578,12 +5615,21 @@ def junction_restore(src: str) -> dict:
     try:
         shutil.move(dst, src)
     except OSError as exc:
-        _winapi = __import__("_winapi")
-        _winapi.CreateJunction(dst, src)
-        return {"error": f"迁回失败已重新挂回 Junction：{exc}"}
-    _atomic_write(MOVED_JUNCTIONS_PATH,
-                  [r for r in recs
-                   if os.path.normcase(str(r.get("src"))) != os.path.normcase(src)])
+        if not os.path.exists(src):
+            try:
+                _winapi = __import__("_winapi")
+                _winapi.CreateJunction(dst, src)
+                return {"error": f"迁回失败已重新挂回 Junction：{exc}"}
+            except OSError:
+                pass
+        return {"error": f"迁回中途失败（源位置已存在部分文件，完整数据仍在 {dst}，请清理原位残留后重试）：{exc}"}
+    with _lock:
+        cur_recs = _load_json(MOVED_JUNCTIONS_PATH, [], use_cache=False)
+        if not isinstance(cur_recs, list):
+            cur_recs = []
+        _atomic_write(MOVED_JUNCTIONS_PATH,
+                      [r for r in cur_recs
+                       if os.path.normcase(str(r.get("src"))) != os.path.normcase(src)])
     return {"ok": True, "src": src}
 
 
@@ -5592,8 +5638,9 @@ def junction_restore(src: str) -> dict:
 # kind 语义：cache=纯缓存可放心清；data=用户数据按需处理；core=核心不可动
 _APPCLEAN_APPS = [
     {"id": "wechat", "name": "微信",
-     "bases": ["%APPDATA%\\Tencent\\WeChat",
-               "%USERPROFILE%\\Documents\\WeChat Files"],
+     "bases": ["%USERPROFILE%\\Documents\\WeChat Files\\*",
+               "%USERPROFILE%\\Documents\\WeChat Files",
+               "%APPDATA%\\Tencent\\WeChat"],
      "items": [
          {"sub": "FileStorage\\Cache", "kind": "cache", "label": "图片/缩略图缓存"},
          {"sub": "FileStorage\\MsgAttach", "kind": "cache", "label": "聊天图片缓存"},
@@ -5651,45 +5698,130 @@ _APPCLEAN_APPS = [
 def appclean_scan(drive: str | None = None) -> dict:
     """应用专清扫描（v2.15 方向三）：对每个已知应用逐子项测体积，
     标注 cache/data/core 三类语义 —— 「哪些删了只清缓存、哪些是接收的
-    文件、哪些绝对不能碰」一目了然。只读不删；清理走 delete-paths。"""
+    文件、哪些绝对不能碰」一目了然。只读不删；清理走 /__oc__/appclean/clean。"""
     out = []
+    drv = (drive or "").rstrip(":").upper()
     for app in _APPCLEAN_APPS:
-        base_found = None
+        base_dirs: list[str] = []
+        seen_b: set[str] = set()
         for b in app.get("bases", []):
             cand = os.path.normpath(os.path.expandvars(b))
-            if any(cand.upper().startswith(drive_prefix)
-                   for drive_prefix in [f"{drive}:"]
-                   ) if drive else True:
-                if glob_has_dir(cand):
-                    base_found = cand
-                    break
-        if not base_found:
+            matched = glob_dirs(cand) if "*" in cand else (
+                [cand] if os.path.isdir(cand) else [])
+            for m0 in matched:
+                if drv and not m0.upper().startswith(f"{drv}:"):
+                    continue
+                k0 = os.path.normcase(m0)
+                if k0 not in seen_b:
+                    seen_b.add(k0)
+                    base_dirs.append(m0)
+        if not base_dirs:
             continue
         items = []
+        seen_paths: set[str] = set()
         total = 0
-        for it in app.get("items", []):
-            ipath = os.path.normpath(os.path.expandvars(
-                os.path.join(base_found, it["sub"])))
-            if it["sub"] and "*" in it["sub"]:
-                hits = glob_dirs(ipath)
-            else:
-                hits = [ipath] if os.path.isdir(ipath) or os.path.isfile(ipath) else []
-            sz = sum((_dir_size(h, shallow=True) if os.path.isdir(h)
-                      else (os.path.getsize(h) if os.path.isfile(h) else 0))
-                     for h in hits)
-            if not hits or sz == 0:
-                continue
-            total += sz
-            items.append({"label": it["label"], "kind": it["kind"],
-                          "path": hits[0], "paths": hits,
-                          "size": sz, "size_h": human(sz),
-                          "advice": it.get("advice", "")})
+        for base_found in base_dirs:
+            for it in app.get("items", []):
+                ipath = os.path.normpath(os.path.expandvars(
+                    os.path.join(base_found, it["sub"])))
+                if it["sub"] and "*" in it["sub"]:
+                    hits = glob_dirs(ipath)
+                else:
+                    hits = [ipath] if os.path.isdir(ipath) or os.path.isfile(ipath) else []
+                hits = [h for h in hits if os.path.normcase(h) not in seen_paths]
+                if not hits:
+                    continue
+                # 递归测真实体积（_py_tree_size 走 os.scandir 进程内统计，
+                # 避免 shallow=True 把多层缓存目录误算成 0 B）
+                sz = sum((_py_tree_size(h) if os.path.isdir(h)
+                          else (os.path.getsize(h) if os.path.isfile(h) else 0))
+                         for h in hits)
+                if sz == 0:
+                    continue
+                for h in hits:
+                    seen_paths.add(os.path.normcase(h))
+                total += sz
+                items.append({"label": it["label"], "kind": it["kind"],
+                              "path": hits[0], "paths": hits,
+                              "size": sz, "size_h": human(sz),
+                              "advice": it.get("advice", "")})
         if items:
             out.append({"id": app["id"], "name": app["name"],
-                        "base": base_found, "total": total,
+                        "base": base_dirs[0], "total": total,
                         "total_h": human(total), "items": items})
     out.sort(key=lambda a: -a["total"])
     return {"ok": True, "apps": out}
+
+
+def _appclean_cache_allowed(path: str) -> bool:
+    """校验待清路径是否精确命中 _APPCLEAN_APPS 中的 kind=='cache' 条目。"""
+    norm = os.path.normcase(os.path.normpath(path))
+    for app in _APPCLEAN_APPS:
+        for b in app.get("bases", []):
+            cand = os.path.normpath(os.path.expandvars(b))
+            bases = glob_dirs(cand) if "*" in cand else (
+                [cand] if os.path.isdir(cand) else [])
+            for base_found in bases:
+                for it in app.get("items", []):
+                    if it.get("kind") != "cache":
+                        continue
+                    ipath = os.path.normpath(os.path.expandvars(
+                        os.path.join(base_found, it["sub"])))
+                    hits = glob_dirs(ipath) if (it["sub"] and "*" in it["sub"]) else [ipath]
+                    for h in hits:
+                        if os.path.normcase(os.path.normpath(h)) == norm:
+                            return True
+    return False
+
+
+def appclean_clean(paths: list[str]) -> dict:
+    """应用专清安全清理：仅放行签名库中的 cache 项，经护栏校验后移入回收站。"""
+    results = []
+    trashed_bytes = 0
+    for p0 in paths or []:
+        norm = os.path.normpath(os.path.expandvars(str(p0).strip()))
+        item = {"path": norm, "ok": False, "trashed": False, "error": None}
+        if not os.path.isabs(norm) or not os.path.exists(norm):
+            item["error"] = "路径不存在或无效"
+        elif not _appclean_cache_allowed(norm):
+            item["error"] = "拒绝：目标不在应用专清 cache 白名单内"
+        else:
+            ok, why = check_deletable(norm, "tree", allow_user_data=True)
+            if not ok:
+                item["error"] = why or "护栏拦截"
+            else:
+                sz0 = _py_tree_size(norm) if os.path.isdir(norm) else _size_of(norm)
+                ok2, why2 = rm_trash(norm)
+                item["ok"] = bool(ok2)
+                item["trashed"] = bool(ok2)
+                if ok2:
+                    item["size"] = sz0
+                    trashed_bytes += sz0
+                else:
+                    item["error"] = why2 or "移入回收站失败"
+        results.append(item)
+    done = sum(1 for r in results if r["ok"])
+    _APPCLEAN_CACHE.clear()
+    try:
+        append_history({
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "trigger": "应用专清（移入回收站）",
+            "freed": 0,
+            "freed_h": "0 B",
+            "results": [{"label": os.path.basename(r["path"]) or r["path"],
+                         "path": r["path"], "freed": 0,
+                         "trashed": 1 if r["trashed"] else 0,
+                         "failed": 0 if r["ok"] else 1,
+                         "error": r.get("error")} for r in results],
+        })
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+    first_err = next((r["error"] for r in results if r.get("error")), "")
+    return {"ok": done == len(results) and bool(results), "done": done,
+            "total": len(results), "trashed_bytes": trashed_bytes,
+            "trashed_h": human(trashed_bytes),
+            "error": "" if (done == len(results) and results) else first_err,
+            "results": results}
 
 
 def glob_has_dir(pattern: str) -> bool:
@@ -5708,7 +5840,7 @@ def glob_dirs(pattern: str) -> list:
 
 DUP_PROGRESS: dict = {"done": 0, "total": 0, "phase": "idle"}
 _BIG_CACHE: dict = {}          # (盘符, limit) -> (时间戳, 结果)；随新扫描失效
-_APPCLEAN_CACHE: dict = {"ts": 0.0, "r": None}   # TTL 10 分钟
+_APPCLEAN_CACHE: dict = {}     # drive_key -> (时间戳, 结果)；TTL 10 分钟
 _BLOAT_CACHE: dict = {"ts": 0.0, "r": None}      # TTL 10 分钟
 _DUP_CACHE: dict = {}   # letter -> (时间戳, 结果)；会话内避免重复全量哈希
 
@@ -5786,7 +5918,7 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
             # 不同父目录＝大概率是程序/应用自带的多份拷贝（如 Telegram
             # 各实例目录的 nw.dll）——字节一致但功能上是依赖，不是冗余。
             # 前端据此打 ⚠ 并把跨目录组排除出一键全选。
-            parents0 = {os.path.dirname(os.path.abspath(f0))
+            parents0 = {os.path.dirname(os.path.abspath(f0)).lower()
                         for f0, _n0 in fpairs}
             xdir = len(parents0) > 1
             groups.append({
@@ -5797,7 +5929,7 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
             })
     groups.sort(key=lambda g: -g["wasted"])
     DUP_PROGRESS["phase"] = "done"
-    result = {"ok": True, "drive": letter, "floor_mb": DUP_FLOOR_MB,
+    result = {"ok": True, "drive": letter, "floor_mb": floor_mb,
               "groups": groups}
     _DUP_CACHE[letter] = (time.time(), result, floor_mb)
     return result
@@ -6171,7 +6303,6 @@ class Handler(BaseHTTPRequestHandler):
         m = re.match(r"^data:(image/[a-z+]+);base64,(.+)$", raw, re.S)
         if not m:
             return self._json({"error": "必须是 image/* 的 dataURL"}, 400)
-        import base64
         try:
             data = base64.b64decode(m.group(2), validate=True)
         except Exception:                       # noqa: BLE001
@@ -6247,8 +6378,9 @@ class Handler(BaseHTTPRequestHandler):
                                "remote": load_packs_state().get("remote") or "",
                                "user_dir": str(USER_PACKS_DIR)})
         if route == "/__oc__/ext-cache":
-            letter = (self.path.split("drive=")[-1].split("&")[0]
-                      .rstrip("/").upper() or "C")
+            letter = str(q.get("drive") or "C").rstrip(":/\\").upper()
+            if not re.fullmatch(r"[A-Z]", letter):
+                return self._json({"error": "drive 必须是单个盘符字母"}, 400)
             fp = SNAPSHOTS_DIR / f"{letter}-ext.json"
             try:
                 return self._json(json.loads(
@@ -6994,8 +7126,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": str(e)}, 400)
             return self._json({"ok": True, "pref": p})
         if route == "/__oc__/delete-paths":
-            # 批量移入回收站（重复大文件等场景）：逐个走完整护栏链
-            # check_deletable，任一被拦截只跳过该项，绝不静默转永久删除。
+            # 批量移入回收站（重复大文件 / 大文件排行 / 下载整理）：仅允许普通文件，
+            # 逐个走完整护栏链 check_deletable(allow_user_data=True)（系统目录、
+            # 工具自身、Junction 仍硬拒绝；移入回收站可随时还原），绝不静默永久删除。
             paths_in = body.get("paths") or []
             if not isinstance(paths_in, list) or not paths_in:
                 return self._json({"error": "paths 不能为空"}, 400)
@@ -7005,7 +7138,7 @@ class Handler(BaseHTTPRequestHandler):
             if getattr(self.server, "busy", False):
                 return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
             self.server.busy = True
-            freed_total = [0]
+            trashed_total = [0]
             try:
                 results = []
                 for pth in paths_in:
@@ -7017,11 +7150,13 @@ class Handler(BaseHTTPRequestHandler):
                         item["path"] = norm
                         if not os.path.isabs(norm) or not os.path.exists(norm):
                             item["error"] = "路径无效或不存在"
-                        elif not os.path.isfile(norm) or os.path.islink(norm)                                 or _is_reparse_dir(norm):
-                            # 重复文件清理专用：只允许普通文件，防整目录误移
+                        elif not os.path.isfile(norm) or os.path.islink(norm) \
+                                or _is_reparse_dir(norm):
+                            # 文件级清理专用：只允许普通文件，防整目录误移
                             item["error"] = "仅支持普通文件（目录/链接不接受）"
                         else:
-                            ok, why = check_deletable(norm)
+                            ok, why = check_deletable(norm, "files",
+                                                      allow_user_data=True)
                             if not ok:
                                 item["error"] = why or "护栏拦截"
                             else:
@@ -7031,41 +7166,47 @@ class Handler(BaseHTTPRequestHandler):
                                 item["trashed"] = ok2
                                 if ok2:
                                     item["size"] = sz0
-                                    freed_total[0] += sz0
+                                    trashed_total[0] += sz0
                                 else:
                                     item["error"] = why2 or "移入回收站失败"
                     except Exception as exc:  # noqa: BLE001
                         item["error"] = f"{type(exc).__name__}: {exc}"
                     results.append(item)
                 done = sum(1 for r in results if r["ok"])
-                # 三轮审计 P1：接入清理历史与逐项回执 —— 几十 GB 的重复
-                # 文件清理必须可追溯（可搜索、可导出、计入累计释放量）。
+                # 移入回收站不立即释放磁盘空间（同卷改名），与 clean_target 保持同一口径：
+                # 历史 freed 记 0，清空回收站时再入账，避免双重统计；trashed_bytes 供界面展示。
                 try:
                     append_history({
                         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "trigger": "清理重复大文件",
-                        "freed": freed_total[0],
-                        "freed_h": human(freed_total[0]),
+                        "trigger": "移入回收站（文件级清理）",
+                        "freed": 0,
+                        "freed_h": "0 B",
                         "results": [{"label": os.path.basename(r["path"]),
                                      "path": r["path"],
-                                     "freed": r.get("size", 0),
+                                     "freed": 0,
                                      "trashed": 1 if r["trashed"] else 0,
+                                     "trash_paths": [r["path"]] if r["trashed"] else [],
                                      "failed": 0 if r["ok"] else 1,
                                      "error": r.get("error")}
                                     for r in results],
                     })
                 except Exception:  # noqa: BLE001
                     traceback.print_exc()
+                first_err = next((r["error"] for r in results if r.get("error")), "")
                 return self._json({"ok": done == len(results), "done": done,
                                    "total": len(results),
-                                   "freed": freed_total[0],
+                                   "freed": 0,
+                                   "trashed_bytes": trashed_total[0],
+                                   "trashed_h": human(trashed_total[0]),
+                                   "error": "" if done == len(results) else first_err,
                                    "results": results})
             finally:
                 self.server.busy = False
 
         if route == "/__oc__/bloatware/scan":
             now0 = time.time()
-            if (_BLOAT_CACHE["r"] is not None
+            fresh = bool(body.get("fresh"))
+            if (not fresh and _BLOAT_CACHE["r"] is not None
                     and now0 - _BLOAT_CACHE["ts"] < 600):
                 return self._json(_BLOAT_CACHE["r"])
             r0 = bloatware_scan()
@@ -7076,38 +7217,39 @@ class Handler(BaseHTTPRequestHandler):
             # 官方卸载程序启动：命令由服务端从注册表实时读取（客户端只传
             # reg_key），杜绝任意命令注入；reg_key 白名单限定 Uninstall 子树。
             reg_key = str(body.get("reg_key") or "")
-            ok_prefixes = (
-                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-                r"SOFTWARE\WOW6432Node\Microsoft\Windows"
-                r"\CurrentVersion\Uninstall")
-            if not reg_key or not any(
-                    reg_key.startswith(p) for p in ok_prefixes)                     or ".." in reg_key.split("\\"):
-                # 前缀白名单 + 拒绝任何 .. 段（防穿越出 Uninstall 子树）
+            parsed = _parse_uninstall_reg_key(reg_key)
+            if not parsed:
                 return self._json({"error": "reg_key 非法"}, 400)
             if not IS_WINDOWS:
                 return self._json({"error": "仅 Windows"}, 400)
             import winreg
+            hprefix, sub_path = parsed
+            hive = (winreg.HKEY_LOCAL_MACHINE if hprefix == "HKLM"
+                    else winreg.HKEY_CURRENT_USER)
             cmd = ""
-            parts = reg_key.split("\\")
             try:
-                k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE if parts[0] == "SOFTWARE"
-                                   else winreg.HKEY_CURRENT_USER,
-                                   "\\".join(parts[1:]))
-                try:
+                with winreg.OpenKey(hive, sub_path) as k:
                     try:
                         cmd = str(winreg.QueryValueEx(k, "QuietUninstallString")[0])
                     except OSError:
                         cmd = str(winreg.QueryValueEx(k, "UninstallString")[0])
-                finally:
-                    k.Close()
             except OSError:
                 pass
             if not cmd:
                 return self._json({"error": "注册表里找不到卸载命令"}, 404)
             try:
-                os.startfile(cmd)   # ShellExecute：卸载向导照常弹出
+                # Windows CreateProcessW 直接接受完整命令行（含引号路径与 /S /X 参数），
+                # 避免 os.startfile 把整串当成文件名导致 FileNotFoundError；
+                # 遇 WinError 740（需要提权）回退 os.startfile 触发 UAC。
+                subprocess.Popen(cmd, shell=False)
                 return self._json({"ok": True})
             except OSError as exc:
+                if getattr(exc, "winerror", 0) == 740:
+                    try:
+                        os.startfile(cmd)
+                        return self._json({"ok": True})
+                    except OSError as exc2:
+                        return self._json({"error": f"启动失败：{exc2}"}, 500)
                 return self._json({"error": f"启动失败：{exc}"}, 500)
         if route == "/__oc__/bloatware/sweep":
             self.server.busy = getattr(self.server, "busy", False)
@@ -7120,22 +7262,28 @@ class Handler(BaseHTTPRequestHandler):
             self.server.busy = True
             try:
                 r = bloatware_sweep(reg_key, [str(x) for x in dirs][:20])
+                _BLOAT_CACHE.update(ts=0.0, r=None)
                 try:
                     append_history({
                         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "trigger": "毒瘤软件残留清扫",
                         "freed": 0,
-                        "freed_h": "—",
+                        "freed_h": "0 B",
                         "results": [{"label": os.path.basename(r0["path"]) or r0["path"],
                                      "path": r0["path"],
                                      "freed": 0,
-                                     "trashed": 0,
+                                     "trashed": 1 if r0.get("trashed") else 0,
                                      "failed": 0 if r0["ok"] else 1,
                                      "error": r0.get("error")}
                                     for r0 in r.get("results", [])],
                     })
                 except Exception:  # noqa: BLE001
                     traceback.print_exc()
+                if not r.get("ok"):
+                    errs = [x.get("error") for x in r.get("results", []) if x.get("error")]
+                    if r.get("reg_error"):
+                        errs.append(r["reg_error"])
+                    r["error"] = "；".join(errs[:3]) or "部分残留未能清除"
                 return self._json(r)
             finally:
                 self.server.busy = False
@@ -7153,7 +7301,13 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 self.server.busy = False
         if route == "/__oc__/junction-restore":
-            return self._json(junction_restore(str(body.get("src") or "")))
+            if getattr(self.server, "busy", False):
+                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
+            self.server.busy = True
+            try:
+                return self._json(junction_restore(str(body.get("src") or "")))
+            finally:
+                self.server.busy = False
         if route == "/__oc__/junction/list":
             return self._json({"records": _load_json(MOVED_JUNCTIONS_PATH, [])})
         if route == "/__oc__/recycle-restore":
@@ -7164,25 +7318,42 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "单次最多 50 个路径"}, 400)
             return self._json(recycle_restore([str(x) for x in paths_in]))
         if route == "/__oc__/snapshot/diff":
+            try:
+                days_n = int(body.get("days") or 7)
+            except (TypeError, ValueError):
+                return self._json({"error": "days 必须是整数"}, 400)
             return self._json(snapshot_diff(
-                str(body.get("drive") or drive or "C"),
-                int(body.get("days") or 7)))
+                str(body.get("drive") or "C"), days_n))
         if route == "/__oc__/fs-search":
             return self._json(fs_search(
                 str(body.get("drive") or "C"),
                 str(body.get("q") or "")))
         if route == "/__oc__/appclean/scan":
-            # do_POST 作用域没有 drive 变量（探测曾触发 NameError→500）；
-            # 不传 drive = 扫描全盘符。TTL 10 分钟：切页签不重扫。
+            # do_POST 作用域没有 drive 变量；不传 drive = 扫描全盘符。
+            # 按 drive 分键缓存（TTL 10 分钟），传 fresh=True 绕过缓存。
+            drv0 = str(body.get("drive") or "").rstrip(":").upper()
+            fresh = bool(body.get("fresh"))
             now0 = time.time()
-            if (_APPCLEAN_CACHE["r"] is not None
-                    and now0 - _APPCLEAN_CACHE["ts"] < 600):
-                return self._json(_APPCLEAN_CACHE["r"])
-            r0 = appclean_scan(
-                str(body.get("drive") or "").rstrip(":").upper())
+            hit = _APPCLEAN_CACHE.get(drv0)
+            if not fresh and hit and now0 - hit[0] < 600:
+                return self._json(hit[1])
+            r0 = appclean_scan(drv0)
             if r0.get("ok"):
-                _APPCLEAN_CACHE.update(ts=now0, r=r0)
+                _APPCLEAN_CACHE[drv0] = (now0, r0)
             return self._json(r0)
+        if route == "/__oc__/appclean/clean":
+            paths_in = body.get("paths") or []
+            if not isinstance(paths_in, list) or not paths_in:
+                return self._json({"error": "paths 不能为空"}, 400)
+            if len(paths_in) > 30:
+                return self._json({"error": "单次最多 30 个路径"}, 400)
+            if getattr(self.server, "busy", False):
+                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
+            self.server.busy = True
+            try:
+                return self._json(appclean_clean([str(x) for x in paths_in]))
+            finally:
+                self.server.busy = False
         if route == "/__oc__/downloads-archive":
             p0 = body.get("paths")
             only0 = [str(x) for x in p0] if isinstance(p0, list) else None
@@ -7354,11 +7525,12 @@ class Handler(BaseHTTPRequestHandler):
             pid, enable = str(body.get("id") or ""), body.get("enabled")
             if not pid:
                 return self._json({"ok": False, "error": "缺少 id"}, 400)
-            st = load_packs_state()
-            dis = set(st["disabled"])
-            dis.discard(pid) if enable else dis.add(pid)
-            st["disabled"] = sorted(dis)
-            save_packs_state(st)
+            with _lock:
+                st = load_packs_state()
+                dis = set(st["disabled"])
+                dis.discard(pid) if enable else dis.add(pid)
+                st["disabled"] = sorted(dis)
+                save_packs_state(st)
             return self._json({"ok": True,
                                "packs": load_packs(use_cache=False)["packs"]})
         if route == "/__oc__/packs/delete":
@@ -7369,13 +7541,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False,
                                    "error": "只能删除自己导入的包；内置包请用停用"},
                                   400)
-            try:
-                f.unlink()
-            except OSError as e:
-                return self._json({"ok": False, "error": str(e)}, 500)
-            st = load_packs_state()
-            st["disabled"] = [x for x in st["disabled"] if x != pid]
-            save_packs_state(st)
+            with _lock:
+                try:
+                    f.unlink()
+                except OSError as e:
+                    return self._json({"ok": False, "error": str(e)}, 500)
+                st = load_packs_state()
+                st["disabled"] = [x for x in st["disabled"] if x != pid]
+                save_packs_state(st)
             return self._json({"ok": True,
                                "packs": load_packs(use_cache=False)["packs"]})
         if route == "/__oc__/packs/update":
@@ -7397,7 +7570,8 @@ class Handler(BaseHTTPRequestHandler):
                 patch["api_key"] = ""
             elif not str(patch.get("api_key") or "").strip():
                 patch.pop("api_key", None)
-            save_ai_config(patch)
+            with _lock:
+                save_ai_config(patch)
             return self._json({"ok": True, "ai": ai_public_config()})
         if route == "/__oc__/ai/test":
             return self._json(ai_test())
@@ -7445,11 +7619,11 @@ def _open_app_window(url: str) -> None:
     Chromium，--app 行为一致）；找不到就回退默认浏览器。
     """
     candidates = [
-        os.path.expandvars(r"%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe"),
-        os.path.expandvars(r"%ProgramFiles%\\Microsoft\\Edge\\Application\\msedge.exe"),
-        os.path.expandvars(r"%LOCALAPPDATA%\\Microsoft\\Edge Application\\msedge.exe"),
-        os.path.expandvars(r"%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe"),
-        os.path.expandvars(r"%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
     ]
     for exe in candidates:
         if os.path.isfile(exe):
@@ -7481,21 +7655,29 @@ def downloads_archive(root: str | None = None,
         entries = list(os.scandir(root))
     except OSError as e:
         return {"error": f"无法读取下载目录：{e}"}
-    only_set = {os.path.normpath(os.path.abspath(p0)) for p0 in only} \
+    only_set = {os.path.normpath(os.path.abspath(p0)).lower() for p0 in only} \
         if only else None
     for e in entries:
         try:
             if e.name.startswith("."):
                 continue
-            if not e.is_file() and not e.is_dir():
-                continue
-            if only_set and os.path.normpath(os.path.abspath(e.path)) not in only_set:
-                continue
-            info = identify(e.name, e.path, "file")
-            cat = info.get("category") or "未识别"
+            # 未显式指定 only 时只归档顶层文件，避免把已有分类子目录再次嵌套进「未识别」
+            if only_set is None:
+                if not e.is_file(follow_symlinks=False):
+                    continue
+            else:
+                if not e.is_file(follow_symlinks=False) and not e.is_dir(follow_symlinks=False):
+                    continue
+                if os.path.normpath(os.path.abspath(e.path)).lower() not in only_set:
+                    continue
+            kind0 = "dir" if e.is_dir(follow_symlinks=False) else "file"
+            info = identify(e.name, e.path, kind0)
+            cat = "子文件夹归档" if kind0 == "dir" else (info.get("category") or "未识别")
             cat_dir = cat if re.fullmatch(r"[\w\u4e00-\u9fff -]+", cat) \
                 else "其他"
             target_dir = os.path.join(root, cat_dir)
+            if os.path.normcase(os.path.normpath(e.path)) == os.path.normcase(os.path.normpath(target_dir)):
+                continue
             os.makedirs(target_dir, exist_ok=True)
             dst = os.path.join(target_dir, e.name)
             k = 1
@@ -7511,11 +7693,14 @@ def downloads_archive(root: str | None = None,
                           f"{type(exc).__name__}: {exc}"})
     moved = [m for m in moves if "error" not in m]
     try:
-        log = _load_json(ARCHIVE_LOG_PATH, [])
-        if moved:
-            log.insert(0, {"time": datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"), "moves": moved})
-        _atomic_write(ARCHIVE_LOG_PATH, log[:20])
+        with _lock:
+            log = _load_json(ARCHIVE_LOG_PATH, [], use_cache=False)
+            if not isinstance(log, list):
+                log = []
+            if moved:
+                log.insert(0, {"time": datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"), "moves": moved})
+            _atomic_write(ARCHIVE_LOG_PATH, log[:20])
     except Exception:  # noqa: BLE001
         traceback.print_exc()
     return {"ok": True, "moved": len(moved),
@@ -7525,22 +7710,25 @@ def downloads_archive(root: str | None = None,
 
 def downloads_archive_undo() -> dict:
     """撤销最近一次归档：按日志把文件移回下载目录顶层。"""
-    log = _load_json(ARCHIVE_LOG_PATH, [])
-    if not log:
-        return {"error": "没有可撤销的归档记录"}
-    session = log.pop(0)
-    restored = 0
-    errors = []
-    for m in session.get("moves", []):
-        try:
-            if os.path.exists(m["to"]):
-                shutil.move(m["to"], m["from"])
-                restored += 1
-            else:
-                errors.append(f"{m['name']}：目标文件已不在")
-        except OSError as exc:
-            errors.append(f"{m['name']}：{exc}")
-    _atomic_write(ARCHIVE_LOG_PATH, log)
+    with _lock:
+        log = _load_json(ARCHIVE_LOG_PATH, [], use_cache=False)
+        if not isinstance(log, list) or not log:
+            return {"error": "没有可撤销的归档记录"}
+        session = log.pop(0)
+        restored = 0
+        errors = []
+        for m in session.get("moves", []):
+            try:
+                if not os.path.exists(m["to"]):
+                    errors.append(f"{m['name']}：目标文件已不在")
+                elif os.path.exists(m["from"]):
+                    errors.append(f"{m['name']}：原位置已存在同名项，未覆盖")
+                else:
+                    shutil.move(m["to"], m["from"])
+                    restored += 1
+            except OSError as exc:
+                errors.append(f"{m['name']}：{exc}")
+        _atomic_write(ARCHIVE_LOG_PATH, log)
     return {"ok": True, "restored": restored, "errors": errors}
 
 
@@ -7588,9 +7776,8 @@ def _tray_worker(url: str) -> None:
             ctypes.c_size_t, ctypes.c_longlong)
 
         def _wndproc(hwnd, msg, wparam, lparam):
-            nonlocal nid_cb
             if msg == WM_USER_TRAY:
-                if lparam == 0x0203 or lparam == 0x0202:   # 双击/左键抬起
+                if lparam == 0x0203:                       # 左键双击打开（避免单击/双击重复弹多页）
                     webbrowser.open(url)
                 elif lparam == 0x0205:                     # 右键抬起
                     user32.SetForegroundWindow(hwnd)
@@ -7678,16 +7865,28 @@ def run_auto_clean(drive: str) -> dict:
     drive = (drive or "C").rstrip(":").upper()
     targets = [t for t in build_targets(drive)
                if t.get("cleanable") is not False]
+    targets, _merged = dedup_nested_targets(targets)
     results = []
     for t in targets:
         try:
             results.append(clean_target(t, None, drive, trash=True))
         except Exception as exc:  # noqa: BLE001
-            results.append({"id": t.get("id"),
-                            "error": f"{type(exc).__name__}: {exc}"})
+            results.append(_error_result(t, drive, exc))
     freed = sum(r.get("freed", 0) or 0 for r in results
                 if isinstance(r, dict))
-    return {"drive": drive, "targets": len(selected_targets := targets),
+    failed = sum(r.get("failed", 0) or 0 for r in results
+                 if isinstance(r, dict))
+    try:
+        append_history({
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "drive": drive,
+            "trigger": f"自动安全清理（{drive}:）",
+            "results": results, "freed": freed, "failed": failed,
+            "targets": len(targets), "freed_h": human(freed),
+        })
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+    return {"drive": drive, "targets": len(targets),
             "freed": freed, "freed_h": human(freed), "results": results}
 
 

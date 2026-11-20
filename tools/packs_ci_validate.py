@@ -17,7 +17,6 @@
 import argparse
 import hashlib
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -96,7 +95,6 @@ def main() -> int:
         for field in REQUIRED_FIELDS:
             if not data.get(field):
                 errors.append(f"{fname}: 缺必填字段 {field}")
-        pid = str(data.get("id") or fname)
         # 规范形哈希：对解析后的 JSON 做 sort_keys 紧凑序列化再哈希——
         # 客户端（fetch 后 json.loads）与远端文件即使格式化不同也能对上，
         # 语义相同必同哈希；任何内容改动必变哈希。

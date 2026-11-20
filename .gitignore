@@ -19,6 +19,10 @@ config/packs-user/
 config/ai.json
 # 用户自定义游戏库（游戏占用概览的手动添加条目，本机数据）
 config/game-libs.json
+# 磁盘搬家记录（含本机迁移路径，绝不进版本库）
+config/moved-junctions.json
+# 便携版 WizTree 本地下载目录（随目录拷贝即用，不入库）
+portable/
 
 # 本机真实测试用例（含本机真实目录名，绝不外发）
 tools/local-cases.json
@@ -60,11 +64,7 @@ config/.filetypes.linttest.bak
 .DS_Store
 .oc_write_probe_*
 
-# 运行时状态（v2.8 起）：删除中断日志与跨进程锁文件
-#   pending-deletes.json —— 删除中断时的暂存目录日志，启动时据此还原
-#   .oc-history.lock     —— history 的跨进程文件锁
-# 两者都随 --data-dir 落在数据目录；默认数据目录就是仓库根，必须忽略。
-pending-deletes.json
+# 运行时状态（v2.8 起）：跨进程锁文件（pending-deletes.json 已在顶部忽略）
 .oc-*.lock
 
 # 引擎实测速度缓存（「谁快用谁」，本机耗时数据）

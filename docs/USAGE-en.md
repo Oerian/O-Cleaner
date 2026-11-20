@@ -749,18 +749,18 @@ provided the program can determine whether the drive is the system drive (by che
 
 ---
 
-## 11. What's new in v2.12 – v2.15
+## 11. What's new in v2.12 – v2.16
 
+- **Analysis Center**: third primary view unifying seven specialized tools (Big Files, Duplicate Files, App Deep Clean, Bloatware Removal, Disk Snapshots, Downloads Organizer, Disk Migration) in a consistent ranking-row layout with session caching and tab-switch race guards.
 - **One-click restore from Recycle Bin**: in "History → Details", entries moved to the Recycle Bin get a "↩ Restore" link (exact original-path matching).
-- **Recent spikes**: compare scan snapshots, ranked by growth; 🔄 marks hot re-growth.
+- **Disk Snapshots**: compare recent 7-day scan snapshots with a center-line growth/shrink chart (hover shows "then → now") and top-level New Files ranking (with top-300 cutoff filtering); 🔄 marks hot re-growth.
 - **Full-drive search**: search file/folder names across the whole drive from the ranking header.
-- **App deep clean**: structured breakdown for WeChat/QQ/Jianying/Docker/HuggingFace/Ollama/pip/npm/Steam-shader caches — cache / data / core semantics.
-- **C-drive relocator**: move a directory to another drive with an NTFS Junction left behind; merge + auto-rename supported; one-click restore.
-- **Bloatware removal**: signature scan for 360/QQPCMgr/2345/Kingsoft suites; two-stage removal (official uninstaller, then leftover sweep).
-- **Treemap**: zero-dependency Canvas squarified view, click to drill down.
-- **Duplicate files**: hash-verified groups with keep-baseline and checkbox cleanup.
-- **Downloads**: checkbox cleanup + one-click archive by type (undoable).
-- **CLI**: `python app.py --auto-clean --drive C` (headless); `pythonw app.py --tray` (system tray); `python app.py --app` (Edge frameless window).
+- **App Deep Clean**: recursive measurement and structured breakdown for WeChat/WXWork/QQ/Jianying/Docker/HuggingFace/Ollama/pip/npm/Steam-shader caches — cache (dedicated whitelist Recycle Bin cleanup) / data / core semantics, with Rescan button.
+- **Disk Migration**: batch-move checked directories from any drive to another drive with an NTFS Junction left behind; merge + auto-rename and optional target subfolder supported; one-click restore.
+- **Bloatware Removal**: signature scan across HKLM/HKCU uninstall entries and all drive letters for 15 common bundled suites; two-stage removal (official uninstaller, then Recycle Bin leftover sweep + Uninstall-whitelist key removal) with Rescan button.
+- **Duplicate Files**: full-file SHA-256 verified groups in expandable ranking rows with cross-directory protection and Recycle Bin cleanup.
+- **Downloads Organizer**: checkbox cleanup to Recycle Bin + undoable one-click archive by type (top-level files only, preserving existing subfolders) + inline Explorer reveal for subfolders.
+- **CLI**: `python app.py --auto-clean --drive C` (headless safe clean with history recording); `pythonw app.py --tray` (system tray); `python app.py --app` (Edge frameless window).
 
 ## 12. Security Design
 

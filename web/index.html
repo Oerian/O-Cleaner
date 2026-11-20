@@ -437,8 +437,8 @@
   .cllegend em{width:9px;height:9px;border-radius:2px;display:inline-block;font-style:normal}
 
   /* 扩展名分布（类型分布）竖向柱状图：每列一类型，柱高∝体积。
-     2026-11-03 起从扫描概览的收起/展开器迁移为磁盘卡组件页签，
-     .extbox/.exttoggle 退役；列结构保留（三段定高，共享基线）。 */
+     2026-11-03 起从扫描概览的收起/展开器迁移为磁盘卡组件页签；
+     列结构保留（三段定高，共享基线）。 */
   .extv{display:flex;align-items:flex-end;gap:6px;height:130px;margin-top:3px;
     border-bottom:1px solid var(--line);padding:0 2px 3px}
   /* 2026-11-03 对齐修复：列改三段固定区（数值 2 行高 / 弹性柱区 / 标签
@@ -466,15 +466,6 @@
      ③ 基线轴线（--line 色）让图表落地；悬停增亮配合 title 提示。 */
   .tv{display:flex;align-items:flex-end;justify-content:center;gap:6px;height:130px;
       border-bottom:1px solid var(--line);padding:0 2px 3px}
-  .tvcol{flex:0 1 40px;min-width:3px;height:100%;display:flex;flex-direction:column;
-    justify-content:flex-end;cursor:default;position:relative}
-  .tvcol i{display:block;width:100%;min-height:3px;border-radius:3px 3px 0 0;
-    background:linear-gradient(180deg,var(--accent),var(--accent2));opacity:.72;
-    transition:opacity .13s}
-  .tvcol:hover i{opacity:1}
-  .tvcol.last i{opacity:1}
-  .tvcol.last::after{content:"";position:absolute;left:18%;right:18%;bottom:-5px;
-    height:2px;border-radius:1px;background:var(--accent)}
   .tvlbl{color:var(--dim2);font-size:11px;margin-top:4px}
   .dwlist{display:flex;flex-direction:column;gap:5px;margin-top:4px}
   .dwrow{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim)}
@@ -614,10 +605,6 @@
      #modal 运行时重挂进 anHost —— 面板化呈现，状态随视图保留 */
   /* 磁盘卡三页签（趋势/清理记录/类型分布）展开后统一对齐基线 */
   #dwBody{width:100%;min-height:200px}
-  /* 快照双图表（2026-11-10）：与剩余空间趋势同款风格基线 */
-  .tvcol .tvlab{font-size:9px;line-height:1.2;color:var(--dim);
-    max-width:44px;overflow:hidden;text-align:center;font-weight:normal;
-    overflow-wrap:anywhere}
   .sdchart{display:flex;align-items:flex-end;gap:6px;height:150px;
     border-bottom:1px solid var(--line);padding:0 2px 3px;
     margin:10px 0 6px;flex-wrap:nowrap;overflow-x:auto}
@@ -639,23 +626,6 @@
   .slab{font-size:9.5px;line-height:1.2;color:var(--dim);text-align:center;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
     font-weight:normal}
-  .sdchart .nfcol{cursor:pointer}
-  .sdcmpbar{display:flex;flex-direction:row;align-items:flex-end;
-    justify-content:center;gap:3px;width:62%;max-width:34px;height:130px}
-  .sdcmpbar i{display:block;width:44%;min-height:3px;
-    border-radius:3px 3px 0 0;
-    background:linear-gradient(180deg,var(--accent),var(--accent2))}
-
-  .sdtrack{position:relative;height:17px;border-radius:4px;
-    background:var(--panel-hover);overflow:hidden}
-  .sdtrack .vthen{position:absolute;left:0;top:0;height:100%;
-    border-radius:4px;background:#9aa7b8;opacity:.55}
-  .sdtrack .vfill{position:absolute;left:0;top:0}
-  .tvpair{flex:0 1 48px;min-width:6px;height:100%;display:flex;
-    flex-direction:row;align-items:flex-end;justify-content:center;gap:3px;
-    cursor:default;position:relative}
-  .tvpair i{display:block;width:46%;min-height:3px;border-radius:3px 3px 0 0;
-    background:linear-gradient(180deg,var(--accent),var(--accent2))}
   #dwBody > div{width:100%}
   .antabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px;
     position:sticky;top:0;z-index:5;background:var(--panel);
@@ -749,9 +719,8 @@
   .rule .racts{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
   .rule .racts button{flex:1;min-width:0}
 
-  /* Steam 独立页面：游戏清单已页签化（2026-11-02），不再按盘分组堆叠，
-     原 .dsk 分盘占用块随之移除；游戏占用概览不跟随选中盘 —— 聚合所有
-     盘的游戏，顶部盘符卡的选中高亮在该页没有意义，切过去时压掉。 */
+  /* Steam 独立页面：游戏清单聚合所有盘的游戏，不再按盘分组堆叠；
+     顶部盘符卡的选中高亮在该页没有意义，切过去时压掉。 */
   body[data-view="steam"] .drv.on{border-color:var(--line);background:var(--panel)}
 
   /* ================= 合并后的累积+换算面板 ================= */
@@ -900,7 +869,6 @@
       <option value="4" data-i18n="depth.4">4 层</option>
       <option value="5" data-i18n="depth.5">5 层（最慢）</option>
     </select>
-    <span class="tb-sep"></span>
     <span class="tb-sep"></span>
     <button id="btnDense" data-i18n="btn.dense">紧凑模式</button>
     <button id="btnAll" data-i18n="btn.all">全选</button>
@@ -5947,7 +5915,7 @@ function openAnalysis(tool) {
 
 /* 毒瘤软件完整清除：两段式 —— 先跑官方卸载程序，再由用户点「清扫残留」
    做目录/注册表精准清理。扫描只读不删。 */
-async function openBloatware() {
+async function openBloatware(fresh = false) {
   const anSeq = ++_anSeq;
   $("modal").innerHTML = `<h2>${t("bw.title", "毒瘤软件清除")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
@@ -5955,8 +5923,11 @@ async function openBloatware() {
   $("mask").classList.add("on");
   let r;
   try {
-    r = await apiJSON(`${API}/__oc__/bloatware/scan`, { method: "POST" });
+    r = await apiJSON(`${API}/__oc__/bloatware/scan`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fresh: !!fresh }) });
   } catch (e) { r = { error: String(e) }; }
+  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
   const found = r && r.found || [];
   const hit = found.filter(a => a.uninstall || a.quiet || (a.residue_dirs || []).length);
   $("modal").innerHTML = `<h2>${t("bw.title", "毒瘤软件清除")}
@@ -5974,8 +5945,10 @@ async function openBloatware() {
       </div>`).join("")
       : `<div class="empty">${t("bw.clean", "签名库内的常见毒瘤软件未在本机发现 ✓")}</div>`}
     <div style="text-align:right;padding-top:10px">
+      <button class="tiny" id="bwRescan">${t("bw.rescan", "重新扫描")}</button>
       <button class="tiny" id="bwClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("bwClose").addEventListener("click", closeModal);
+  $("bwRescan").addEventListener("click", () => openBloatware(true));
   [...document.querySelectorAll("#modal .bw-un")].forEach(b =>
     b.addEventListener("click", () => {
       const a = hit[+b.dataset.i];
@@ -5995,9 +5968,15 @@ async function openBloatware() {
       const rr = await apiJSON(`${API}/__oc__/bloatware/sweep`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reg_key: a.reg_key,
-                               dirs: a.residue_dirs || [] }) });
-      toast(rr.error || t("bw.swept", "残留清扫完成（明细已计入清理记录）"));
-      openBloatware();
+                               dirs: a.residue_dirs || [] }) }).catch(e => ({ ok: false, error: String(e) }));
+      if (!rr.ok || rr.error) {
+        toast(rr.error || t("up.fail", "检查失败"));
+      } else {
+        const dirN = (rr.results || []).filter(x => x.ok && x.trashed).length;
+        toast(t("bw.sweptDetail", "残留清扫完成：移入回收站 {d} 个目录，删除 {r} 条注册表键")
+          .replace("{d}", dirN).replace("{r}", rr.reg_deleted || 0));
+      }
+      openBloatware(true);
     }));
 }
 
@@ -6005,6 +5984,7 @@ async function openBloatware() {
    目标已存在可「合并 + 冲突重命名」——用于误下载到 C 盘的绿色软件搬家。 */
 let JM_BATCH = null;   // 勾选搬家：待迁移目录清单（占用排行勾选后进入）
 async function openJunctionMove() {
+  ++_anSeq;  // 切入迁移页签时作废其它分析工具的在途异步结果
   const others = (STATE.drives || []).filter(d => !d.is_system)
     .map(d => d.letter);
   if (JM_BATCH && JM_BATCH.length) {
@@ -6203,6 +6183,7 @@ async function openSnapDiff(selDrive) {
     const r = await apiJSON(`${API}/__oc__/snapshot/diff`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ drive, days: 7 }) }).catch(e0 => ({ error: String(e0) }));
+    if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
     const box = $("sdBody");
     if (!box) return;
     if (r.error) { box.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
@@ -6293,7 +6274,7 @@ async function openSnapDiff(selDrive) {
 
 /* 应用专清（v2.15 方向三）：国民级大软件与开发者缓存结构化拆解。
    cache 项可一键移入回收站；data 项给处理建议；core 项锁定警示。 */
-async function openAppClean() {
+async function openAppClean(fresh = false) {
   const anSeq = ++_anSeq;
   $("modal").innerHTML = `<h2>${t("ac.title", "应用专清")}</h2>
     <div class="mbody"><div class="empty"><span class="spin"></span>
@@ -6301,7 +6282,8 @@ async function openAppClean() {
   $("mask").classList.add("on");
   const r = await apiJSON(`${API}/__oc__/appclean/scan`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ drive }) }).catch(e => ({ error: String(e) }));
+    body: JSON.stringify({ drive, fresh: !!fresh }) }).catch(e => ({ error: String(e) }));
+  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
   const apps = r.apps || [];
   const kindBadge = k => k === "cache"
     ? `<span style="color:var(--ok-fg)">${t("ac.cache", "缓存·可清")}</span>`
@@ -6313,12 +6295,12 @@ async function openAppClean() {
     <div class="mbody">${apps.length ? apps.map(a => `
       <div class="logrow">
         <div class="t"><b>${esc(a.name)}</b>
-          <span class="freed">${a.total_h}</span>
+          <span class="freed">${esc(a.total_h)}</span>
           <span class="hint">${esc(a.base)}</span></div>
         ${a.items.map(it => `
         <div class="d" style="word-break:break-all">
           ${kindBadge(it.kind)} <b>${esc(it.label)}</b>
-          <span class="freed">${it.size_h}</span>
+          <span class="freed">${esc(it.size_h)}</span>
           ${it.kind === "cache" ? `<button class="tiny ac-go" data-p='${esc(it.path)}'
              data-label='${esc(it.label)}'>${t("ac.clean", "清入回收站")}</button>` : ""}
         </div>
@@ -6328,16 +6310,22 @@ async function openAppClean() {
       : `<div class="empty">${t("ac.none", "签名库里的应用数据目录在本机均未发现")}</div>`}
     <div class="d hint">${t("ac.tip", "core 项（聊天数据库等）永远不可清理；data 项（接收的文件等）请自行确认后处理。")}</div>
     <div style="text-align:right;padding-top:10px">
+      <button class="tiny" id="acRescan">${t("ac.rescan", "重新扫描")}</button>
       <button class="tiny" id="acClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("acClose").addEventListener("click", closeModal);
+  $("acRescan").addEventListener("click", () => openAppClean(true));
   [...document.querySelectorAll("#modal .ac-go")].forEach(b =>
     b.addEventListener("click", async () => {
       b.disabled = true; b.textContent = t("ac.working", "清理中…");
-      const rr = await apiJSON(`${API}/__oc__/delete-paths`, {
+      const rr = await apiJSON(`${API}/__oc__/appclean/clean`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paths: [b.dataset.p] }) });
-      toast(rr.error || t("ac.cleaned", "已移入回收站（明细计入清理记录）"));
-      openAppClean();
+        body: JSON.stringify({ paths: [b.dataset.p] }) }).catch(e => ({ ok: false, error: String(e) }));
+      if (!rr.ok || rr.error) {
+        toast(rr.error || t("up.fail", "检查失败"));
+      } else {
+        toast(t("ac.cleanedH", "已移入回收站（{v}，明细计入清理记录）").replace("{v}", rr.trashed_h || "0 B"));
+      }
+      openAppClean(true);
     }));
 }
 
@@ -6357,9 +6345,6 @@ async function openDownloadsAdvice() {
     r = { error: String(e) };
   }
   if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
-  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
-  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
-  if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
   if (!r || r.error) {
     $("modal").innerHTML = `<h2>${t("dl.title", "下载目录整理建议")}</h2>
       <div class="mbody"><div class="empty">${esc((r && r.error) || t("up.fail", "检查失败"))}</div>
@@ -6370,7 +6355,7 @@ async function openDownloadsAdvice() {
   }
   $("modal").innerHTML = `<h2>${t("dl.title", "下载目录整理建议")}
       <span class="hint">${t("dl.n", "{n} 个文件 · 共 {v}")
-        .replace("{n}", r.total_files).replace("{v}", r.total_size_h)}</span></h2>
+        .replace("{n}", r.total_files).replace("{v}", esc(r.total_size_h || "0 B"))}</span></h2>
     <div class="mbody">
       ${r.headline ? `<div class="empty" style="margin:0 0 10px;text-align:left">
         💡 ${esc(r.headline)}</div>` : ""}
@@ -6378,25 +6363,17 @@ async function openDownloadsAdvice() {
       <div class="logrow">
         <div class="t"><label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px">
           <input type="checkbox" class="dlCatChk" data-cat="${esc(g.category)}">
-          <b>${g.category}</b></label>
+          <b>${esc(g.category)}</b></label>
           <span style="color:var(--dim2)">× ${g.count}</span>
           <span class="hint">${t("dl.catAll", "勾选=整类参与归档")}</span>
           <span class="freed">${esc(g.size_h)}</span></div>
         ${g.hint ? `<div class="d" style="color:var(--ok)">${esc(g.hint)}</div>` : ""}
         ${(g.items || []).length ? `
-        <div class="d">${(g.items || []).map(it => {
-          const w0 = Math.max(2, ((it.size || 0) / (g.size || 1) * 100)).toFixed(1);
-          return `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <input type="checkbox" class="dlChk" data-p="${esc(it.path)}">
-          <span style="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(it.path)}">${esc(it.name)}</span>
-          <span class="hint" style="flex:none">${it.size_h}</span></label>`;
-        }).join("")}</div>` : ""}
-        ${g.names && g.names.length && !(g.items || []).length ? `<div class="d" style="word-break:break-all">
-          ${g.category === "子文件夹"
-            ? g.names.map(n => `<span style="display:inline-block;margin-right:10px">📁 ${esc(n)}
-              <a href="javascript:void(0)" class="dlReveal" data-n="${esc(n)}"
-                 style="margin-left:4px">${t("bf.reveal", "在资源管理器中打开位置")}</a></span>`).join("")
-            : g.names.map(n => esc(n)).join(" · ")}</div>` : ""}
+        <div class="d">${(g.items || []).map(it => `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" class="dlChk" data-p="${esc(it.path)}" data-dir="${it.is_dir ? "1" : "0"}">
+          <span style="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(it.path)}">${it.is_dir ? "📁 " : ""}${esc(it.name)}</span>
+          ${it.is_dir ? `<a href="javascript:void(0)" class="dlReveal" data-p="${esc(it.path)}" style="flex:none;font-size:11px">${t("bf.reveal", "在资源管理器中打开位置")}</a>` : ""}
+          <span class="hint" style="flex:none">${esc(it.size_h)}</span></label>`).join("")}</div>` : ""}
       </div>`).join("") || `<div class="empty">${t("dl.empty", "下载目录是空的")}</div>`}
     <div style="text-align:right;padding-top:10px">
       <button class="go" id="dlGo" style="display:none">${t("dl.go", "清理选中项（移入回收站）")}</button>
@@ -6406,17 +6383,24 @@ async function openDownloadsAdvice() {
       <button class="tiny" id="dlClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("dlClose").addEventListener("click", closeModal);
   [...document.querySelectorAll("#modal .dlReveal")].forEach(a0 =>
-    a0.addEventListener("click", () => {
+    a0.addEventListener("click", ev => {
+      ev.preventDefault(); ev.stopPropagation();
       apiJSON(`${API}/__oc__/reveal`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: r.path + "\\" + a0.dataset.n, select: true }),
+        body: JSON.stringify({ path: a0.dataset.p, select: true }),
       });
     }));
-  const syncArcSel = () => {
-    const n = document.querySelectorAll("#modal .dlChk:checked").length;
+  const dlGo = $("dlGo");
+  const syncBtns = () => {
+    const checked = [...document.querySelectorAll("#modal .dlChk:checked")];
+    const nAll = checked.length;
+    const nFiles = checked.filter(x => x.dataset.dir !== "1").length;
     const b0 = $("dlArcSel");
-    if (b0) { b0.style.display = n ? "" : "none";
-      b0.textContent = t("dl.arcSelN", "归档勾选项（{n} 个）").replace("{n}", n); }
+    if (b0) {
+      b0.style.display = nAll ? "" : "none";
+      b0.textContent = t("dl.arcSelN", "归档勾选项（{n} 个）").replace("{n}", nAll);
+    }
+    if (dlGo) dlGo.style.display = nFiles ? "" : "none";
   };
   document.querySelectorAll("#modal .dlCatChk").forEach(c0 =>
     c0.addEventListener("change", () => {
@@ -6427,10 +6411,10 @@ async function openDownloadsAdvice() {
             row0.querySelector(".dlCatChk").dataset.cat === cat)
           k.checked = c0.checked;
       });
-      syncArcSel();
+      syncBtns();
     }));
   document.querySelectorAll("#modal .dlChk").forEach(k =>
-    k.addEventListener("change", syncArcSel));
+    k.addEventListener("change", syncBtns));
   $("dlArcSel").addEventListener("click", async () => {
     const picked = [...document.querySelectorAll("#modal .dlChk:checked")]
       .map(x => x.dataset.p);
@@ -6439,7 +6423,7 @@ async function openDownloadsAdvice() {
     b0.disabled = true;
     const rr = await apiJSON(`${API}/__oc__/downloads-archive`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paths: picked }) });
+      body: JSON.stringify({ paths: picked }) }).catch(e => ({ error: String(e) }));
     b0.disabled = false;
     if (rr.error) { toast(rr.error); return; }
     toast(t("dl.arcSelDone", "已归档 {n} 个文件到 {cats}")
@@ -6451,7 +6435,7 @@ async function openDownloadsAdvice() {
     if (!confirm(t("dl.arcConfirm", "把下载目录顶层的全部文件按类型移入分类子文件夹？（可在弹窗里一键撤销）"))) return;
     $("dlArc").disabled = true; $("dlArc").textContent = t("dl.archiving", "归档中…");
     const rr = await apiJSON(`${API}/__oc__/downloads-archive`, {
-      method: "POST" });
+      method: "POST" }).catch(e => ({ error: String(e) }));
     toast(rr.error || t("dl.arcDone", "已归档 {n} 个文件到 {cats}")
       .replace("{n}", rr.moved).replace("{cats}", (rr.by_category || []).join("、")));
     openDownloadsAdvice();
@@ -6459,28 +6443,29 @@ async function openDownloadsAdvice() {
   $("dlUndo").addEventListener("click", async () => {
     $("dlUndo").disabled = true; $("dlUndo").textContent = t("dl.undoing", "撤销中…");
     const rr = await apiJSON(`${API}/__oc__/downloads-archive/undo`, {
-      method: "POST" });
+      method: "POST" }).catch(e => ({ error: String(e) }));
     toast(rr.error || t("dl.undone", "已撤销最近一次归档（{n} 个文件移回顶层）")
       .replace("{n}", rr.restored));
     openDownloadsAdvice();
   });
-  const dlGo = $("dlGo");
-  const syncGo = () => { dlGo.style.display =
-    document.querySelectorAll("#modal .dlChk:checked").length ? "" : "none"; };
-  document.querySelectorAll("#modal .dlChk").forEach(c =>
-    c.addEventListener("change", syncGo));
   if (dlGo) dlGo.addEventListener("click", async () => {
     const picked = [...document.querySelectorAll("#modal .dlChk:checked")]
-      .map(x => x.dataset.p);
+      .filter(x => x.dataset.dir !== "1").map(x => x.dataset.p);
     if (!picked.length) { toast(t("dl.none", "请先勾选要清理的文件")); return; }
     if (!confirm(t("dl.confirm", "把选中的 {n} 个文件移入回收站？（可随时还原）")
         .replace("{n}", picked.length))) return;
     dlGo.disabled = true; dlGo.textContent = t("dl.working", "清理中…");
     const rr = await apiJSON(`${API}/__oc__/delete-paths`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paths: picked }) });
-    toast(rr.error || t("dl.done", "已移入回收站 {n}/{total} 个")
-      .replace("{n}", rr.done).replace("{total}", rr.total));
+      body: JSON.stringify({ paths: picked }) }).catch(e => ({ ok: false, error: String(e) }));
+    if (rr.error && !rr.done) {
+      toast(rr.error);
+    } else if (rr.error) {
+      toast(`${t("dl.done", "已移入回收站 {n}/{total} 个").replace("{n}", rr.done).replace("{total}", rr.total)}（${rr.error}）`);
+    } else {
+      toast(t("dl.done", "已移入回收站 {n}/{total} 个")
+        .replace("{n}", rr.done).replace("{total}", rr.total));
+    }
     openDownloadsAdvice();
   });
 }
@@ -7562,6 +7547,8 @@ const I18N_EN = {
   "bw.unLaunched": "Official uninstaller launched. After finishing the wizard, come back for “② Sweep leftovers”",
   "bw.sweeping": "Sweeping…",
   "bw.swept": "Leftover sweep finished (details recorded in cleanup history)",
+  "bw.rescan": "Rescan",
+  "bw.sweptDetail": "Sweep finished: {d} folders moved to Recycle Bin, {r} registry keys removed",
   "jm.title": "Disk Relocation",
   "jm.intro": "Move a space-hungry but undeletable directory to another drive and leave an NTFS Junction behind for transparent access. Verifiable end to end, restorable anytime.",
   "jm.src": "Source directory:",
@@ -7668,6 +7655,8 @@ const I18N_EN = {
   "ac.core": "Core · do not touch",
   "ac.data": "User data · review",
   "ac.clean": "Clean (to Recycle Bin)",
+  "ac.rescan": "Rescan",
+  "ac.cleanedH": "Moved to Recycle Bin ({v}, recorded in cleanup history)",
   "ac.working": "Cleaning…",
   "ac.cleaned": "Moved to Recycle Bin (recorded in history)",
   "ac.none": "No signature-library app data dirs found on this machine",

@@ -15,6 +15,7 @@ selftest 的 monkeypatch 落在 core 命名空间（core.X = stub），本模块
 from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import os
 import shutil
+import sys
 import time
 import ctypes
 import stat
@@ -61,9 +62,15 @@ def _long_path(p: str) -> str:
     return p
 
 def rm(path: str) -> bool:
-    """删除单个文件或目录，失败返回 False。"""
+    """删除单个文件或目录（Junction/符号链接只摘挂载点），失败返回 False。"""
     try:
-        if os.path.isdir(path) and not os.path.islink(path):
+        if os.path.islink(path) or _is_reparse_dir(path):
+            if os.path.isdir(path):
+                os.rmdir(path)
+            else:
+                os.remove(path)
+            return True
+        if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
             return not os.path.exists(path)
         os.remove(path)
@@ -73,6 +80,12 @@ def rm(path: str) -> bool:
     except (PermissionError, OSError):
         try:
             os.chmod(path, 0o700)
+            if os.path.islink(path) or _is_reparse_dir(path):
+                if os.path.isdir(path):
+                    os.rmdir(path)
+                else:
+                    os.remove(path)
+                return True
             if os.path.isdir(path):
                 shutil.rmtree(path, ignore_errors=True)
                 return not os.path.exists(path)
@@ -162,7 +175,10 @@ def rm_tree_strict(path: str) -> tuple[bool, bool, str]:
             errs.append(p)
 
     try:
-        shutil.rmtree(staging, onerror=_onerr)
+        if hasattr(shutil, "rmtree") and sys.version_info >= (3, 12):
+            shutil.rmtree(staging, onexc=_onerr)
+        else:
+            shutil.rmtree(staging, onerror=_onerr)
     except Exception:
         pass
     if not errs and not os.path.exists(staging):
