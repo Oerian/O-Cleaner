@@ -135,7 +135,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 |---|---|
 | `启动 O-Cleaner.bat` | 启动脚本（内置 Python 3.8+ 真实运行时校验） |
 | `app.py` | 启动入口与向后兼容导出层（CLI 参数分发、服务启动） |
-| `ocleaner\` | 核心业务标准库包（11 模块：`core.py` 编排与 HTTP 路由、`analysis.py` 分析中心域（大文件排行 / 重复检测 / 毒瘤清除 / Junction 搬家 / 应用专清 / 下载整理 / 快照对比 / 实时搜索）、`engines.py` 自研 NTFS MFT 直读与 WizTree 加速、`guard.py` 九层删除护栏与受保护域、`store.py` 原子存取与锁、`deleter.py` 三态删除与占用预检、`measure.py` 进程内 `os.scandir` 测量、`credentials.py` Windows DPAPI 凭据加密、`games.py` 全平台游戏库发现与趋势、`integrations.py` 自有 AI / Gist 云同步 / 版本更新检查） |
+| `ocleaner\` | 核心业务标准库包（12 模块：`core.py` 扫描编排与服务启动、`analysis.py` 分析中心域（大文件排行 / 重复检测 / 毒瘤清除 / Junction 搬家 / 应用专清 / 下载整理 / 快照对比 / 实时搜索 / 趋势预测）、`server.py` HTTP 路由层（/__oc__/* 路由与入口守卫）、`engines.py` 自研 NTFS MFT 直读与 WizTree 加速、`guard.py` 九层删除护栏与受保护域、`store.py` 原子存取与锁、`deleter.py` 三态删除与占用预检、`measure.py` 进程内 `os.scandir` 测量、`credentials.py` Windows DPAPI 凭据加密、`games.py` 全平台游戏库发现与趋势、`integrations.py` 自有 AI / Gist 云同步 / 版本更新检查） |
 | `ps_scripts.py` | PowerShell 脚本模板常量（全盘树回退、进程占用候选枚举、Steam 清单等） |
 | `web/index.html` | Web 界面（单文件 HTML + CSS + JS，内置中英双语词典） |
 | `config/targets.json` | 预定义清理目标与一键预设（可自行增删条目） |

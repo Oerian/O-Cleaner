@@ -50,6 +50,7 @@ INCLUDE = [
     "ocleaner/games.py",
     "ocleaner/integrations.py",
     "ocleaner/measure.py",
+    "ocleaner/server.py",
     "tools/unit_test.py",
     "启动 O-Cleaner.bat",
     "README.md",
