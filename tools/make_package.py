@@ -40,6 +40,7 @@ INCLUDE = [
     "app.py",
     "ps_scripts.py",
     "ocleaner/__init__.py",
+    "ocleaner/analysis.py",
     "ocleaner/core.py",
     "ocleaner/credentials.py",
     "ocleaner/deleter.py",

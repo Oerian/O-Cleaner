@@ -10,10 +10,11 @@
 
 O-Cleaner 是一个 **Windows 原生、零第三方依赖、纯本地运行** 的磁盘空间分析与安全清理工具。
 
-- **后端**：Python 3.8+ 标准库，已模块化拆分为 `ocleaner/` 10 模块包，根目录 `app.py`（21 行）作为兼容启动入口与全量 re-export 垫片。
+- **后端**：Python 3.8+ 标准库，已模块化拆分为 `ocleaner/` 11 模块包，根目录 `app.py`（21 行）作为兼容启动入口与全量 re-export 垫片。
 - **前端**：单文件 `web/index.html`（原生 HTML + CSS + Vanilla ES6+，无构建步骤，内置中英双语词典 `I18N_EN`）。
 - **核心架构图**：
-  - `app.py` → 导出 `ocleaner/core.py`（扫描编排、识别、分析中心工具、HTTP `Handler`）
+  - `app.py` → 导出 `ocleaner/core.py`（扫描编排、识别、HTTP `Handler`）
+  - `ocleaner/analysis.py` → 分析中心域（大文件排行 / 重复大文件 / 应用专清 / 毒瘤清除 / 磁盘快照 / 下载整理 / 磁盘迁移 / 实时搜索，v2.17 自 core.py 迁出）
   - `ocleaner/engines.py` → 自研 NTFS MFT 直读引擎 + WizTree 便携版下载/Authenticode 验签/CSV 解析
   - `ocleaner/guard.py` → `check_deletable` 九层防误删护栏、受保护域继承、程序本体与浏览器档案识别
   - `ocleaner/deleter.py` → 三态删除（`rm_tree_strict`）、锁定文件预检、回收站删除（带容量守卫）、断电恢复
