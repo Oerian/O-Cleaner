@@ -5672,13 +5672,29 @@ function _bfCutoff(days) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+function _bfExtOf(name) {
+  const nm = (name || "").toLowerCase();
+  const dot = nm.lastIndexOf(".");
+  return (dot > 0 && dot < nm.length - 1) ? nm.slice(dot) : "";
+}
+
 function renderBfRows() {
   const rowsEl = $("bfRows");
   if (!rowsEl) return;               // 弹窗未开（语言切换也会调这里）
   const sel = $("bfAge");
   const days = sel ? parseInt(sel.value || "0", 10) : 0;
   const cut = _bfCutoff(days);
-  const list = cut ? _bfFiles.filter(f => (f.mtime || "") >= cut) : _bfFiles;
+  // 自定义体积门槛（MB）与扩展名下拉（v2.18 Task 4）：纯前端过滤，
+  // 不重新扫盘；选择集（selPaths）不受过滤影响，只影响展示
+  const floorEl = $("bfFloor");
+  const floorBytes = floorEl ? (parseFloat(floorEl.value || "0") || 0) * 1048576 : 0;
+  const extEl = $("bfExt");
+  const extSel = extEl ? (extEl.value || "") : "";
+  let list = _bfFiles;
+  if (cut) list = list.filter(f0 => (f0.mtime || "") >= cut);
+  if (floorBytes > 0) list = list.filter(f0 => (f0.size || 0) >= floorBytes);
+  if (extSel) list = list.filter(f0 => _bfExtOf(f0.name) === extSel);
+  const hasFilter = !!cut || floorBytes > 0 || !!extSel;
   // 2026-11-17 用户要求：只显示顶层目录（聚合），可展开查看目录内的大文件
   const gmap = new Map();
   for (const f0 of list) {
@@ -5725,8 +5741,9 @@ function renderBfRows() {
     </div></div>`;
   }).join("");
   $("bfRows").innerHTML = rows ||
-    `<div class="empty">${cut ? t("bf.age.empty", "该时间段内没有大文件")
-      : t("bf.empty", "没有超过门槛的大文件")}</div>`;
+    `<div class="empty">${hasFilter ? t("bf.filterEmpty", "没有符合过滤条件的大文件")
+      : (cut ? t("bf.age.empty", "该时间段内没有大文件")
+             : t("bf.empty", "没有超过门槛的大文件"))}</div>`;
 }
 async function openBigFiles() {
   const anSeq = ++_anSeq;
@@ -5758,12 +5775,29 @@ async function openBigFiles() {
   _bfSelPaths = new Set([...selPaths].filter(p0 => _bfAllPaths.has(p0)));
   for (const p0 of [...selPaths])
     if (_bfAllPaths.has(p0) && !_bfSelPaths.has(p0)) selPaths.delete(p0);
+  // 扩展名下拉：从本次结果聚合（按个数降序），纯前端过滤不重扫（Task 4）
+  const _bfExtMap = new Map();
+  for (const f0 of _bfFiles) {
+    const e0 = _bfExtOf(f0.name);
+    if (e0) _bfExtMap.set(e0, (_bfExtMap.get(e0) || 0) + 1);
+  }
+  const _bfExtOpts = [..._bfExtMap.entries()].sort((a, b) => b[1] - a[1]);
   $("modal").innerHTML = `<h2>${t("bf.title", "全盘大文件排行")}
       <span class="hint">${t("bf.n", "前 {n} 名").replace("{n}", _bfFiles.length)}
         · ${r.engine === "wiztree" ? "WizTree MFT"
           : r.engine === "mft" ? "内置 MFT" : "PowerShell"}</span></h2>
     <div class="mbody">
-      <div style="margin-bottom:8px;text-align:right">
+      <div style="margin-bottom:8px;display:flex;gap:6px;justify-content:flex-end;
+                  align-items:center;flex-wrap:wrap">
+        <span class="hint">${t("bf.floorLbl", "体积 ≥")}</span>
+        <input id="bfFloor" type="number" min="0" step="any" inputmode="decimal"
+               class="tiny" style="width:76px" placeholder="MB">
+        <span class="hint">MB</span>
+        ${_bfExtOpts.length > 1 ? `<select id="bfExt" class="tiny" style="width:auto">
+          <option value="">${t("bf.extAll", "全部扩展名")}</option>
+          ${_bfExtOpts.map(([ex, n0]) =>
+            `<option value="${esc(ex)}">${esc(ex)} · ${n0}</option>`).join("")}
+        </select>` : ""}
         <select id="bfAge" class="tiny">
           <option value="0">${t("bf.age.all", "全部时间")}</option>
           <option value="7">${t("bf.age.7", "近 7 天")}</option>
@@ -5775,6 +5809,8 @@ async function openBigFiles() {
       <button class="tiny" id="bfClose">${t("cc.close", "关闭")}</button></div></div>`;
   renderBfRows();
   $("bfAge").addEventListener("change", renderBfRows);
+  if ($("bfFloor")) $("bfFloor").addEventListener("input", renderBfRows);
+  if ($("bfExt")) $("bfExt").addEventListener("change", renderBfRows);
   [...document.querySelectorAll("#modal .bfChk")].forEach(c =>
     c.addEventListener("change", () => {
       if (c.checked) { selPaths.add(c.dataset.p); _bfSelPaths.add(c.dataset.p); }
@@ -7827,6 +7863,9 @@ const I18N_EN = {
   "cc.bfNote": "Big-file ranking selection: file-level cleanup, restorable from the Recycle Bin",
   "bf.gChkTitle": "tick = select all big files in this directory",
   "bf.gDesc": "Aggregated big files · click Expand for the files inside",
+  "bf.floorLbl": "Size ≥",
+  "bf.extAll": "All extensions",
+  "bf.filterEmpty": "No big files match the current filters",
   "dw.pending": "Waiting for scan data — charts appear when the scan finishes",
   "sd.nfDesc": "New files · click “Expand” for details",
   "cc.dupNote": "Duplicate file copy (full SHA-256 verified against the kept baseline)",
