@@ -12,6 +12,7 @@
   冲突层  关键词在规则之间撞车（A 的词被 B 抢走）
   路由层  用知识库自己的每个关键词去跑真实识别，验证「归属规则」能否赢
   一致性  项目文档与配置是否漂移（如 README 里的文件清单）
+  签名层  appclean / bloatware-builtin 的结构、枚举与安全边界（禁核心/模型标 cache）
 
 用法:
     python -X utf8 tools/lint_rules.py
@@ -179,7 +180,7 @@ def load(path: Path):
 #  1. 结构层
 # ======================================================================
 def lint_structure(all_rules: list[dict]) -> None:
-    print("\n[1/8] 结构检查")
+    print("\n[1/9] 结构检查")
     seen_ids: dict[str, str] = {}
     for src, rules in (("folder", [r for r in all_rules if r.get("_src") == "folder"]),
                        ("file", [r for r in all_rules if r.get("_src") == "file"])):
@@ -266,7 +267,7 @@ def lint_packs() -> None:
     还要挡「能跑但会把界面搞乱」的问题（分类排到最后、文件名与 id 不一致、
     匹配串太宽泛以至于抓错目录）。
     """
-    print("\n[2/8] 资源包检查")
+    print("\n[2/9] 资源包检查")
     n0 = len(ERRORS)
 
     if not PACKS.is_dir():
@@ -422,7 +423,7 @@ def lint_packs() -> None:
 #  3. 语义自相矛盾
 # ======================================================================
 def lint_semantics(all_rules: list[dict]) -> None:
-    print("\n[3/8] 语义一致性检查")
+    print("\n[3/9] 语义一致性检查")
     n0 = len(ERRORS)
     for r in all_rules:
         rid = r.get("id")
@@ -453,7 +454,7 @@ def lint_semantics(all_rules: list[dict]) -> None:
 #  3. 关键词跨规则冲突
 # ======================================================================
 def lint_keyword_collisions(all_rules: list[dict]) -> None:
-    print("\n[4/8] 关键词冲突检查")
+    print("\n[4/9] 关键词冲突检查")
     n0 = len(ERRORS)
     k2r: dict[str, list[dict]] = {}
     for r in all_rules:
@@ -493,7 +494,7 @@ def lint_keyword_collisions(all_rules: list[dict]) -> None:
 # ======================================================================
 def lint_routing(all_rules: list[dict]) -> None:
     """对每条规则的每个关键词，构造样本跑真实 identify()，验证归属规则能赢。"""
-    print("\n[5/8] 路由验证（用真实引擎跑知识库自己的关键词）")
+    print("\n[5/9] 路由验证（用真实引擎跑知识库自己的关键词）")
     n0 = len(ERRORS)
     try:
         import app
@@ -557,7 +558,7 @@ def lint_routing(all_rules: list[dict]) -> None:
 #  5. 与项目文档/配置的一致性
 # ======================================================================
 def lint_consistency() -> None:
-    print("\n[6/8] 文档与配置一致性")
+    print("\n[6/9] 文档与配置一致性")
     n0 = len(ERRORS)
     readme = (HERE / "README.md")
     if not readme.exists():
@@ -599,6 +600,171 @@ def lint_consistency() -> None:
 
 
 # ======================================================================
+#  7. 签名库（appclean / bloatware-builtin）的结构与安全边界
+# ======================================================================
+APPCLEAN_FILE = CONFIG / "appclean.json"
+BLOATWARE_FILE = CONFIG / "bloatware-builtin.json"
+
+# 模型 / 核心数据目录片段：一旦被标成 cache，等于允许一键清掉用户下载的
+# 大模型或聊天库。v2.17 外置签名库上线时 HuggingFace hub / Ollama models
+# 就犯过这个错（当场修正为 data 防误删）——这一关把该类回归永久拦下。
+_SIG_MODEL_HINTS = ("model", "模型", "hub", "weights", "checkpoint", "ckpt",
+                    "gguf", "safetensors", "onnx", "llm", "embedding",
+                    "db_storage", "database", "数据库")
+
+
+def _sig_abs_or_traversal(p: str) -> str:
+    """相对路径安全检查：返回问题说明，合法返回空串。"""
+    if ".." in p.split("\\"):
+        return "含路径穿越段"
+    if re.match(r"^[A-Za-z]:", p) or p.startswith(("\\", "/")):
+        return "是绝对路径"
+    return ""
+
+
+def lint_signature_libs() -> None:
+    """appclean.json 与 bloatware-builtin.json 的结构 / 枚举 / 安全边界。
+
+    appclean 的 kind 语义是删除语义（cache 才进白名单清理），错一个枚举值
+    或错标一个模型目录，用户数据就没了。bloatware 的 dirs 是「官方卸载后
+    残留清扫」的目标集合，穿越/绝对路径会把删除面引向签名库之外。
+    """
+    print("\n[7/9] 签名库结构与安全边界（appclean / bloatware-builtin）")
+    n0 = len(ERRORS)
+    n0w = len(WARNINGS)
+
+    # ---- appclean.json（应用专清签名库） ----
+    ac = load(APPCLEAN_FILE)
+    if ac:
+        if not isinstance(ac.get("version"), int):
+            err("appclean.json 缺整型 version")
+        apps = ac.get("apps")
+        if not isinstance(apps, list) or not apps:
+            err("appclean.json 缺非空 apps 列表")
+            apps = []
+        seen_ids: set = set()
+        for i, app in enumerate(apps):
+            if not isinstance(app, dict):
+                err(f"appclean 应用 #{i + 1} 不是对象")
+                continue
+            aid = str(app.get("id") or "").strip()
+            tag = f"appclean 应用 #{i + 1}（{aid or app.get('name') or '无 id'}）"
+            if not aid:
+                err(f"{tag} 缺 id")
+            elif aid in seen_ids:
+                err(f"{tag} id 重复：{aid}")
+            seen_ids.add(aid)
+            if not str(app.get("name") or "").strip():
+                err(f"{tag} 缺 name")
+            bases = app.get("bases")
+            if not isinstance(bases, list) or not bases:
+                err(f"{tag} 缺非空 bases（定位应用数据目录的根）")
+                bases = []
+            for b in bases:
+                if not isinstance(b, str) or not b.strip():
+                    err(f"{tag} bases 含空串（环境变量路径不允许为空）")
+                elif not b.lstrip().startswith("%"):
+                    err(f"{tag} base 未用环境变量占位"
+                        f"（内置库必须形如 %LOCALAPPDATA%\\… 不得写死用户路径）：{b}")
+            items = app.get("items")
+            if not isinstance(items, list) or not items:
+                err(f"{tag} 缺非空 items")
+                items = []
+            seen_subs: set = set()
+            for it in items:
+                if not isinstance(it, dict):
+                    err(f"{tag} items 含非对象条目")
+                    continue
+                sub = it.get("sub", "")
+                kind = it.get("kind")
+                label = str(it.get("label") or "").strip()
+                itag = f"{tag} 条目「{label or sub or '?'}」"
+                if kind not in ("cache", "data", "core"):
+                    err(f"{itag} kind 非法：{kind!r}（应为 cache/data/core）")
+                if not label:
+                    err(f"{itag} 缺 label")
+                if not isinstance(sub, str):
+                    err(f"{itag} sub 非字符串")
+                else:
+                    problem = _sig_abs_or_traversal(sub)
+                    if problem:
+                        err(f"{itag} sub {problem}：{sub}")
+                key = (str(sub).lower(), kind)
+                if key in seen_subs:
+                    err(f"{itag} 与同应用其它条目重复（sub+kind 相同）")
+                seen_subs.add(key)
+                if kind == "cache" and isinstance(sub, str):
+                    hay = (sub + " " + label).lower()
+                    for hint in _SIG_MODEL_HINTS:
+                        if hint in hay:
+                            err(f"{itag} 疑似模型/核心数据目录被标为 cache"
+                                f"（命中「{hint}」——一键清理会删掉用户大模型或"
+                                "聊天库，应改 kind=data 并给出 advice）")
+                            break
+                    if not sub.strip():
+                        # sub 为空 = 整个 base 被当作缓存清理：
+                        # base 本身必须是名字里就带 cache 的缓存目录
+                        if not any(isinstance(b, str) and "cache" in b.lower()
+                                   for b in bases):
+                            warn(f"{tag} cache 条目 sub 为空但 bases 不含 "
+                                 f"cache 字样（等于把整个数据目录标成可清缓存，"
+                                 "请确认语义）")
+
+    # ---- bloatware-builtin.json（毒瘤签名库） ----
+    bw = load(BLOATWARE_FILE)
+    if bw:
+        if not isinstance(bw.get("version"), int):
+            err("bloatware-builtin.json 缺整型 version")
+        apps = bw.get("apps")
+        if not isinstance(apps, list) or not apps:
+            err("bloatware-builtin.json 缺非空 apps 列表")
+            apps = []
+        seen_ids: set = set()
+        seen_match: set = set()
+        for i, app in enumerate(apps):
+            if not isinstance(app, dict):
+                err(f"毒瘤签名 #{i + 1} 不是对象")
+                continue
+            bid = str(app.get("id") or "").strip()
+            tag = f"毒瘤签名 #{i + 1}（{bid or app.get('name') or '无 id'}）"
+            if not bid:
+                err(f"{tag} 缺 id")
+            elif bid in seen_ids:
+                err(f"{tag} id 重复：{bid}")
+            seen_ids.add(bid)
+            if not str(app.get("name") or "").strip():
+                err(f"{tag} 缺 name")
+            match = app.get("match")
+            if not isinstance(match, list) or not match:
+                err(f"{tag} 缺非空 match（注册表卸载项的签名关键词）")
+                match = []
+            for m in match:
+                if not isinstance(m, str) or not m.strip():
+                    err(f"{tag} match 含空关键词")
+                    continue
+                mk = m.strip().lower()
+                if mk in seen_match:
+                    warn(f"{tag} match 关键词与其它应用重复：{m}"
+                         "（扫描按先到先得归属 DisplayName，重复即歧义）")
+                else:
+                    seen_match.add(mk)
+            dirs = app.get("dirs")
+            if dirs is not None:
+                if not isinstance(dirs, list):
+                    err(f"{tag} dirs 非列表")
+                else:
+                    for d0 in dirs:
+                        if not isinstance(d0, str) or not d0.strip():
+                            err(f"{tag} dirs 含空串")
+                            continue
+                        problem = _sig_abs_or_traversal(d0)
+                        if problem:
+                            err(f"{tag} dirs {problem}"
+                                f"（dirs 必须是 Program Files 下的相对路径）：{d0}")
+    print(f"  错误 {len(ERRORS) - n0} 项，警告 {len(WARNINGS) - n0w} 项")
+
+
+# ======================================================================
 #  6. 内嵌脚本模板的语法（app.py + ps_scripts.py 的 PS_* 模板）
 # ======================================================================
 def lint_ps_templates() -> None:
@@ -615,7 +781,7 @@ def lint_ps_templates() -> None:
     （tools/selftest.py 阶段七）。两者角度不同：这里保证「一眼可见的配平
     问题」在提交前就被挡下，而且不依赖 Windows 环境也能跑。
     """
-    print("\n[7/8] 内嵌脚本模板语法（app.py + ps_scripts.py 的 PS_* 模板）")
+    print("\n[8/9] 内嵌脚本模板语法（app.py + ps_scripts.py 的 PS_* 模板）")
     n0 = len(ERRORS)
     found: list[tuple[str, str]] = []
     for fname in ("app.py", "ps_scripts.py"):
@@ -654,7 +820,7 @@ def lint_ps_templates() -> None:
 #  7. 危险删除面 —— 明确列出「这条规则会让工具去删什么」
 # ======================================================================
 def lint_delete_surface(all_rules: list[dict]) -> None:
-    print("\n[8/8] 可清理规则清单（人工复核用）")
+    print("\n[9/9] 可清理规则清单（人工复核用）")
     cl = [r for r in all_rules if r.get("cleanable")]
     print(f"  共 {len(cl)} 条规则会把项目列入清理建议：")
     for r in sorted(cl, key=lambda x: (x.get("risk") != "高", x.get("id") or "")):
@@ -697,6 +863,7 @@ def main() -> int:
     lint_keyword_collisions(all_rules)
     lint_routing(all_rules)
     lint_consistency()
+    lint_signature_libs()
     lint_ps_templates()
     lint_delete_surface(all_rules)
     lint_accepted_list()

@@ -7,6 +7,8 @@
               刻意不往仓库的 packs/ 里写文件：那样会被宿主的删除保护拦下，
               留下测试残渣反而污染仓库。用临时目录既不碰仓库也不依赖删文件。
   模板组   —— 在临时目录里放一个假的 app.py，进程内调用 lint_ps_templates()。
+  签名库组 —— 在临时目录里放假的 appclean.json / bloatware-builtin.json，
+              进程内调用 lint_signature_libs()（同资源包组的隔离策略）。
 
 只修改 config/filetypes.json，运行后必定还原（finally）。
 """
@@ -207,6 +209,106 @@ def run_lint(strict: bool = True) -> tuple[int, str]:
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
+# ----------------------------------------------------------------------
+#  签名库组：appclean.json / bloatware-builtin.json 的检出能力。
+#  同资源包组做法：临时目录里放假签名库，进程内调用 lint_signature_libs()，
+#  绝不碰仓库的真实 config/。
+# ----------------------------------------------------------------------
+SIG_AC_BASE = {
+    "version": 1,
+    "apps": [
+        {
+            "id": "demo", "name": "演示应用",
+            "bases": ["%LOCALAPPDATA%\\Demo"],
+            "items": [
+                {"sub": "Cache", "kind": "cache", "label": "缓存"},
+                {"sub": "Data", "kind": "core", "label": "数据库（勿动）"},
+            ],
+        }
+    ],
+}
+
+SIG_BW_BASE = {
+    "version": 1,
+    "apps": [
+        {
+            "id": "demobad", "name": "演示毒瘤",
+            "match": ["演示毒瘤", "DemoBad"],
+            "dirs": ["DemoBad"],
+        }
+    ],
+}
+
+
+def _ac_set(key, val, idx: int = 0):
+    def go(ac, bw):
+        ac["apps"][0]["items"][idx][key] = val
+    return go
+
+
+SIG_CASES = [
+    ("appclean kind 非法", _ac_set("kind", "maybe")),
+    ("appclean 把模型目录标成 cache", _ac_set("sub", "models")),
+    ("appclean cache 条目缺 label", _ac_set("label", "")),
+    ("appclean sub 含路径穿越", _ac_set("sub", "..\\..\\x", idx=1)),
+    ("appclean sub 绝对路径", _ac_set("sub", "C:\\bad", idx=1)),
+    ("appclean id 重复", lambda ac, bw: ac["apps"].append(dict(ac["apps"][0]))),
+    ("appclean 同应用条目重复", lambda ac, bw: ac["apps"][0]["items"].append(
+        dict(ac["apps"][0]["items"][0]))),
+    ("appclean base 写死用户路径", lambda ac, bw: ac["apps"][0].__setitem__(
+        "bases", ["C:\\Users\\x\\Demo"])),
+    ("appclean 空 sub cache 且 base 非 cache 目录（警告级）",
+     lambda ac, bw: ac["apps"][0]["items"].__setitem__(
+         0, {"sub": "", "kind": "cache", "label": "整个数据目录"})),
+    ("appclean items 为空", lambda ac, bw: ac["apps"][0].__setitem__("items", [])),
+    ("appclean 缺 version", lambda ac, bw: ac.pop("version", None)),
+    ("bloatware match 为空数组", lambda ac, bw: bw["apps"][0].__setitem__("match", [])),
+    ("bloatware match 含空关键词", lambda ac, bw: bw["apps"][0].__setitem__(
+        "match", ["演示毒瘤", "  "])),
+    ("bloatware dirs 含路径穿越", lambda ac, bw: bw["apps"][0].__setitem__(
+        "dirs", ["..\\Windows"])),
+    ("bloatware dirs 绝对路径", lambda ac, bw: bw["apps"][0].__setitem__(
+        "dirs", ["C:\\Bad"])),
+    ("bloatware id 重复", lambda ac, bw: bw["apps"].append(dict(bw["apps"][0]))),
+    ("bloatware match 关键词跨应用重复（警告级）", lambda ac, bw: bw["apps"].append(
+        {**bw["apps"][0], "id": "demo2", "match": ["demobad"]})),
+    ("bloatware 缺 name", lambda ac, bw: bw["apps"][0].pop("name", None)),
+]
+
+
+def run_sig_lint(appclean: dict | None = None,
+                 bloatware: dict | None = None) -> tuple[list[str], list[str]]:
+    """在临时目录里放假签名库，进程内跑一次 lint_signature_libs()。
+
+    换掉模块级 CONFIG / APPCLEAN_FILE / BLOATWARE_FILE 三个路径常量，
+    不往仓库的 config/ 写任何文件（同资源包组的隔离策略）。
+    """
+    import lint_rules as L
+    tmp = Path(tempfile.mkdtemp(prefix="oc_lint_sig_"))
+    saved = (L.CONFIG, getattr(L, "APPCLEAN_FILE", None),
+             getattr(L, "BLOATWARE_FILE", None))
+    try:
+        (tmp / "appclean.json").write_text(
+            json.dumps(appclean if appclean is not None else SIG_AC_BASE,
+                       ensure_ascii=False), encoding="utf-8")
+        (tmp / "bloatware-builtin.json").write_text(
+            json.dumps(bloatware if bloatware is not None else SIG_BW_BASE,
+                       ensure_ascii=False), encoding="utf-8")
+        L.CONFIG = tmp
+        L.APPCLEAN_FILE = tmp / "appclean.json"
+        L.BLOATWARE_FILE = tmp / "bloatware-builtin.json"
+        L.ERRORS.clear()
+        L.WARNINGS.clear()
+        with contextlib.redirect_stdout(io.StringIO()):
+            L.lint_signature_libs()
+        return list(L.ERRORS), list(L.WARNINGS)
+    finally:
+        L.CONFIG, L.APPCLEAN_FILE, L.BLOATWARE_FILE = saved
+        L.ERRORS.clear()
+        L.WARNINGS.clear()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     if sys.stdout.reconfigure:
         try:
@@ -305,6 +407,35 @@ def main() -> int:
                 print(("  [OK]   " if caught else "  [严重] ") + f"能检出：{name}")
                 if not caught:
                     print("        （lint_ps_templates 通过了，说明这一类缺陷没被覆盖）")
+
+        # --------------------------------------------------------------
+        #  签名库组（appclean / bloatware-builtin）
+        # --------------------------------------------------------------
+        print("\n  —— 签名库检查的检出能力 ——")
+        try:
+            errs, warns = run_sig_lint()
+        except Exception as e:                        # noqa: BLE001
+            print(f"  [跳过] 签名库组：无法调用 lint_signature_libs（{e}）")
+            errs = None
+        if errs is not None:
+            if not errs and not warns:
+                PASS.append("干净签名库应通过")
+                print("  [OK]   干净签名库通过 lint_signature_libs")
+            else:
+                FAIL.append("干净签名库应通过")
+                print(f"  [严重] 干净签名库没通过：{errs} {warns}")
+
+            for name, mutate in SIG_CASES:
+                ac = json.loads(json.dumps(SIG_AC_BASE))
+                bw = json.loads(json.dumps(SIG_BW_BASE))
+                mutate(ac, bw)
+                errs, warns = run_sig_lint(ac, bw)
+                # CI 用 --strict：警告同样会让门禁失败，警告也算「检出」。
+                caught = bool(errs) or bool(warns)
+                (PASS if caught else FAIL).append("签名库：" + name)
+                print(("  [OK]   " if caught else "  [严重] ") + f"能检出：{name}")
+                if not caught:
+                    print("        （lint_signature_libs 通过了，说明这一类缺陷没被覆盖）")
     finally:
         shutil.move(str(BAK), str(CFG))
 
