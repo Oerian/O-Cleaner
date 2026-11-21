@@ -848,6 +848,10 @@
      padding:9px 14px;background:var(--panel);border:1px solid var(--line);
      border-radius:12px;font-size:12.5px"></div>
 
+<div id="trendBanner" style="display:none;align-items:center;gap:10px;margin:8px 14px 0;
+     padding:9px 14px;background:var(--panel);border:1px solid var(--line);
+     border-radius:12px;font-size:12.5px"></div>
+
 <main>
   <div id="leftcol">
   <div class="toolbar">
@@ -1349,6 +1353,57 @@ async function loadState() {
   renderUnits(); renderRules(); renderSchedule(); renderHistory();
   renderGuide(); renderPacks(); renderAI();
   renderSchSummary();
+  fetchTrendBanner();
+}
+
+/* 磁盘趋势预警横幅（v2.18 Task 3）：预计剩余可用天数 + 高频回涨目录。
+   数据来自 /__oc__/trend-forecast（disk-trend.json 线性回归 +
+   snapshot_diff 的 hot 目录）。样本不足 / 空间回升时后端返回
+   days_left=null，横幅不出现，绝不虚报。sessionStorage 记录本次
+   会话是否已手动关闭（同 #orphanwarn 的模式）。 */
+let TREND_FC = null;
+async function fetchTrendBanner() {
+  const myDrive = drive;   // 换盘守卫：响应到达时盘符已变则丢弃
+  try {
+    const r = await apiJSON(`${API}/__oc__/trend-forecast?drive=${encodeURIComponent(myDrive)}`);
+    if (drive !== myDrive) return;
+    TREND_FC = (r && r.ok && !r.error) ? r : null;
+  } catch (e) { TREND_FC = null; }
+  renderTrendBanner();
+}
+function renderTrendBanner() {
+  const el = $("trendBanner");
+  if (!el) return;
+  let dismissed = false;
+  try { dismissed = sessionStorage.getItem("oc-trendwarn") === "1"; } catch (e) {}
+  if (dismissed) { el.style.display = "none"; return; }
+  const r = TREND_FC;
+  if (!r) { el.style.display = "none"; return; }
+  const showDays = r.days_left && (r.level === "warn" || r.level === "crit");
+  const hot = (r.hot_dirs || []).filter(x => x.path);
+  if (!showDays && !hot.length) { el.style.display = "none"; return; }
+  const parts = [];
+  if (showDays) {
+    const crit = r.level === "crit";
+    parts.push(`<span style="flex:1;${crit ? "color:var(--danger);font-weight:600" : ""}">${
+      t("tf.days", "预计 {d}: 盘约 {n} 天后写满（每天约减少 {v}，建议尽快清理）")
+        .replace("{d}", esc(r.drive || "?"))
+        .replace("{n}", esc(r.days_left))
+        .replace("{v}", esc(r.slope_h || "?"))}</span>`);
+  }
+  if (hot.length) {
+    const SEP = i18nLocale() === "en" ? ", " : "、";
+    parts.push(`<span style="flex:1">${t("tf.hot", "高频回涨：{list}（清完又涨，建议加入定时清理）")
+      .replace("{list}", esc(hot.map(x => x.path).join(SEP)))}</span>`);
+  }
+  el.innerHTML = parts.join(" ") +
+    `<button class="tiny ghost" id="trendWarnOk" style="flex:none"
+      title="${esc(t("tf.dismiss", "本次会话不再提示"))}">✕</button>`;
+  el.style.display = "flex";
+  $("trendWarnOk").addEventListener("click", () => {
+    el.style.display = "none";
+    try { sessionStorage.setItem("oc-trendwarn", "1"); } catch (e) {}
+  });
 }
 
 /* 定时任务执行摘要横幅（#37）：后台定时清理用户无感知，打开界面时把
@@ -7948,6 +8003,9 @@ const I18N_EN = {
   "disk.total": "Total", "disk.used": "Used", "disk.free": "Free",
   "sel.items": "items", "sel.free": "Estimated free", "sel.picked": "Picked",
   "trend.freeLbl": "Free-space trend ({d1} ~ {d2}): {a} → {b} · min {min} · max {max}",
+  "tf.days": "Projected: drive {d}: will fill up in about {n} days (losing ~{v} per day — clean up soon)",
+  "tf.hot": "Frequently regrowing: {list} (grows back after cleaning; consider scheduled cleanup)",
+  "tf.dismiss": "Don't show again this session",
   "eng.title": "Full-scan engine: auto = whoever is faster (WizTree first by default)",
   "eng.auto": "Engine: auto (whoever is faster)",
   "eng.wiztree": "Engine: WizTree first",
@@ -8137,7 +8195,8 @@ function setLang(l) {
    "renderRules", "renderPresets", "renderPacks", "renderSteamPage",
    "renderGuide", "drawDiskTrend", "drawGameTrend", "renderDrives",
    "renderConvToggle", "renderSchedule", "renderHistory", "renderOverview",
-   "renderAI", "renderCustomLibs", "renderSchSummary", "renderBfRows"].forEach(fn => {
+   "renderAI", "renderCustomLibs", "renderSchSummary", "renderBfRows",
+   "renderTrendBanner"].forEach(fn => {
     try { if (typeof window[fn] === "function") window[fn](); } catch (e) {}
   });
   // 后端返回的长文本（释义/建议）随请求的 lang 走：清掉旧语言的缓存

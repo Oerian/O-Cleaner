@@ -1298,3 +1298,85 @@ def downloads_archive_undo() -> dict:
         _core._atomic_write(_core.ARCHIVE_LOG_PATH, log)
     return {"ok": True, "restored": restored, "errors": errors}
 
+# ======================================================================
+#  磁盘趋势预测：预计剩余可用天数 + 高频回涨预警（v2.18 Task 3）
+# ======================================================================
+TREND_FORECAST_MIN_DAYS = 7     # 少于 7 天样本不做预测
+TREND_FORECAST_WINDOW = 30      # 线性回归窗口（天）
+TREND_FORECAST_WARN_DAYS = 30   # 剩余 ≤30 天才上前端预警横幅
+TREND_FORECAST_CRIT_DAYS = 14   # 剩余 ≤14 天红色强调
+TREND_FORECAST_MIN_SLOPE = 1024 * 1024   # 每天净减超过 1 MB 才谈「写满」
+
+
+def trend_forecast(drive: str | None = None) -> dict:
+    """基于 disk-trend.json 的剩余空间线性回归，预计「多少天后盘满」。
+
+    数据源是 record_disk_snapshot 每天每盘一条的 (total, free) 记录
+    （同日空间变化才更新，能反映真实消耗速率）。只读不写；样本不足、
+    空间回升或消耗极低时如实返回 days_left=None，绝不危言耸听。
+    同时附带 snapshot_diff 的 hot 目录（清理后反复回涨 ≥3 次），
+    供前端预警横幅一并展示。
+    """
+    letter = (drive or "C").rstrip(":").upper()
+    out = {"ok": True, "drive": letter, "samples": 0,
+           "free": None, "free_h": "", "slope_per_day": 0, "slope_h": "",
+           "days_left": None, "level": "none", "hot_dirs": []}
+    hist = _core._load_json(_core.DISK_TREND_PATH, [], use_cache=False)
+    by_date: dict = {}
+    for day in hist if isinstance(hist, list) else []:
+        if not isinstance(day, dict):
+            continue
+        rec = (day.get("u") or {}).get(letter)
+        if isinstance(rec, dict) and isinstance(rec.get("free"), (int, float)):
+            try:
+                d0 = datetime.strptime(str(day.get("d") or ""), "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            by_date[d0] = float(rec["free"])
+    samples = sorted(by_date.items())[-TREND_FORECAST_WINDOW:]
+    out["samples"] = len(samples)
+    if not samples:
+        out["reason"] = "还没有趋势数据（每天首次刷新会记录一次）"
+        return out
+    out["free"] = round(samples[-1][1])
+    out["free_h"] = _core.human(out["free"])
+    if len(samples) < TREND_FORECAST_MIN_DAYS:
+        out["reason"] = (f"样本不足（{len(samples)}/{TREND_FORECAST_MIN_DAYS}"
+                         " 天，连用几天后可预测）")
+        return out
+    t0 = samples[0][0]
+    xs = [(d1 - t0).days for d1, _ in samples]
+    ys = [f for _, f in samples]
+    n0 = len(xs)
+    mx = sum(xs) / n0
+    my = sum(ys) / n0
+    denom = sum((x - mx) ** 2 for x in xs)
+    if not denom:
+        return out
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / denom
+    out["slope_per_day"] = round(slope)
+    if slope < -TREND_FORECAST_MIN_SLOPE:
+        days_left = out["free"] / (-slope)
+        if days_left <= 3650:
+            out["days_left"] = int(days_left)
+            if days_left <= TREND_FORECAST_CRIT_DAYS:
+                out["level"] = "crit"
+            elif days_left <= TREND_FORECAST_WARN_DAYS:
+                out["level"] = "warn"
+            else:
+                out["level"] = "info"
+            out["slope_h"] = _core.human(-slope)
+        else:
+            out["reason"] = "按当前速率盘满还很久，无需预警"
+    else:
+        out["reason"] = "剩余空间稳定或回升，无需预警"
+    # 高频回涨目录（snapshot_diff 的 hot 标记）一并带给横幅
+    try:
+        sd = snapshot_diff(letter, days=7)
+        hot = [x for x in (sd.get("diff") or [])
+               if x.get("hot") and (x.get("delta") or 0) > 0]
+        out["hot_dirs"] = [{"path": x["path"], "delta_h": x.get("delta_h", "")}
+                           for x in hot[:5]]
+    except Exception:  # noqa: BLE001 —— 预警数据绝不拖垮主流程
+        traceback.print_exc()
+    return out

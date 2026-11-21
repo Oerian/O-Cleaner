@@ -293,6 +293,75 @@ def main() -> int:
     check("版本一致性：app.py 与 drives.json", dv == app.APP_VERSION,
           f"app={app.APP_VERSION} drives={dv}")
 
+    # ---- 磁盘趋势预测（v2.18 Task 3）：线性回归 + 预警分级 ----
+    import json as _json_t
+    from datetime import datetime as _dt, timedelta as _td
+    orig_trend = app.DISK_TREND_PATH
+    try:
+        with tempfile.TemporaryDirectory(prefix="oc_ut_trend_") as td:
+            tp = Path(td) / "disk-trend.json"
+            app.DISK_TREND_PATH = tp
+
+            def _mk_trend(rows):
+                # rows: [(days_ago, free_bytes)]，构造 disk-trend.json 结构
+                today = _dt.now().date()
+                hist = []
+                for age, free in rows:
+                    hist.append({"d": (today - _td(days=age)).strftime("%Y-%m-%d"),
+                                 "u": {"X": {"total": 100 << 30, "free": free}}})
+                return hist
+
+            # 1) 样本不足（3 天）：不预测、如实说明
+            tp.write_text(_json_t.dumps(
+                _mk_trend([(0, 20 << 30), (1, 22 << 30), (2, 24 << 30)]),
+                ensure_ascii=False), encoding="utf-8")
+            r1 = app.trend_forecast("X")
+            check("趋势预测：样本不足时 days_left=None 且 samples 如实上报",
+                  r1.get("days_left") is None and r1.get("samples") == 3
+                  and "样本不足" in str(r1.get("reason")), f"{r1}")
+
+            # 2) 剩余空间稳定（10 天不变）：不预测
+            tp.write_text(_json_t.dumps(
+                _mk_trend([(a, 10 << 30) for a in range(10)]),
+                ensure_ascii=False), encoding="utf-8")
+            r2 = app.trend_forecast("X")
+            check("趋势预测：空间稳定时 days_left=None",
+                  r2.get("days_left") is None and r2.get("level") == "none",
+                  f"{r2}")
+
+            # 3) 线性下降 2GB/天、最新剩 20GB：days_left=10、crit 级
+            tp.write_text(_json_t.dumps(
+                _mk_trend([(a, (20 + 2 * a) << 30) for a in range(10)]),
+                ensure_ascii=False), encoding="utf-8")
+            r3 = app.trend_forecast("X")
+            check("趋势预测：线性下降 days_left 按回归斜率计算",
+                  r3.get("days_left") == 10 and r3.get("level") == "crit"
+                  and r3.get("slope_per_day") == -(2 << 30), f"{r3}")
+
+            # 4) 温和下降 0.5GB/天、剩 60GB：days_left=120、info 级（不上横幅）
+            tp.write_text(_json_t.dumps(
+                _mk_trend([(a, int((60 + 0.5 * a) * (1 << 30))) for a in range(10)]),
+                ensure_ascii=False), encoding="utf-8")
+            r4 = app.trend_forecast("X")
+            check("趋势预测：30 天外为 info 级（不触发预警横幅）",
+                  r4.get("days_left") == 120 and r4.get("level") == "info",
+                  f"{r4}")
+
+            # 5) 空间回升（负斜率→正向）：不预测
+            tp.write_text(_json_t.dumps(
+                _mk_trend([(a, (60 - 2 * a) << 30) for a in range(10)]),
+                ensure_ascii=False), encoding="utf-8")
+            r5 = app.trend_forecast("X")
+            check("趋势预测：剩余空间回升时 days_left=None",
+                  r5.get("days_left") is None, f"{r5}")
+
+            # 6) 响应结构完整：前端横幅依赖的字段齐全
+            check("趋势预测：响应含 hot_dirs 列表（无快照时为空）",
+                  isinstance(r5.get("hot_dirs"), list)
+                  and isinstance(r5.get("free_h"), str), f"{r5}")
+    finally:
+        app.DISK_TREND_PATH = orig_trend
+
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"
           f"失败 {len(failed)} 项 ====")

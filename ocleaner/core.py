@@ -212,7 +212,8 @@ from ocleaner.guard import (check_deletable, _guarded_zone,
                             BROWSER_CACHE_DIRS)  # noqa: F401 re-export  # noqa: F401 re-export
 
 from ocleaner.analysis import (_save_scan_snapshot, snapshot_diff,  # noqa: F401 re-export
-                               fs_search, BIG_FILES_FLOOR_PS,  # noqa: F401 re-export
+                               fs_search, trend_forecast,  # noqa: F401 re-export
+                               BIG_FILES_FLOOR_PS,  # noqa: F401 re-export
                                BIG_FILES_FLOOR_WIZ, BIG_FILES_LIMIT,  # noqa: F401 re-export
                                _wiz_mtime_norm, _wiztree_big_files, big_files,  # noqa: F401 re-export
                                _watch_bigfiles, DUP_FLOOR_MB, DUP_MAX_GROUPS,  # noqa: F401 re-export
@@ -5255,6 +5256,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/disk-trend":
             data = _load_json(DISK_TREND_PATH, [], use_cache=False)
             return self._json(data if isinstance(data, list) else [])
+        if route == "/__oc__/trend-forecast":
+            # 预计剩余可用天数（disk-trend 线性回归）+ 高频回涨目录
+            return self._json(trend_forecast(self._query().get("drive")))
         if route == "/__oc__/stats":
             return self._json(history_stats())
         if route == "/__oc__/downloads-advice":
