@@ -2042,3 +2042,9 @@ SECURITY 该处表述未动。
   3. **下载整理与文件级清理**：`/__oc__/delete-paths` 放行用户显式勾选的普通文件（`allow_user_data=True` + 仅移入回收站，历史 `freed=0` 避免与清空回收站双重统计）；`downloads_archive` 一键归档只动顶层文件不嵌套已有子目录、`only_set` 忽略大小写、`undo` 防覆盖并加锁；前端恢复子文件夹行内「打开位置」、`dlCatChk` 同步双按钮。
   4. **其他后端修复**：`/__oc__/snapshot/diff` 修复未定义 `drive` 致 500 与 `days` 校验；`junction_restore` 补 `busy` 校验与半途失败防 `FileExistsError`、`junction_move` 补异常捕获与 `_lock`；`run_auto_clean` 补去重与 `append_history`；`_tray_worker` 修复双击多开标签；`_open_app_window` 修复 `Edge\Application` 路径；`packs/toggle`、`packs/delete`、`ai/config` 补 `_lock`；`deleter.py` 适配 Python 3.12+ `rmtree(onexc=)` 与 Junction 摘除。
 - **前端与工程卫生**：修正分析中心 `_anSeq` 守卫（去 3 条重复、补齐 AppClean/Bloatware/SnapDiff/JunctionMove）、清除 9 个废弃 CSS 类与重复工具栏分隔线；`config/moved-junctions.json` 移出 git 跟踪并入 `.gitignore`（补 `portable/`）；清理 `hostok.tmp`、`tools/_tmp_*.py` 及旧版 `dist/` 包；更新 `make_package.py`（纳 `USAGE-en.md`、全模块语法检查）、`ci.yml`（接入 `packs_ci_validate.py`、修正失败产物目录）、`ocleaner/__init__.py`、`README.md`、`docs/USAGE.md`、`docs/USAGE-en.md`。
+
+**㊿补九（2026-11-21）：外置签名库 + 回执档案检索 + 重复大文件智能保留**——
+- **签名库外置化**：新增 `config/appclean.json`（扩充至 17 类应用，含微信 4.x `xwechat_files` / 钉钉 / 飞书 / VS Code / JetBrains / Discord / Telegram；将 HuggingFace / Ollama 模型目录从 `cache` 修正为 `data` 对齐安全底线）与 `config/bloatware-builtin.json`（15 款内置签名，保留用户 `config/bloatware.json` 合并）；`make_package.py` 同步登记。
+- **清理回执档案**：新增 `GET /__oc__/receipts`（按关键词/盘符检索 `data/receipts/`）与 `GET /__oc__/receipt`（单段 `.json` 校验防路径穿越）；前端历史面板新增「回执档案」检索与逐项明细查看弹窗（中英双语）。
+- **重复大文件深化**：`dupfiles_scan` 成员补 `mtime`/`mtime_h`；前端新增修改时间显示、「保留最新 / 保留最早」一键智能勾选（跳过跨目录组且每组至少留 1 份）及扩展名筛选下拉。
+- **门禁**：`unit_test.py` 38-0（+6 项回归）/ `guard_matrix.py` 50-0 / `lint_rules.py --strict` 0 错 / `packs_ci_validate.py` PASS / `audit_dead.py` 0 死 CSS 0 缺 i18n / `make_package.py` 48 条目 sha256 校验通过。

@@ -246,6 +246,46 @@ def main() -> int:
         finally:
             app.ARCHIVE_LOG_PATH = orig_log
 
+    # ---- 外置签名库（appclean / bloatware-builtin）加载与安全边界 ----
+    ac_apps = app._load_appclean_apps()
+    check("应用专清外置配置：config/appclean.json 已加载且含微信4/开发者缓存",
+          len(ac_apps) >= 15 and any(a.get("id") == "wechat4" for a in ac_apps),
+          f"count={len(ac_apps)}")
+    ai_cache_leak = [a["id"] for a in ac_apps
+                     if a.get("id") in ("huggingface", "ollama")
+                     and any(it.get("kind") == "cache" for it in (a.get("items") or []))]
+    check("应用专清安全边界：AI 模型目录不标为 cache",
+          not ai_cache_leak, f"leaked={ai_cache_leak}")
+    bw_apps = app._load_bloatware().get("apps") or []
+    check("毒瘤清除外置配置：config/bloatware-builtin.json 已加载",
+          len(bw_apps) >= 15, f"count={len(bw_apps)}")
+
+    # ---- 回执档案 API：正常读取 + 路径穿越拒绝 ----
+    with tempfile.TemporaryDirectory(prefix="oc_ut_rcp_") as td:
+        orig_rdir = app.RECEIPT_DIR
+        try:
+            app.RECEIPT_DIR = Path(td)
+            app._write_receipt({
+                "time": "2026-11-21 10:00:00", "drive": "D",
+                "trigger": "手动清理（D:）", "freed": 2048, "freed_h": "2.0 KB",
+                "failed": 0, "targets": 1,
+                "results": [{"label": "DemoCache", "path": r"D:\Demo\Cache", "freed": 2048}],
+            })
+            lr = app.list_receipts(q="DemoCache", drive="D")
+            check("回执检索：按关键词与盘符命中刚落盘的回执",
+                  lr.get("ok") and lr.get("total") == 1, f"{lr}")
+            nm = lr["receipts"][0]["name"]
+            rd, rerr = app.read_receipt(nm)
+            check("回执读取：合法文件名可读出完整载荷",
+                  rd is not None and not rerr and rd.get("freed") == 2048, f"{rerr}")
+            bad1, err1 = app.read_receipt("../history.json")
+            bad2, err2 = app.read_receipt(r"..\targets.json")
+            check("回执安全：拒绝路径穿越文件名",
+                  bad1 is None and bad2 is None and bool(err1) and bool(err2),
+                  f"{err1} / {err2}")
+        finally:
+            app.RECEIPT_DIR = orig_rdir
+
     # ---- 版本一致性 ----
     import json
     dv = json.load(open("config/drives.json", encoding="utf-8")) \

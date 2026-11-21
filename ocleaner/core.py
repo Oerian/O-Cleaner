@@ -2384,6 +2384,67 @@ def _write_receipt(entry: dict) -> None:
     _atomic_write(path, receipt)
 
 
+def list_receipts(q: str = "", drive: str = "", limit: int = 50) -> dict:
+    """列出 data/receipts/ 下已落盘的清理回执摘要（按文件名倒序，支持关键词与盘符过滤）。"""
+    q0 = str(q or "").strip().lower()
+    drv0 = str(drive or "").strip().rstrip(":").upper()
+    lim = max(1, min(200, int(limit or 50)))
+    items: list[dict] = []
+    if not RECEIPT_DIR.is_dir():
+        return {"ok": True, "receipts": [], "total": 0}
+    files = sorted(RECEIPT_DIR.glob("cleanup-*.json"), reverse=True)
+    for fp in files:
+        data = _load_json(fp, None, use_cache=True)
+        if not isinstance(data, dict):
+            continue
+        r_drv = str(data.get("drive") or "").upper()
+        if drv0 and drv0 not in r_drv.split(","):
+            continue
+        res = data.get("results") or []
+        if q0:
+            hay = " ".join([
+                fp.name,
+                str(data.get("time") or ""),
+                str(data.get("trigger") or ""),
+                r_drv,
+                " ".join(f"{x.get('label', '')} {x.get('path', '')}"
+                         for x in res if isinstance(x, dict)),
+            ]).lower()
+            if q0 not in hay:
+                continue
+        items.append({
+            "name": fp.name,
+            "time": str(data.get("time") or ""),
+            "drive": r_drv,
+            "trigger": str(data.get("trigger") or ""),
+            "freed": int(data.get("freed") or 0),
+            "freed_h": str(data.get("freed_h") or human(int(data.get("freed") or 0))),
+            "failed": int(data.get("failed") or 0),
+            "targets": int(data.get("targets") or len(res)),
+        })
+        if len(items) >= lim:
+            break
+    return {"ok": True, "receipts": items, "total": len(items)}
+
+
+def read_receipt(name: str) -> tuple[dict | None, str]:
+    """按文件名读取单份清理回执（严格限制单段 .json 文件名，杜绝路径穿越）。"""
+    nm = str(name or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]+\.json", nm) or ".." in nm:
+        return None, "非法回执文件名"
+    try:
+        base = RECEIPT_DIR.resolve()
+        fp = (RECEIPT_DIR / nm).resolve()
+        if fp.parent != base or not fp.is_file():
+            return None, "回执文件不存在"
+        data = json.loads(fp.read_text(encoding="utf-8-sig"))
+        if not isinstance(data, dict):
+            return None, "回执内容格式无效"
+        return data, ""
+    except (OSError, ValueError) as exc:
+        return None, f"读取回执失败：{exc}"
+
+
 # ======================================================================
 #  识别引擎
 # ======================================================================
@@ -5231,68 +5292,28 @@ def _full_sha256(path: str) -> str | None:
     except OSError:
         return None
 
+BLOATWARE_BUILTIN_PATH = CONFIG_DIR / "bloatware-builtin.json"
 BLOATWARE_CFG_PATH = CONFIG_DIR / "bloatware.json"
+APPCLEAN_CFG_PATH = CONFIG_DIR / "appclean.json"
 MOVED_JUNCTIONS_PATH = CONFIG_DIR / "moved-junctions.json"
 
 
 def _load_bloatware() -> dict:
-    """毒瘤软件签名库：内置默认 + 用户 config/bloatware.json 覆盖合并。"""
-    builtin = {
-        "apps": [
-            {"id": "360safe", "name": "360 安全卫士",
-             "match": ["360安全卫士", "360Safe"],
-             "dirs": ["360\\360safe", "360\\360safeZia"]},
-            {"id": "360av", "name": "360 杀毒",
-             "match": ["360杀毒", "360 Antivirus"],
-             "dirs": ["360\\360sd"]},
-            {"id": "360se", "name": "360 安全浏览器",
-             "match": ["360安全浏览器", "360se"],
-             "dirs": ["360se6", "360se"]},
-            {"id": "360zip", "name": "360 压缩",
-             "match": ["360压缩", "360zip"],
-             "dirs": ["360zip"]},
-            {"id": "360drv", "name": "360 驱动管家",
-             "match": ["360驱动", "360Driver"],
-             "dirs": ["360\\360drvmgr"]},
-            {"id": "360desktop", "name": "360 桌面助手",
-             "match": ["360桌面助手", "360Desktop"],
-             "dirs": ["360\\360desktop"]},
-            {"id": "qqpcmgr", "name": "腾讯电脑管家",
-             "match": ["腾讯电脑管家", "QQPCMgr", "电脑管家"],
-             "dirs": ["Tencent\\QQPCMgr"]},
-            {"id": "qqbrowser", "name": "QQ 浏览器",
-             "match": ["QQ浏览器", "QQBrowser"],
-             "dirs": ["Tencent\\QQBrowser"]},
-            {"id": "2345safe", "name": "2345 安全卫士",
-             "match": ["2345安全卫士", "2345Safe"],
-             "dirs": ["2345Security"]},
-            {"id": "2345explorer", "name": "2345 浏览器",
-             "match": ["2345浏览器", "2345Explorer"],
-             "dirs": ["2345Explorer"]},
-            {"id": "kav", "name": "金山毒霸",
-             "match": ["金山毒霸", "Kingsoft Antivirus", "kingsoft"],
-             "dirs": ["kingsoft\\KIS", "Kingsoft\\kingsoft antivirus"]},
-            {"id": "kuaiya", "name": "快压",
-             "match": ["快压", "KuaiZip"],
-             "dirs": ["KuaiZip"]},
-            {"id": "haokazip", "name": "2345 好压",
-             "match": ["好压", "HaoZip"],
-             "dirs": ["HaoZip"]},
-            {"id": "baiduguard", "name": "百度卫士/百度杀毒",
-             "match": ["百度卫士", "百度杀毒", "BaiduSd", "Baidu Guardian"],
-             "dirs": ["Baidu\\BaiduSd", "Baidu\\BaiduAn"]},
-            {"id": "jinshanweishi", "name": "腾讯金山卫士",
-             "match": ["金山卫士"],
-             "dirs": ["kingsoft\\jinshansoft"]},
-        ]
-    }
+    """毒瘤软件签名库：内置 config/bloatware-builtin.json + 用户 config/bloatware.json 合并。"""
+    raw = _load_json(BLOATWARE_BUILTIN_PATH, {})
+    apps: list[dict] = list(raw.get("apps") or []) if isinstance(raw, dict) else []
+    seen = {str(a.get("id") or "") for a in apps if isinstance(a, dict)}
     try:
         user = _load_json(BLOATWARE_CFG_PATH, {})
-        if isinstance(user, dict) and user.get("apps"):
-            builtin["apps"].extend(user["apps"])
+        if isinstance(user, dict) and isinstance(user.get("apps"), list):
+            for a in user["apps"]:
+                if isinstance(a, dict) and a.get("id"):
+                    if str(a["id"]) not in seen:
+                        apps.append(a)
+                        seen.add(str(a["id"]))
     except Exception:
         pass
-    return builtin
+    return {"apps": apps}
 
 
 _UNINSTALL_REG_PREFIXES = (
@@ -5634,65 +5655,14 @@ def junction_restore(src: str) -> dict:
 
 
 
-# ---- 应用专清（v2.15 方向三）：国民级大软件与开发者缓存结构化拆解 ----
+# ---- 应用专清（v2.15 方向三，v2.17 外置为 config/appclean.json）----
 # kind 语义：cache=纯缓存可放心清；data=用户数据按需处理；core=核心不可动
-_APPCLEAN_APPS = [
-    {"id": "wechat", "name": "微信",
-     "bases": ["%USERPROFILE%\\Documents\\WeChat Files\\*",
-               "%USERPROFILE%\\Documents\\WeChat Files",
-               "%APPDATA%\\Tencent\\WeChat"],
-     "items": [
-         {"sub": "FileStorage\\Cache", "kind": "cache", "label": "图片/缩略图缓存"},
-         {"sub": "FileStorage\\MsgAttach", "kind": "cache", "label": "聊天图片缓存"},
-         {"sub": "FileStorage\\Video", "kind": "data", "label": "聊天视频（按需清理）"},
-         {"sub": "FileStorage\\File", "kind": "data", "label": "接收的文件（按月归档）"},
-         {"sub": "FileStorage\\BackupFiles", "kind": "data", "label": "旧备份"},
-         {"sub": "Msg", "kind": "core", "label": "聊天数据库（绝对不能删）"}]},
-    {"id": "wxwork", "name": "企业微信",
-     "bases": ["%APPDATA%\\WXWork"],
-     "items": [
-         {"sub": "Cache", "kind": "cache", "label": "缓存"},
-         {"sub": "File\\Cache", "kind": "cache", "label": "文件缓存"}]},
-    {"id": "qq", "name": "QQ（NT 版）",
-     "bases": ["%LOCALAPPDATA%\\Packages\\*Tencent*QQ*\\LocalCache",
-               "%USERPROFILE%\\Documents\\Tencent Files"],
-     "items": [
-         {"sub": "nt_qq*\\FileStorage", "kind": "cache", "label": "消息图片缓存"}]},
-    {"id": "jianying", "name": "剪映",
-     "bases": ["%LOCALAPPDATA%\\JianyingPro"],
-     "items": [
-         {"sub": "User Data\\Cache", "kind": "cache", "label": "草稿缓存"},
-         {"sub": "User Data\\Cache\\user_texture_cache", "kind": "cache", "label": "贴纸/素材缓存"}]},
-    {"id": "docker", "name": "Docker Desktop（WSL2 虚拟磁盘）",
-     "bases": ["%LOCALAPPDATA%\\Docker"],
-     "items": [
-         {"sub": "wsl\\data\\ext4.vhdx", "kind": "data", "label": "虚拟磁盘镜像"
-          , "advice": "镜像文件不能直接删。先 wsl --shutdown，再用 "
-                      "Optimize-VHD -Path <此文件> -Mode Full 压缩回收空间"}]},
-    {"id": "huggingface", "name": "HuggingFace 模型缓存",
-     "bases": ["%USERPROFILE%\\.cache\\huggingface"],
-     "items": [
-         {"sub": "hub", "kind": "cache", "label": "已下载模型"}]},
-    {"id": "ollama", "name": "Ollama 本地模型",
-     "bases": ["%USERPROFILE%\\.ollama"],
-     "items": [
-         {"sub": "models", "kind": "cache", "label": "已拉取模型"
-          , "advice": "建议用 ollama rm <模型名> 精确卸载，而不是手删"}]},
-    {"id": "pip", "name": "pip 包缓存",
-     "bases": ["%LOCALAPPDATA%\\pip"],
-     "items": [
-         {"sub": "cache", "kind": "cache", "label": "下载缓存"
-          , "advice": "也可 pip cache purge"}]},
-    {"id": "npm", "name": "npm / pnpm 缓存",
-     "bases": ["%LOCALAPPDATA%\\npm-cache", "%LOCALAPPDATA%\\pnpm-cache"],
-     "items": [
-         {"sub": "", "kind": "cache", "label": "包缓存"
-          , "advice": "也可 npm cache clean --force"}]},
-    {"id": "shader", "name": "Steam 着色器缓存",
-     "bases": ["%PROGRAMFILES(x86)%\\Steam\\steamapps\\shadercache"],
-     "items": [
-         {"sub": "", "kind": "cache", "label": "着色器缓存（删后首次进游戏会重建）"}]},
-]
+def _load_appclean_apps() -> list[dict]:
+    """从 config/appclean.json 读取应用专清签名库（热更新，无需重启）。"""
+    raw = _load_json(APPCLEAN_CFG_PATH, {})
+    if isinstance(raw, dict) and isinstance(raw.get("apps"), list):
+        return [a for a in raw["apps"] if isinstance(a, dict) and a.get("id")]
+    return []
 
 
 def appclean_scan(drive: str | None = None) -> dict:
@@ -5701,7 +5671,7 @@ def appclean_scan(drive: str | None = None) -> dict:
     文件、哪些绝对不能碰」一目了然。只读不删；清理走 /__oc__/appclean/clean。"""
     out = []
     drv = (drive or "").rstrip(":").upper()
-    for app in _APPCLEAN_APPS:
+    for app in _load_appclean_apps():
         base_dirs: list[str] = []
         seen_b: set[str] = set()
         for b in app.get("bases", []):
@@ -5754,9 +5724,9 @@ def appclean_scan(drive: str | None = None) -> dict:
 
 
 def _appclean_cache_allowed(path: str) -> bool:
-    """校验待清路径是否精确命中 _APPCLEAN_APPS 中的 kind=='cache' 条目。"""
+    """校验待清路径是否精确命中 config/appclean.json 中的 kind=='cache' 条目。"""
     norm = os.path.normcase(os.path.normpath(path))
-    for app in _APPCLEAN_APPS:
+    for app in _load_appclean_apps():
         for b in app.get("bases", []):
             cand = os.path.normpath(os.path.expandvars(b))
             bases = glob_dirs(cand) if "*" in cand else (
@@ -5911,8 +5881,15 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
         for fpairs in fulls.values():
             if len(fpairs) < 2:
                 continue
-            members = [{"path": full, "name": name, "dup": True}
-                       for full, name in fpairs]
+            members = []
+            for full, name in fpairs:
+                try:
+                    mt = os.path.getmtime(full)
+                    mth = datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M")
+                except OSError:
+                    mt, mth = 0.0, ""
+                members.append({"path": full, "name": name, "dup": True,
+                                "mtime": mt, "mtime_h": mth})
             n_dup = len(members)
             # 跨目录标注（2026-11-10 用户反馈「识别有误」）：副本分布在
             # 不同父目录＝大概率是程序/应用自带的多份拷贝（如 Telegram
@@ -6395,6 +6372,19 @@ class Handler(BaseHTTPRequestHandler):
                            q.get("scope", "all")), q.get("lang")))
         if route == "/__oc__/history":
             return self._json(load_history())
+        if route == "/__oc__/receipts":
+            try:
+                lim = int(q.get("limit") or 50)
+            except ValueError:
+                return self._json({"error": "limit 必须是整数"}, 400)
+            return self._json(list_receipts(q.get("q") or "",
+                                            q.get("drive") or "", lim))
+        if route == "/__oc__/receipt":
+            data, err = read_receipt(q.get("name") or "")
+            if err or data is None:
+                return self._json({"error": err or "回执不存在"},
+                                  400 if "非法" in err else 404)
+            return self._json({"ok": True, "receipt": data})
         if route == "/__oc__/fsgroups":
             return self._json({"groups": load_fs_groups()})
         if route == "/__oc__/engine/pref":

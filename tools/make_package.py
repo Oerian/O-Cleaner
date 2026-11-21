@@ -65,6 +65,8 @@ INCLUDE = [
     "config/filetypes.json",
     "config/kb-en.json",
     "config/game-names.json",
+    "config/appclean.json",
+    "config/bloatware-builtin.json",
     "packs/index.json",
     "packs/README.md",
     "packs/windows-system.json",

@@ -30,22 +30,20 @@
 - **v2.11**：自研 NTFS MFT 直读引擎、三引擎择快与换机重校准、磁盘概览图表坞、DPAPI 凭据加密、进程内 `os.scandir` 测量加速。
 - **v2.12**：回收站一键原位还原（`$I/$R` 精确匹配）、磁盘快照对比与高频回涨标记、占用排行跨层级搜索、重复大文件全量 SHA-256 三级分桶。
 - **v2.13 – v2.15**：分析中心第三视图、应用专清（10 类签名 cache/data/core 分级）、毒瘤软件两段式清除、任意盘批量 Junction 迁移与一键迁回、下载整理勾选清理与可撤销归档、`--auto-clean` 无头清理、`--tray` 托盘常驻、`--app` 无边框窗口、`ocleaner/` 10 模块拆分收官。
-- **v2.16（含 2026-11-19 审计加固）**：分析中心排行行体验统一、快照中线柱状图与 top-300 截断线过滤、移除大面板 `will-change` 修复黑屏、修复 `check_deletable` 早退绕过与 Python 3.8/3.9 兼容、打通应用专清/毒瘤清除/下载整理全链路闭环。
+- **v2.16（含 2026-11-19 ~ 11-21 审计加固与 v2.17 先行项）**：分析中心排行行体验统一、快照中线柱状图与 top-300 截断线过滤、移除大面板 `will-change` 修复黑屏、修复 `check_deletable` 早退绕过与 Python 3.8/3.9 兼容、打通应用专清/毒瘤清除/下载整理全链路闭环；已先行落地应用专清/毒瘤签名库 JSON 外置化（`config/appclean.json` 扩展至 17 类应用含微信 4.x/钉钉/飞书/VS Code/JetBrains/Discord/Telegram，AI 模型改 `data` 防误删；`config/bloatware-builtin.json`）、历史回执档案检索接口与前端弹窗（`/__oc__/receipts`、防路径穿越 `/__oc__/receipt`），以及重复大文件 `mtime` 展示、「保留最新/保留最早」智能勾选与扩展名筛选。
 
 ---
 
 ## 三、后续发展规划（v2.17 → v3.0+）
 
-### 阶段一：v2.17 —— 架构收尾与交互精磨（近期，低风险高收益）
+### 阶段一：v2.17 —— 架构收尾与跨机验证（近期，低风险高收益）
 
-1. **后端路由层拆分（`ocleaner/server.py` + `ocleaner/tools_api.py`）**
-   - 当前 `ocleaner/core.py` 仍有约 7,900 行，其中 HTTP `Handler`（约 1,400 行）与分析中心专项逻辑（应用专清 / 毒瘤清除 / 搬家 / 下载归档 / 快照，约 1,200 行）职责独立。
+1. **后端分析域与路由层拆分（`ocleaner/analysis.py` + `ocleaner/server.py`）**
+   - 当前 `ocleaner/core.py` 约 7,900 行，其中分析中心专项逻辑（应用专清 / 毒瘤清除 / 搬家 / 下载归档 / 重复文件 / 快照 / 搜索）与 HTTP `Handler`（约 1,400 行）职责独立。
    - 拆出后 `core.py` 降至 ~4,500 行，大幅降低后续维护与小模型上下文负担，同时保持 `app.py` 全符号 re-export 与 `check_undefined.py` 零破坏。
-2. **清理回执检索与回看界面**
-   - 逐项回执 JSON 已落盘 `data/receipts/`，在历史面板补齐按日期 / 盘符 / 路径关键词检索与单次回执导出，让中低风险直接删除项也可完整追溯。
-3. **应用专清与毒瘤签名库外置化**
-   - 将 `core.py` 中硬编码的 `_APPCLEAN_APPS`（10 类）与 `_load_bloatware`（15 款）抽离为 `config/appclean.json` 与 `config/bloatware-builtin.json`，接入 `lint_rules.py` 校验，让社区无需改 Python 代码即可贡献新软件签名（如微信 4.0、钉钉、飞书、VS Code / Cursor / JetBrains、Unity / Unreal 缓存等）。
-4. **跨设备实测补盲**
+2. **签名库规则 Linter 扩展**
+   - 将新增的 `config/appclean.json` 与 `config/bloatware-builtin.json` 接入 `tools/lint_rules.py` 结构与安全校验（例如禁止将 `Msg` / `db_storage` / AI 模型权重目录标为 `cache`）。
+3. **跨设备实测补盲**
    - 在至少一台非中文区域 / 非管理员 / 单盘（仅 C 盘）Windows 机器上完整验证 `doctor.py`、`selftest.py`、`cdp_check.js` 与免安装版 `make_exe.py` 产物。
 
 ### 阶段二：v2.18 —— 智能空间洞察与自动化闭环（中期）

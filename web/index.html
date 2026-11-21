@@ -1215,8 +1215,12 @@
       <h3><span data-i18n="pane.history">最近清理记录</span>
         <button id="btnClearLog" class="tiny ghost" data-i18n="unit.clearAll">清空全部</button></h3>
       <div class="ab">
-        <input type="text" id="histSearch" data-i18n-ph="hist.searchPh"
-               placeholder="搜索目录名 / 时间…" style="width:100%;margin-bottom:8px">
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <input type="text" id="histSearch" data-i18n-ph="hist.searchPh"
+                 placeholder="搜索目录名 / 时间…" style="flex:1;min-width:0">
+          <button id="btnReceipts" class="tiny" style="flex:none"
+                  data-i18n="hist.receiptsBtn">回执档案</button>
+        </div>
         <div id="history"></div></div>
     </div>
 
@@ -3107,6 +3111,77 @@ $("histSearch").addEventListener("input", e => {
   _histFilter = e.target.value.trim().toLowerCase();
   renderHistory();
 });
+$("btnReceipts").addEventListener("click", openReceiptsArchive);
+async function openReceiptsArchive() {
+  $("modal").innerHTML = `<h2>${t("rcp.title", "清理回执档案")}</h2>
+    <div class="mbody">
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input type="text" id="rcpQ" placeholder="${esc(t("rcp.ph", "按路径 / 目录名 / 触发方式搜索回执…"))}" style="flex:1;min-width:0">
+        <button class="tiny" id="rcpGo">${t("rcp.search", "搜索")}</button>
+      </div>
+      <div id="rcpList"><div class="empty"><span class="spin"></span> ${t("rcp.loading", "正在加载回执档案…")}</div></div>
+      <div style="text-align:right;padding-top:10px">
+        <button class="tiny" id="rcpClose">${t("cc.close", "关闭")}</button>
+      </div>
+    </div>`;
+  $("mask").classList.add("on");
+  $("rcpClose").addEventListener("click", closeModal);
+  const loadList = async () => {
+    const q = ($("rcpQ") ? $("rcpQ").value : "").trim();
+    const box = $("rcpList");
+    if (!box) return;
+    const r = await apiJSON(`${API}/__oc__/receipts?q=${encodeURIComponent(q)}&limit=60`)
+      .catch(e => ({ error: String(e) }));
+    if (!box.isConnected) return;
+    if (r.error) { box.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
+    const rows = r.receipts || [];
+    if (!rows.length) {
+      box.innerHTML = `<div class="empty">${t("rcp.empty", "没有找到匹配的清理回执")}</div>`;
+      return;
+    }
+    box.innerHTML = rows.map(x => `
+      <div class="logrow">
+        <div class="t" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <b>${esc(x.time || x.name)}</b>
+          <span>${esc(x.trigger || "")}</span>
+          <span class="freed">${esc(x.freed_h || "0 B")}</span>
+          <span class="hint">${t("rcp.items", "{n} 项").replace("{n}", x.targets || 0)}</span>
+          <button class="tiny ghost rcpView" data-n="${esc(x.name)}" style="margin-left:auto">${t("rcp.detail", "查看明细")}</button>
+        </div>
+        <div class="d rcpDet" style="display:none"></div>
+      </div>`).join("");
+    box.querySelectorAll(".rcpView").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const det = btn.closest(".logrow").querySelector(".rcpDet");
+        if (!det) return;
+        if (det.dataset.loaded === "1") {
+          det.style.display = det.style.display === "none" ? "" : "none";
+          return;
+        }
+        det.style.display = "";
+        det.innerHTML = `<span class="hint">${t("rcp.loading", "正在加载回执档案…")}</span>`;
+        const rr = await apiJSON(`${API}/__oc__/receipt?name=${encodeURIComponent(btn.dataset.n)}`)
+          .catch(e => ({ error: String(e) }));
+        if (rr.error || !rr.receipt) {
+          det.innerHTML = `<span style="color:var(--danger-fg)">${esc(rr.error || t("up.fail", "检查失败"))}</span>`;
+          return;
+        }
+        det.dataset.loaded = "1";
+        const items = rr.receipt.results || [];
+        det.innerHTML = items.length ? items.map(it => `
+          <div style="padding:3px 0;border-top:1px solid var(--line);word-break:break-all">
+            <b>${esc(it.label || it.id || "")}</b>
+            <span class="hint"> · ${esc(it.path || "")}</span>
+            <span class="freed" style="margin-left:6px">${it.trashed ? t("rcp.trashed", "→ 回收站") : esc(fmt(it.freed || 0))}</span>
+            ${it.error ? `<span style="color:var(--danger-fg);margin-left:6px">${esc(it.error)}</span>` : ""}
+          </div>`).join("") : `<span class="hint">${t("rcp.noItems", "无明细记录")}</span>`;
+      });
+    });
+  };
+  $("rcpGo").addEventListener("click", loadList);
+  $("rcpQ").addEventListener("keydown", e => { if (e.key === "Enter") loadList(); });
+  loadList();
+}
 function renderHistory() {
   const hist = STATE.history || [];
   if (!hist.length) { $("history").innerHTML = `<div class="empty">${t("hist.none","暂无记录")}</div>`; return; }
@@ -5722,6 +5797,11 @@ async function openDupFiles() {
   const baseline = g => (g.files || []).reduce((a, b) =>
     (b.path || "").length < (a.path || "").length ? b : a);
   const maxWasted = Math.max(1, ...g2.map(g0 => g0.wasted || 0));
+  const exts = [...new Set(g2.map(g0 => {
+    const nm = ((g0.files && g0.files[0] && g0.files[0].name) || "").toLowerCase();
+    const dot = nm.lastIndexOf(".");
+    return dot > 0 ? nm.slice(dot) : "";
+  }).filter(Boolean))].sort();
   $("modal").innerHTML = `<h2>${t("dup.title", "重复大文件")}
       <span class="hint">${t("dup.n", "{n} 组 · 门槛 {v}")
         .replace("{n}", g2.length)
@@ -5729,19 +5809,27 @@ async function openDupFiles() {
     <div class="mbody">
     ${g2.length ? `<div class="d" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
       <button class="tiny" id="dupAll">${t("dup.all", "一键全选所有副本")}</button>
+      <button class="tiny" id="dupKeepNew">${t("dup.keepNew", "保留最新")}</button>
+      <button class="tiny" id="dupKeepOld">${t("dup.keepOld", "保留最早")}</button>
       <button class="tiny" id="dupNone">${t("dup.none2", "清空勾选")}</button>
       <select id="dupPreset" style="width:auto">
         <option value="0">${t("dup.p0", "预设：全部大小")}</option>
         <option value="1073741824">${t("dup.p1", "预设：仅 ≥1GB 的组")}</option>
         <option value="5368709120">${t("dup.p5", "预设：仅 ≥5GB 的组")}</option>
       </select>
+      ${exts.length > 1 ? `<select id="dupExt" style="width:auto">
+        <option value="">${t("dup.extAll", "全部扩展名")}</option>
+        ${exts.map(ex => `<option value="${esc(ex)}">${esc(ex)}</option>`).join("")}
+      </select>` : ""}
       <span class="hint" id="dupPickedN"></span></div>` : ""}
     ${g2.length ? g2.map((g, i) => {
       const base = baseline(g);
       const gname = (base.path || "").split(/[\\/]/).pop() || base.path;
+      const gdot = gname.lastIndexOf(".");
+      const gext = gdot > 0 ? gname.slice(gdot).toLowerCase() : "";
       const w0 = Math.max(2, ((g.wasted || 0) / maxWasted * 100)).toFixed(1);
       return `
-      <div class="vrow-wrap" data-gsize="${g.size || 0}" data-xdir="${g.xdir ? 1 : 0}">
+      <div class="vrow-wrap" data-gsize="${g.size || 0}" data-xdir="${g.xdir ? 1 : 0}" data-ext="${esc(gext)}" data-bmtime="${base.mtime || 0}">
       <div class="vrow ${g.xdir ? "c-keep" : "c-clean"}" data-dup="${i}">
         <div class="vtop">
           <input type="checkbox" class="dupGChk" data-i="${i}"
@@ -5764,13 +5852,15 @@ async function openDupFiles() {
         ${g.files.map(f => {
           if (f === base || f.path === base.path) {
             return `<div class="logrow">
-            <div class="t"><span style="word-break:break-all">🔒 <b>${t("dup.keep", "保留基准")}</b> · ${esc(f.path)}</span></div></div>`;
+            <div class="t"><span style="word-break:break-all">🔒 <b>${t("dup.keep", "保留基准")}</b> · ${esc(f.path)}</span>
+            ${f.mtime_h ? `<span class="hint" style="margin-left:6px">${esc(f.mtime_h)}</span>` : ""}</div></div>`;
           }
           return `<div class="logrow">
           <div class="t"><label style="cursor:pointer;display:flex;align-items:center;gap:8px">
-          <input type="checkbox" class="dupChk" data-p="${esc(f.path)}"
+          <input type="checkbox" class="dupChk" data-p="${esc(f.path)}" data-mtime="${f.mtime || 0}"
             ${g.xdir ? "disabled" : ""} ${selPaths.has(f.path) ? "checked" : ""}>
-          <span style="min-width:0;flex:1;word-break:break-all">${esc(f.path)}</span></label>
+          <span style="min-width:0;flex:1;word-break:break-all">${esc(f.path)}</span>
+          ${f.mtime_h ? `<span class="hint" style="flex:none">${esc(f.mtime_h)}</span>` : ""}</label>
           <a href="javascript:void(0)" class="rcpt" data-p="${esc(f.path)}"
              style="margin-left:6px">${t("bf.reveal", "打开位置")}</a></div></div>`;
         }).join("")}
@@ -5812,6 +5902,40 @@ async function openDupFiles() {
     });
   };
   const allBtn = $("dupAll"), noneBtn = $("dupNone"), presetEl = $("dupPreset");
+  const keepNewBtn = $("dupKeepNew"), keepOldBtn = $("dupKeepOld"), extEl = $("dupExt");
+  const pickByTime = keepNewest => {
+    document.querySelectorAll("#modal .vrow-wrap[data-gsize]").forEach(w0 => {
+      if (w0.style.display === "none" || w0.dataset.xdir === "1") return;
+      const chks = [...w0.querySelectorAll(".dupChk")].filter(c => !c.disabled);
+      if (!chks.length) return;
+      const baseMt = Number(w0.dataset.bmtime || 0);
+      let keepChk = null;
+      let bestMt = baseMt;
+      for (const c of chks) {
+        const mt = Number(c.dataset.mtime || 0);
+        if ((keepNewest && mt > bestMt) || (!keepNewest && mt > 0 && (bestMt === 0 || mt < bestMt))) {
+          bestMt = mt;
+          keepChk = c;
+        }
+      }
+      for (const c of chks) {
+        c.checked = (c !== keepChk);
+        if (c.checked) selPaths.add(c.dataset.p);
+        else selPaths.delete(c.dataset.p);
+      }
+    });
+    updateFooter();
+    syncPicked();
+    expandAllDupKids();
+  };
+  if (keepNewBtn) keepNewBtn.addEventListener("click", () => pickByTime(true));
+  if (keepOldBtn) keepOldBtn.addEventListener("click", () => pickByTime(false));
+  if (extEl) extEl.addEventListener("change", () => {
+    const want = extEl.value;
+    document.querySelectorAll("#modal .vrow-wrap[data-gsize]").forEach(w0 => {
+      w0.style.display = (!want || w0.dataset.ext === want) ? "" : "none";
+    });
+  });
   if (allBtn) allBtn.addEventListener("click", () => {
     // 一键全选跳过跨目录组（data-xdir=1）：功能依赖而非冗余，需逐个确认
     document.querySelectorAll("#modal .dupChk").forEach(c => {
@@ -7519,6 +7643,16 @@ const I18N_EN = {
   "hist.receiptBtn": "receipt", "hist.receiptNone": "Full record for this entry not found",
   "hist.receipt": "Export per-item receipt (JSON) for this cleanup",
   "hist.searchPh": "Search folder / time…",
+  "hist.receiptsBtn": "Receipts",
+  "rcp.title": "Cleanup Receipts Archive",
+  "rcp.ph": "Search receipts by path / folder / trigger…",
+  "rcp.search": "Search",
+  "rcp.loading": "Loading receipts archive…",
+  "rcp.empty": "No matching cleanup receipts found",
+  "rcp.items": "{n} items",
+  "rcp.detail": "Details",
+  "rcp.trashed": "→ Recycle Bin",
+  "rcp.noItems": "No item details recorded",
   "hist.detailBtn": "Details",
   "hist.detailTitle": "Per-item view of what was deleted",
   "hist.detailTitle2": "Cleanup details",
@@ -7601,6 +7735,9 @@ const I18N_EN = {
   "dup.p0": "Preset: all sizes",
   "dup.p1": "Preset: groups ≥1GB",
   "dup.p5": "Preset: groups ≥5GB",
+  "dup.keepNew": "Keep newest",
+  "dup.keepOld": "Keep oldest",
+  "dup.extAll": "All extensions",
   "dup.pickedN": "{n} duplicates checked",
   "dup.prog": "Full-hash verification: {done}/{total} files",
   "jm.sub": "Target subfolder (optional, auto-created):",

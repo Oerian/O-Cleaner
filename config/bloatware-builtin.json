@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "apps": [
+    {
+      "id": "360safe",
+      "name": "360 安全卫士",
+      "match": ["360安全卫士", "360Safe"],
+      "dirs": ["360\\360safe", "360\\360safeZia"]
+    },
+    {
+      "id": "360av",
+      "name": "360 杀毒",
+      "match": ["360杀毒", "360 Antivirus"],
+      "dirs": ["360\\360sd"]
+    },
+    {
+      "id": "360se",
+      "name": "360 安全浏览器",
+      "match": ["360安全浏览器", "360se"],
+      "dirs": ["360se6", "360se"]
+    },
+    {
+      "id": "360zip",
+      "name": "360 压缩",
+      "match": ["360压缩", "360zip"],
+      "dirs": ["360zip"]
+    },
+    {
+      "id": "360drv",
+      "name": "360 驱动管家",
+      "match": ["360驱动", "360Driver"],
+      "dirs": ["360\\360drvmgr"]
+    },
+    {
+      "id": "360desktop",
+      "name": "360 桌面助手",
+      "match": ["360桌面助手", "360Desktop"],
+      "dirs": ["360\\360desktop"]
+    },
+    {
+      "id": "qqpcmgr",
+      "name": "腾讯电脑管家",
+      "match": ["腾讯电脑管家", "QQPCMgr", "电脑管家"],
+      "dirs": ["Tencent\\QQPCMgr"]
+    },
+    {
+      "id": "qqbrowser",
+      "name": "QQ 浏览器",
+      "match": ["QQ浏览器", "QQBrowser"],
+      "dirs": ["Tencent\\QQBrowser"]
+    },
+    {
+      "id": "2345safe",
+      "name": "2345 安全卫士",
+      "match": ["2345安全卫士", "2345Safe"],
+      "dirs": ["2345Security"]
+    },
+    {
+      "id": "2345explorer",
+      "name": "2345 浏览器",
+      "match": ["2345浏览器", "2345Explorer"],
+      "dirs": ["2345Explorer"]
+    },
+    {
+      "id": "kav",
+      "name": "金山毒霸",
+      "match": ["金山毒霸", "Kingsoft Antivirus", "kingsoft"],
+      "dirs": ["kingsoft\\KIS", "Kingsoft\\kingsoft antivirus"]
+    },
+    {
+      "id": "kuaiya",
+      "name": "快压",
+      "match": ["快压", "KuaiZip"],
+      "dirs": ["KuaiZip"]
+    },
+    {
+      "id": "haokazip",
+      "name": "2345 好压",
+      "match": ["好压", "HaoZip"],
+      "dirs": ["HaoZip"]
+    },
+    {
+      "id": "baiduguard",
+      "name": "百度卫士/百度杀毒",
+      "match": ["百度卫士", "百度杀毒", "BaiduSd", "Baidu Guardian"],
+      "dirs": ["Baidu\\BaiduSd", "Baidu\\BaiduAn"]
+    },
+    {
+      "id": "jinshanweishi",
+      "name": "腾讯金山卫士",
+      "match": ["金山卫士"],
+      "dirs": ["kingsoft\\jinshansoft"]
+    }
+  ]
+}

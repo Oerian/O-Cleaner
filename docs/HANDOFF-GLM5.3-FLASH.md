@@ -1,7 +1,7 @@
 # O-Cleaner 项目接手指南（面向 GLM 5.3 Flash）
 
-> **交接日期**：2026-11-20  
-> **交接基线**：`v2.16` · 仓库 `E:\O-Cleaner` · 分支 `main` · 已同步至 GitHub `origin/main`（HEAD `56e4cb9`）  
+> **交接日期**：2026-11-21  
+> **交接基线**：`v2.16+` · 仓库 `E:\O-Cleaner` · 分支 `main` · 已同步至 GitHub `origin/main`  
 > **目标接手模型**：GLM 5.3 Flash（轻量高速模型，建议按「小步原子改动 + 每次改动跑对应门禁」的节奏推进）
 
 ---
@@ -36,7 +36,7 @@ O-Cleaner 是一个 **Windows 原生、零第三方依赖、纯本地运行** �
   - `tools/_lint_selftest.py`：44 通过 / 0 失败
   - `tools/packs_ci_validate.py`：5 包 172 条 digest 校验通过
   - `tools/guard_matrix.py`：50 项护栏矩阵 + 规则单元自检全通过
-  - `tools/unit_test.py`：32 通过 / 0 失败（含 P0 护栏防绕过、Python 3.8/3.9 AST 守卫、注册表白名单、下载归档回归）
+  - `tools/unit_test.py`：38 通过 / 0 失败（含 P0 护栏防绕过、Python 3.8/3.9 AST 守卫、注册表白名单、下载归档、外置签名库安全边界与回执防路径穿越回归）
   - `tools/check_undefined.py`：61 个跨模块 `_core` 符号全可达
   - `tools/audit_dead.py`：0 死 CSS 类、0 缺失 i18n 键、0 未定义/未用 CSS 变量
   - `node --check`：`web/index.html` 两个 `<script>` 块均通过
@@ -92,32 +92,32 @@ python -X utf8 tools/make_package.py
 
 ## 五、给 GLM 5.3 Flash 的可执行任务清单（按优先级拆分）
 
-以下任务均已拆成**边界清晰、单轮可交付、自带验收标准**的小单元，对应 [docs/ROADMAP.md](ROADMAP.md) 的 v2.17 → v2.18 路线：
+> 说明：原规划中的「应用专清/毒瘤签名库外置 JSON（17 类应用）」「历史回执档案检索与详情界面」「重复大文件 `mtime` + 保留最新/最早 + 扩展名筛选」已于 2026-11-21 提前落地并通过全套门禁（`unit_test` 38/38）。以下为剩余可立即开工的原子任务：
 
-### Task 1（v2.17 首选）：应用专清 & 毒瘤签名库外置为 JSON 配置
-- **目标**：把 `ocleaner/core.py` 中硬编码的 `_APPCLEAN_APPS`（L5635 起）和 `_load_bloatware` 内置列表（L5240 起）迁至 `config/appclean.json` 与 `config/bloatware-builtin.json`（保留用户 `config/bloatware.json` 扩展合并），同时扩充微信 4.0、钉钉、飞书、VS Code / JetBrains 缓存签名。
-- **改动文件**：`config/appclean.json`、`config/bloatware-builtin.json`、`ocleaner/core.py`、`tools/make_package.py`（`INCLUDE` 登记）、`tools/unit_test.py`（新增配置加载校验）。
-- **验收**：`make_package.py` + `unit_test.py` + `lint_rules.py --strict` 全绿，`/appclean/scan` 与 `/bloatware/scan` 返回结构不变。
-
-### Task 2（v2.17）：历史回执（`data/receipts/`）前端检索与回看
-- **目标**：后端新增 `GET /__oc__/receipts`（列出近期回执索引，支持 `q` 关键词与 `drive` 过滤）与 `GET /__oc__/receipt?name=...`（校验文件名不含路径穿越，仅读 `RECEIPTS_DIR` 内 `.json`）；前端历史面板接入回执搜索与单次逐项详情查看。
-- **改动文件**：`ocleaner/core.py`、`web/index.html`（含 `I18N_EN`）、`tools/unit_test.py`（路径穿越拒绝 + 正常读取断言）。
-- **验收**：`unit_test.py` + `audit_dead.py` + `node --check` + `cdp_check.js` 全绿。
-
-### Task 3（v2.17）：从 `core.py` 拆出 `ocleaner/analysis.py`（分析中心域）
+### Task 1（v2.17 首选）：从 `core.py` 拆出 `ocleaner/analysis.py`（分析中心域）
 - **目标**：将 `appclean_*`、`bloatware_*`、`junction_move`/`junction_restore`、`downloads_advice`/`downloads_archive*`、`dupfiles_scan`、`snapshot_diff`/`_save_scan_snapshot`、`fs_search` 迁入 `ocleaner/analysis.py`，`core.py` 顶部 re-export，保持 `_core.` 惰性引用与 `check_undefined.py` 100% 通过。
 - **改动文件**：`ocleaner/analysis.py`、`ocleaner/core.py`、`ocleaner/__init__.py`、`tools/make_package.py`（`INCLUDE` 强校验）。
 - **验收**：`check_undefined.py` + `unit_test.py` + `guard_matrix.py` + `make_package.py` + `cdp_check.js` 全绿。
 
-### Task 4（v2.18）：重复大文件智能保留策略 & 扩展名筛选
-- **目标**：在分析中心「重复大文件」页签新增「按扩展名筛选」与一键勾选策略（「保留最新修改」「保留最早修改」「跳过跨目录组」），后端在 `dupfiles_scan` 成员中补充 `mtime` 时间戳供前端排序判断。
-- **改动文件**：`ocleaner/core.py`（或迁出后的 `analysis.py`）、`web/index.html`（含 `I18N_EN`）。
+### Task 2（v2.17）：`lint_rules.py` 接入外置签名库校验
+- **目标**：在 `tools/lint_rules.py` 增加对 `config/appclean.json` 与 `config/bloatware-builtin.json` 的结构与安全边界校验（必填字段、`kind` 合法值、禁止数据库/AI 模型目录标为 `cache`、无重复 `id`）。
+- **改动文件**：`tools/lint_rules.py`、`tools/_lint_selftest.py`。
+- **验收**：`lint_rules.py --strict` + `_lint_selftest.py` + `unit_test.py` 全绿。
+
+### Task 3（v2.18）：基于快照的主动空间预警
+- **目标**：基于 `data/disk-trend.json` 与 `data/snapshots/` 计算每盘近 7–14 天日均消耗与「预计剩余可用天数」，当系统盘剩余空间 < 10% 或存在 ≥3 次 `hot` 回涨目录时，在扫描概览顶部展示可关闭的预警条，并支持一键跳转对应分析工具或定时清理面板。
+- **改动文件**：`ocleaner/core.py`（或 `analysis.py`）、`web/index.html`（含 `I18N_EN`）、`tools/unit_test.py`。
 - **验收**：`unit_test.py` + `audit_dead.py` + `cdp_check.js` 全绿。
 
-### Task 5（v2.18）：基于快照的主动空间预警
-- **目标**：基于 `data/disk-trend.json` 与 `data/snapshots/` 计算每盘近 7–14 天日均消耗与「预计剩余可用天数」，当系统盘剩余空间 < 10% 或存在 ≥3 次 `hot` 回涨目录时，在扫描概览顶部展示可关闭的预警条，并支持一键跳转对应分析工具或定时清理面板。
-- **改动文件**：`ocleaner/core.py`、`web/index.html`（含 `I18N_EN`）、`tools/unit_test.py`。
-- **验收**：`unit_test.py` + `audit_dead.py` + `cdp_check.js` 全绿。
+### Task 4（v2.18）：大文件排行自定义门槛与扩展名过滤
+- **目标**：在分析中心「大文件排行」页签新增体积门槛选择（默认 / ≥100MB / ≥500MB / ≥1GB）与扩展名下拉过滤（纯前端按结果集动态生成，不重复读盘）。
+- **改动文件**：`web/index.html`（含 `I18N_EN`）。
+- **验收**：`node --check` + `audit_dead.py` + `cdp_check.js` 全绿。
+
+### Task 5（v2.18）：从 `core.py` 拆出 `ocleaner/server.py`（HTTP 路由层）
+- **目标**：在 Task 1 稳定后，将 `Handler` 路由类从 `core.py` 拆至 `ocleaner/server.py`，使 `core.py` 降至 ~4,500 行，进一步降低后续维护负担。
+- **改动文件**：`ocleaner/server.py`、`ocleaner/core.py`、`ocleaner/__init__.py`、`tools/make_package.py`。
+- **验收**：`check_undefined.py` + `unit_test.py` + `guard_matrix.py` + `make_package.py` + `cdp_check.js` 全绿。
 
 ---
 
