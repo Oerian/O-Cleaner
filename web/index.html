@@ -264,11 +264,7 @@
   .cnum{text-align:right;min-width:112px}
   .empty{color:var(--dim2);font-size:12px;margin-top:6px}
   .errline{color:var(--warn);font-size:12px;margin-top:6px;overflow-wrap:anywhere}
-  /* 趋势图 hover 提示：跟随最近数据点显示「日期 · 体积」 */
-  .gtip{position:absolute;display:none;pointer-events:none;z-index:2;
-    background:var(--panel2);border:1px solid var(--line2);border-radius:6px;
-    color:var(--fg);font-size:11.5px;padding:3px 7px;white-space:nowrap;
-    transform:translateY(-100%);box-shadow:0 2px 8px rgba(0,0,0,.18)}
+  /* 趋势图 hover 提示已随图表退役（2026-11-17） */
 
   .badge{font-size:11px;padding:1.5px 8px;border-radius:99px;border:1px solid;
          white-space:nowrap;line-height:1.5}
@@ -923,10 +919,6 @@
       <div class="libsec" id="secSteam">
         <h3><span data-i18n="pane.steamPanel">Steam 游戏库</span> <span class="hint" id="stHint"></span></h3>
         <div id="stOverview"></div>
-        <div id="gameTrendBox" style="display:none;margin-top:10px">
-          <canvas id="gameTrendCv" style="width:100%;height:56px;display:block"></canvas>
-          <div id="gameTrendLbl" style="color:var(--dim2);font-size:11.5px;margin-top:3px"></div>
-        </div>
         <div id="stExportBar" style="display:none;gap:8px;align-items:center;margin-top:8px">
           <span style="color:var(--dim2);font-size:11.5px" data-i18n="st.exportLbl">游戏清单</span>
           <button class="tiny ghost" id="stExportCsv" data-i18n="st.exportCsv">导出 CSV</button>
@@ -1380,8 +1372,8 @@ function renderTrendBanner() {
   const r = TREND_FC;
   if (!r) { el.style.display = "none"; return; }
   const showDays = r.days_left && (r.level === "warn" || r.level === "crit");
-  const hot = (r.hot_dirs || []).filter(x => x.path);
-  if (!showDays && !hot.length) { el.style.display = "none"; return; }
+  // 2026-11-21 用户要求：高频回涨目录提示删除——横幅只保留剩余天数预警
+  if (!showDays) { el.style.display = "none"; return; }
   const parts = [];
   if (showDays) {
     const crit = r.level === "crit";
@@ -1390,11 +1382,6 @@ function renderTrendBanner() {
         .replace("{d}", esc(r.drive || "?"))
         .replace("{n}", esc(r.days_left))
         .replace("{v}", esc(r.slope_h || "?"))}</span>`);
-  }
-  if (hot.length) {
-    const SEP = i18nLocale() === "en" ? ", " : "、";
-    parts.push(`<span style="flex:1">${t("tf.hot", "高频回涨：{list}（清完又涨，建议加入定时清理）")
-      .replace("{list}", esc(hot.map(x => x.path).join(SEP)))}</span>`);
   }
   el.innerHTML = parts.join(" ") +
     `<button class="tiny ghost" id="trendWarnOk" style="flex:none"
@@ -2092,7 +2079,6 @@ window.addEventListener("resize", () => {
   clearTimeout(_rzTimer);
   _rzTimer = setTimeout(() => {
     try { drawDiskTrend(); } catch (_) {}
-    try { drawGameTrend(); } catch (_) {}
     try { pinPanelSizing(); } catch (_) {}   // zoom 分档变了，面板最小高度跟着算
   }, 150);
 });
@@ -2102,92 +2088,22 @@ window.addEventListener("resize", () => {
    Steam 清单读取成功时记录。两次以上记录才画折线；卸载/删除游戏当天
    就能看到下降（同日体积变化会覆盖当天的点）。 */
 let GAME_TREND = null;
-async function loadGameTrend() {
+/* 2026-11-17 用户要求移除游戏库总体积趋势图表——数据拉取与
+   「异常增长提醒」横幅保留（一周涨 >15% 且 >10GB 仍会提示）。 */
+async function checkGameGrowth() {
   try {
     const d = await apiJSON(`${API}/__oc__/game-history`);
     GAME_TREND = Array.isArray(d) ? d : [];
-  } catch (_) { GAME_TREND = []; }
-  drawGameTrend();
-}
-function drawGameTrend() {
-  const box = $("gameTrendBox");
-  if (!box) return;
+  } catch (_) { GAME_TREND = []; return; }
   const pts = (GAME_TREND || []).filter(p => p && p.d && +p.total > 0);
-  if (pts.length < 2) { box.style.display = "none"; return; }
-  box.style.display = "";
-  const cv = $("gameTrendCv"), lbl = $("gameTrendLbl");
-  if (!cv) return;
-  const dpr = window.devicePixelRatio || 1;
-  cv.width = Math.max(120, cv.clientWidth) * dpr;
-  cv.height = 56 * dpr;
-  const ctx = cv.getContext("2d");
-  ctx.scale(dpr, dpr);
-  const W = cv.width / dpr, H = cv.height / dpr;
-  ctx.clearRect(0, 0, W, H);
-  const ts = pts.map(p => Date.parse(p.d + "T00:00:00"));
-  const vs = pts.map(p => +p.total);
-  const t0 = Math.min(...ts), t1 = Math.max(...ts);
-  const v1 = Math.max(...vs) * 1.08 || 1;
-  const X = t => 8 + (t - t0) / Math.max(1, t1 - t0) * (W - 16);
-  const Y = v => H - 8 - v / v1 * (H - 18);
-  const color = cssVar("--accent", "#4a8fe7");
-  ctx.beginPath();                       // 浅色面积衬托积累感
-  pts.forEach((_, i) => i ? ctx.lineTo(X(ts[i]), Y(vs[i])) : ctx.moveTo(X(ts[0]), Y(vs[0])));
-  ctx.lineTo(X(ts[ts.length - 1]), H - 6);
-  ctx.lineTo(X(ts[0]), H - 6);
-  ctx.closePath();
-  ctx.fillStyle = hexToRgba(color, 0.14);
-  ctx.fill();
-  ctx.beginPath();                       // 折线本体
-  pts.forEach((_, i) => i ? ctx.lineTo(X(ts[i]), Y(vs[i])) : ctx.moveTo(X(ts[0]), Y(vs[0])));
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1.6;
-  ctx.stroke();
-  ctx.fillStyle = color;                 // 首末点：一眼看到「从哪来 → 到哪了」
-  [[0, ts.length - 1], [ts.length - 1, ts.length - 1]].forEach(([i]) => {
-    ctx.beginPath(); ctx.arc(X(ts[i]), Y(vs[i]), 2.6, 0, Math.PI * 2); ctx.fill();
-  });
-  if (lbl) {
-    const delta = vs[vs.length - 1] - vs[0];
-    const pct = vs[0] ? Math.round(delta / vs[0] * 100) : 0;
-    lbl.textContent = t("st.trendLbl","游戏库总体积趋势：{a} → {b}（{pct}%）")
-      .replace("{a}", fmt(vs[0])).replace("{b}", fmt(vs[vs.length - 1]))
-      .replace("{pct}", pct > 0 ? "+" + pct : String(pct));
-  }
-
-  // ---- hover 提示：离鼠标最近的点显示「日期 · 体积」 ----
-  box.style.position = "relative";
-  let tip = $("gameTrendTip");
-  if (!tip) {
-    tip = document.createElement("div");
-    tip.id = "gameTrendTip"; tip.className = "gtip";
-    box.appendChild(tip);
-  }
-  cv.onmousemove = ev => {
-    const rect = cv.getBoundingClientRect();
-    // 窄窗口下 main 有 CSS zoom：getBoundingClientRect 返回的是
-    // 缩放后的视觉宽度，须按 W/rect.width 归一回逻辑坐标（P3 审计项）
-    const mx = (ev.clientX - rect.left) * (W / Math.max(1, rect.width));
-    let bi = 0, bd = Infinity;
-    for (let i = 0; i < pts.length; i++) {
-      const d = Math.abs(X(ts[i]) - mx);
-      if (d < bd) { bd = d; bi = i; }
-    }
-    tip.style.display = "";
-    tip.style.left = Math.min(W - 100, Math.max(2, X(ts[bi]) - 50)) + "px";
-    tip.style.top = "0px";
-    tip.textContent = `${pts[bi].d} · ${fmt(vs[bi])}`;
-  };
-  cv.onmouseleave = () => { tip.style.display = "none"; };
-
-  // ---- 异常增长提醒：近一周涨 >15% 且 >10GB 就提个醒 ----
-  // （单款游戏的体积历史没有记录，这里只能看库总量的变化趋势）
+  const host = $("stOverview");
+  if (!host || pts.length < 2) return;
   let growEl = $("gameTrendGrow");
   if (!growEl) {
     growEl = document.createElement("div");
     growEl.id = "gameTrendGrow";
     growEl.className = "errline";
-    lbl.after(growEl);
+    host.after(growEl);
   }
   const last = pts[pts.length - 1];
   const cutoff = Date.parse(last.d + "T00:00:00") - 7 * 864e5;
@@ -2748,7 +2664,6 @@ function renderSteamPage() {
       '</div>';
     $("stGames").innerHTML = ""; $("stSort").innerHTML = "";
     $("stExportBar").style.display = "none";
-    $("gameTrendBox").style.display = "none";
     $("stOrphanPanel").style.display = "none";
     // 空态引导：Steam 没找到时不给死胡同 —— 直达「自定义游戏库」入口
     const cta = document.createElement("button");
@@ -2772,7 +2687,7 @@ function renderSteamPage() {
                (s.by_drive || []).map(d => `${d.drive}:${d.apps}`).join(","),
                steamSort, steamSortDir, steamFilter, langParam(),
                (GAMES && GAMES.games ? GAMES.games.length : 0)].join("|");
-  loadGameTrend();            // 趋势数据便宜（本地 JSON），每次进来都刷新
+  checkGameGrowth();          // 异常增长提醒横幅（图表已按用户要求移除）
   if (key === _steamPageKey) return;
   _steamPageKey = key;
 

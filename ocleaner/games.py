@@ -182,7 +182,10 @@ def _parse_vdf(text: str) -> dict:
 
 def discover_steam() -> dict:
     """发现 Steam 库与已安装游戏。数据全部来自 Steam 自己的清单文件。"""
-    global _STEAM_ROOTS_CACHE
+    # 2026-11-21 修复：缓存变量在 games.py 拆分时与 core 断裂——server.py
+    # 的封面路由读的是 _core._STEAM_ROOTS_CACHE，这里更新本模块副本永远
+    # 传不过去，封面恒 404、前端全部回退占位图（「游戏图标显示不正确」）。
+    # 改为写 core 命名空间（_core 已 import，monkeypatch/重定向语义一致）。
     empty = {"found": False, "roots": [], "libraries": [], "games": [],
              "orphans": [], "game_count": 0, "total_size": 0,
              "total_size_h": "0 B", "orphan_count": 0}
@@ -363,7 +366,7 @@ def discover_steam() -> dict:
     total = sum(g["size"] for g in games)
     # Steam 根目录留给封面接口用（/__oc__/game-cover）：只在确认清单可读
     # （found）时才更新缓存，避免用半途失败的结果覆盖旧值
-    _STEAM_ROOTS_CACHE = list(roots)
+    _core._STEAM_ROOTS_CACHE = list(roots)
     return {
         "found": True, "roots": roots,
         "libraries": lib_list, "games": games,

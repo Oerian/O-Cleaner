@@ -137,29 +137,73 @@ class Handler(BaseHTTPRequestHandler):
         没有目录穿越面。找不到时 404，前端 onerror 直接隐藏图片。"""
         if not appid.isdigit() or len(appid) > 12:
             return self._json({"error": "appid 必须是数字"}, 400)
+        # 2026-11-21 用户反馈「图标显示还是不正确」：竖版海报（600x900/
+        # portrait）与横版 header 在 22px 方形容器里裁切后只剩画面局部，
+        # 观感等同错图。策略收紧为「只回正方形图标」：named 只留 icon 类，
+        # 哈希命名回退也按尺寸过滤（长宽比 > 1.2 的一律跳过）——目录里
+        # 没有图标时返回 404，前端 onerror 回统一占位图，外观一致。
         for root in _core._STEAM_ROOTS_CACHE:
             base = Path(root) / "appcache" / "librarycache" / appid
             if not base.is_dir():
                 continue
-            named = [base / n for n in ("icon.jpg", "256p.jpg",
-                    "library_600x900.jpg", "library_600x900_2x.jpg",
-                    "portrait.png")]
-            # 新版 Steam 客户端的 librarycache 文件名不定型（哈希命名）——
-            # 命名探测全部落空后，按修改时间回退到目录里任意图片。
+            named = [base / n for n in ("icon.jpg", "256p.jpg")]
             import glob as _glob
+            def _icon_key(f0):
+                # 哈希命名的缓存文件无名字特征——按尺寸挑：越接近正方形、
+                # 面积越小的越像图标（icon），优先级高于修改时间。
+                try:
+                    d0 = f0.read_bytes()
+                except OSError:
+                    return (9, 9 * 10 ** 9)
+                wh = self._img_dimensions(d0)
+                if not wh:
+                    return (9, 9 * 10 ** 9)
+                w0, h0 = wh
+                ratio = max(w0, h0) / max(1, min(w0, h0))
+                return (round(ratio, 2), w0 * h0)
             anyimg = sorted(
                 (Path(f0) for f0 in _glob.glob(str(base / "*"))
                  if f0.lower().endswith((".jpg", ".jpeg", ".png"))),
-                key=lambda f0: f0.stat().st_mtime, reverse=True)                 if base.is_dir() else []
+                key=_icon_key) if base.is_dir() else []
             for f in named + anyimg:
-                if f.is_file():
-                    try:
-                        body = f.read_bytes()
-                    except OSError:
-                        continue
-                    ctype = "image/png" if f.name.endswith(".png") else "image/jpeg"
-                    return self._send(200, body, ctype)
+                if not f.is_file():
+                    continue
+                try:
+                    body = f.read_bytes()
+                except OSError:
+                    continue
+                wh = self._img_dimensions(body)
+                if not wh:
+                    continue
+                w0, h0 = wh
+                if max(w0, h0) / max(1, min(w0, h0)) > 1.2:
+                    continue          # 非正方形（海报/header）——跳过
+                ctype = "image/png" if f.name.endswith(".png") else "image/jpeg"
+                return self._send(200, body, ctype)
         return self._json({"error": "no cover"}, 404)
+
+    @staticmethod
+    def _img_dimensions(data: bytes):
+        """返回 (宽, 高) 或 None。PNG 读 IHDR，JPEG 扫 SOF 段——标准库实现。"""
+        if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) > 24:
+            return (int.from_bytes(data[16:20], "big"),
+                    int.from_bytes(data[20:24], "big"))
+        if data[:2] == b"\xff\xd8":
+            i = 2
+            while i + 9 < len(data):
+                if data[i] != 0xFF:
+                    i += 1
+                    continue
+                m = data[i + 1]
+                if m == 0xD8 or m == 0x01 or 0xD0 <= m <= 0xD7:
+                    i += 2
+                    continue
+                seglen = int.from_bytes(data[i + 2:i + 4], "big")
+                if 0xC0 <= m <= 0xCF and m not in (0xC4, 0xC8, 0xCC):
+                    return (int.from_bytes(data[i + 7:i + 9], "big"),
+                            int.from_bytes(data[i + 5:i + 7], "big"))
+                i += 2 + seglen
+        return None
 
     def _cover_placeholder_get(self) -> None:
         """无图标游戏的占位图：用户自定义图优先，否则回内置 SVG。

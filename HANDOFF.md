@@ -2048,3 +2048,12 @@ SECURITY 该处表述未动。
 - **清理回执档案**：新增 `GET /__oc__/receipts`（按关键词/盘符检索 `data/receipts/`）与 `GET /__oc__/receipt`（单段 `.json` 校验防路径穿越）；前端历史面板新增「回执档案」检索与逐项明细查看弹窗（中英双语）。
 - **重复大文件深化**：`dupfiles_scan` 成员补 `mtime`/`mtime_h`；前端新增修改时间显示、「保留最新 / 保留最早」一键智能勾选（跳过跨目录组且每组至少留 1 份）及扩展名筛选下拉。
 - **门禁**：`unit_test.py` 38-0（+6 项回归）/ `guard_matrix.py` 50-0 / `lint_rules.py --strict` 0 错 / `packs_ci_validate.py` PASS / `audit_dead.py` 0 死 CSS 0 缺 i18n / `make_package.py` 48 条目 sha256 校验通过。
+
+**v2.17 前补二（2026-11-21）：游戏页趋势图移除 + 封面缓存归属修复 + 断言同步（本地提交，未推送）**——
+- **移除游戏库总体积趋势图表**（canvas + 数据管线）：「异常增长提醒」横幅保留（checkGameGrowth，挂 stOverview 后）——用户判定图表信息量不足（本机数据 411.7→411.8 GB 0% 变化无意义）。
+- **修复游戏封面全部显示占位图**：v2.17 拆分时 `_STEAM_ROOTS_CACHE` 更新断裂（games.py `discover_steam` 更新本模块副本，server.py 封面路由读 `_core._STEAM_ROOTS_CACHE` 永远为空 → 封面恒 404）——改为写 core 命名空间。实测：抽样 12 款无图 12→0。
+- **封面挑选收紧**：只回正方形图标（长宽比 ≤1.2，`_img_dimensions` PNG/JPEG 标准库解析）——哈希命名目录里混着 300×450 竖版海报，22px 方容器裁切后观感等同错图；无 icon 的游戏回统一占位图，外观一致。实测 12/12 全部正方形。
+- **磁盘趋势预警横幅删「高频回涨」段**（用户要求）：横幅只保留剩余天数预警（hot_dirs 后端字段保留，前端不渲染）。
+- **selftest 断言同步**：三处趋势断言改反向（图表退役/提醒保留）；四条断言的 `app_src`（仅 core.py）→ `_impl_src()`（全模块拼接）——analysis/server 拆分后符号迁移，逐条件求值定位。
+- **事故**：selftest.py 存在 5 处「\ 续行符后空行」断裂（EOL 残留写入）——全文模式扫描统一修复；.gtip CSS 清理时误删行首破坏花括号配平——按实态 Read+精确替换修复（442/442）。
+- 测试：unit_test **44-0** · selftest **595-0-6** · lint strict **0 错** · CDP 断言（趋势图移除/封面 12 全正方形/横幅 hot 段删除/零错误）。
