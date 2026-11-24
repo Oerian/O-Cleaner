@@ -326,7 +326,12 @@ def elevate_relaunch() -> dict:
         return {"ok": False, "error": "当前已经是管理员权限，无需提权"}
     import sys
     script = str((BASE_DIR / "app.py").resolve())
-    port_arg = f" --port {_BOUND_PORT} --wait-free 25" if _BOUND_PORT else ""
+    # 2026-11-21 用户要求：提权后不再多开新浏览器页——旧页面本来就在
+    # 轮询同端口等新实例就绪（收到 is_admin 后 location.reload() 落到
+    # 管理员会话），新实例带 --no-browser 即可避免「旧页恢复 + 新页又开」
+    # 的双页残留。能点到提权按钮的页面必然活着，无条件加是安全的。
+    port_arg = (f" --port {_BOUND_PORT} --wait-free 25 --no-browser"
+                if _BOUND_PORT else " --no-browser")
     # pythonw.exe = 无控制台的同一解释器；没有（如嵌入式发行版精简掉它）
     # 就退回 python.exe —— 此时窗口交给 SW_HIDE 压掉，两条路都不弹窗。
     target = Path(sys.executable).with_name("pythonw.exe")

@@ -2057,3 +2057,9 @@ SECURITY 该处表述未动。
 - **selftest 断言同步**：三处趋势断言改反向（图表退役/提醒保留）；四条断言的 `app_src`（仅 core.py）→ `_impl_src()`（全模块拼接）——analysis/server 拆分后符号迁移，逐条件求值定位。
 - **事故**：selftest.py 存在 5 处「\ 续行符后空行」断裂（EOL 残留写入）——全文模式扫描统一修复；.gtip CSS 清理时误删行首破坏花括号配平——按实态 Read+精确替换修复（442/442）。
 - 测试：unit_test **44-0** · selftest **595-0-6** · lint strict **0 错** · CDP 断言（趋势图移除/封面 12 全正方形/横幅 hot 段删除/零错误）。
+
+**v2.17 前补三（2026-11-24）：一键提权重启不再多开新浏览器页（本地提交，未推送）**——
+- 用户反馈：提权后旧的浏览器界面残留（旧页面轮询 reload 恢复 + 新实例 webbrowser.open 又开一个 = 双页）。
+- 修复：`elevate_relaunch` 的新实例参数加 `--no-browser`——旧页面本来就在轮询同端口等新实例（收到 is_admin 后 location.reload() 落到管理员会话），无需新开页面。安全性论证：能点到提权按钮的页面必然活着，无条件加 --no-browser 无「无界面」风险（用户提权后立即手动关页的极小概率场景需手动重开，可接受）。
+- 启动参数守卫确认：`args.no_browser` 同时覆盖 `--app` 窗口模式与普通 webbrowser 模式（core.py 主流程单一守卫点）。
+- 测试：unit_test **44-0** · selftest **595-0-6** · lint strict **0 错**。
