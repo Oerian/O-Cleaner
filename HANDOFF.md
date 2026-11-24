@@ -2063,3 +2063,5 @@ SECURITY 该处表述未动。
 - 修复：`elevate_relaunch` 的新实例参数加 `--no-browser`——旧页面本来就在轮询同端口等新实例（收到 is_admin 后 location.reload() 落到管理员会话），无需新开页面。安全性论证：能点到提权按钮的页面必然活着，无条件加 --no-browser 无「无界面」风险（用户提权后立即手动关页的极小概率场景需手动重开，可接受）。
 - 启动参数守卫确认：`args.no_browser` 同时覆盖 `--app` 窗口模式与普通 webbrowser 模式（core.py 主流程单一守卫点）。
 - 测试：unit_test **44-0** · selftest **595-0-6** · lint strict **0 错**。
+
+**v2.17 发布（2026-11-24）**——版本升级 v2.16→v2.17（APP_VERSION+drives.json 两处同步）；推送本地未推送提交（游戏页趋势图移除/封面缓存归属修复/提权不再多开浏览器页）+ 本提交，打 tag v2.17 + Release + 分发包 O-Cleaner-v2.17.zip；全门禁（44-0/595-0-6/lint 0 错/223 符号/make_package sha256 逐条一致）。
