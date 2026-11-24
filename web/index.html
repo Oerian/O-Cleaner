@@ -87,8 +87,12 @@
   /* 视图切换过渡：滑入方向跟随切换方向（扫描概览→游戏占用概览从右滑入，
      反向从左滑入），180ms 短促不拖沓；系统要求减少动效时直接禁用。
      只做进入动画不做退出动画：退出只会拉长感知等待，是「变白感」的来源之一。 */
-  @keyframes vin-l{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:none}}
-  @keyframes vin-r{from{opacity:0;transform:translateX(-18px)}to{opacity:1;transform:none}}
+  /* 2026-11-24 修复切换黑屏：vin-l/vin-r 原含 translateX——对整页级大
+     面板做 transform 动画会把合成器隐式提升为巨幅合成层，Edge 上偶发
+     GPU 纹理失效即「黑一下」（与 will-change 同类机制）。改为纯 opacity
+     淡入——合成友好，视觉反馈保留。 */
+  @keyframes vin-l{from{opacity:0}to{opacity:1}}
+  @keyframes vin-r{from{opacity:0}to{opacity:1}}
   .fspanel.slide-l{animation:vin-l .18s ease-out}
   /* will-change 已移除：大面板常驻合成层在 Edge 上偶发整屏黑块（点击消失复现），切换动画无需它 */
   .fspanel.slide-r{animation:vin-r .18s ease-out}
@@ -8140,6 +8144,13 @@ function setLang(l) {
   applyI18n();
   applyDense();     // 密度按钮文案随语言切换
   initPanelNav();   // 侧栏目录条取的是面板标题文本，翻译切换后重建一次
+  // 2026-11-24 修复：先清跨语言缓存再重画。旧顺序是「先用旧数据同步重画
+  // → 再清缓存异步重拉」——重画列表里的 renderSteamPage/renderChart 等
+  // 会用旧语言的负载把 DOM 写一遍，而 loadSteam(true)（Steam 清单重算
+  // 需数秒）完成前旧语言的 DOM 一直是最终态——游戏名在英文界面显示中文、
+  // 中文界面显示英文即由此而来。清缓存后重画落到 loading 空态，新语言
+  // 数据到达后由 loadSteam/renderChart 各自补画。
+  STEAM = null; GAMES = null;
   // 动态渲染的文案（徽章、提示、磁盘概览、统计）按新语言重画；
   // 各渲染器只碰自己的 DOM，失败静默忽略不影响其余部分。
   // 未列出的：renderSteam/renderOtherPlatforms 由 renderSteamPage 覆盖；
@@ -8147,15 +8158,14 @@ function setLang(l) {
   // 行内文案，重开即新语言），不能无参调用。
   ["renderChart", "renderDisk", "renderCumulative", "renderUnits",
    "renderRules", "renderPresets", "renderPacks", "renderSteamPage",
-   "renderGuide", "drawDiskTrend", "drawGameTrend", "renderDrives",
+   "renderGuide", "drawDiskTrend", "renderDrives",
    "renderConvToggle", "renderSchedule", "renderHistory", "renderOverview",
    "renderAI", "renderCustomLibs", "renderSchSummary", "renderBfRows",
-   "renderTrendBanner"].forEach(fn => {
+   "renderTrendBanner", "checkOrphanBanner"].forEach(fn => {
     try { if (typeof window[fn] === "function") window[fn](); } catch (e) {}
   });
-  // 后端返回的长文本（释义/建议）随请求的 lang 走：清掉旧语言的缓存
-  // 重新拉取，Steam/游戏面板与目标列表才会用新语言的文案
-  STEAM = null; GAMES = null;
+  // 后端返回的长文本（释义/建议）随请求的 lang 走：缓存已清，这里重拉，
+  // Steam/游戏面板与目标列表才会用新语言的文案
   (async () => {
     try { await loadState(); } catch (e) {}
     try { await loadSteam(true); renderSteamPage(); } catch (e) {}

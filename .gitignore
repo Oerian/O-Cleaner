@@ -72,3 +72,6 @@ config/engine_speed.json
 # 云同步配置（GitHub 令牌，绝不进版本库）
 config/sync.json
 tools/_tmp_*.py
+
+# 编年文档（参与模型/用户提示词）—— 仅本机留存，不进 GitHub
+CHRONICLE.md

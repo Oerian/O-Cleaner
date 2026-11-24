@@ -2065,3 +2065,17 @@ SECURITY 该处表述未动。
 - 测试：unit_test **44-0** · selftest **595-0-6** · lint strict **0 错**。
 
 **v2.17 发布（2026-11-24）**——版本升级 v2.16→v2.17（APP_VERSION+drives.json 两处同步）；推送本地未推送提交（游戏页趋势图移除/封面缓存归属修复/提权不再多开浏览器页）+ 本提交，打 tag v2.17 + Release + 分发包 O-Cleaner-v2.17.zip；全门禁（44-0/595-0-6/lint 0 错/223 符号/make_package sha256 逐条一致）。
+
+**v2.17 前补四（2026-11-24）：语言切换跟随修复（本地提交，未推送）**——
+- 用户反馈（英文模式截图）：①顶部游戏卸载残留横幅仍是中文；②英文模式游戏名显示中文、中文模式显示英文（反转）。
+- **诊断**：后端语言逻辑完全正确（/steam?lang=en → display=英文原名 ✓，apply_lang_payload 的 zh_name 分支把 display 还原为原名 ✓）——根因在**前端 setLang 的执行顺序**：先用旧语言负载同步重画 DOM（renderSteamPage 等在重绘列表里读 STEAM 旧引用）→ 再清缓存异步重拉——重拉完成（Steam 清单重算 2-5s）前旧语言 DOM 是最终态。
+- **修复**：`STEAM = null; GAMES = null;` **移到重绘 forEach 之前**——清缓存后重画落到 loading 空态，新语言数据到达后由 loadSteam/renderChart 各自补画；`checkOrphanBanner` 加入重绘列表（横幅文案随语言重画）。
+- CDP 时序验证：切英文后 1s（fetch 完成中）→ 2s 起游戏名与横幅稳定为英文；横幅 checkOrphanBanner 手动调用亦正确。
+- 测试：unit_test **44-0** · selftest **595-0-6** · lint strict **0 错**。
+
+**v2.17 前补五（2026-11-24）：切换黑屏二次修复（本地提交，未推送）**——
+- 用户复报「分析中心 → 游戏占用概览还是会黑一下」——11-17 移除 will-change 后仍有残留黑闪。
+- **根因二**：切换动画 vin-l/vin-r 含 `translateX(±18px)`——对整页级大面板做 transform 动画会**隐式提升合成器巨幅合成层**（与 will-change 显式声明同类机制），Edge 偶发 GPU 纹理失效即黑块。
+- 修复：动画改为**纯 opacity 淡入**（合成友好，无大层提升），视觉反馈保留；switchView 的 slide-l/slide-r 类与强制回流逻辑不动。
+- 教训：**transform 动画与 will-change 同为合成层提升源**——整页级元素的任何 transform 动画都应改 opacity。
+- 测试：unit_test **44-0** · selftest **595-0-6** · lint strict **0 错**。
