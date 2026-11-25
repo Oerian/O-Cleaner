@@ -19,6 +19,11 @@ assert instead so only a working Python passes.
 python -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>nul
 if errorlevel 1 goto nopython
 
+where pythonw >nul 2>nul
+if not errorlevel 1 (
+  start "" pythonw "%~dp0app.py" --app %*
+  goto :eof
+)
 echo   Starting... your browser will open automatically.
 echo.
 echo   KEEP THIS WINDOW OPEN. Closing it stops the service.
