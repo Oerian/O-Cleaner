@@ -7226,18 +7226,47 @@ $("btnAiBatch")?.addEventListener("click", async () => {
     });
     if (!r.ok) { toast(r.error || t("ai.batchFail", "批量识别失败")); return; }
     const entries = Object.entries(r.results || {});
+    window._aiBatchMap = r.results || {};
     $("aiOut").innerHTML = `<div class="hint" style="margin-bottom:6px">${
       t("ai.batchStat", "识别 {n} 项（缓存命中 {c}，新查询 {f}）")
         .replace("{n}", entries.length).replace("{c}", r.from_cache || 0).replace("{f}", r.fetched || 0)
     }</div>` + entries.map(([k, v]) => `
       <div class="logrow"><div class="t"><b>${esc(v.title || k)}</b>
-        <span class="vbadge ${v.cleanable ? "clean" : "keep"}">${esc(v.category || "未知")}</span></div>
+        <span class="vbadge ${v.cleanable ? "clean" : "keep"}">${esc(v.category || "未知")}</span>
+        ${/^[a-zA-Z]:\\/.test(k) ? `<button class="tiny ghost aiSaveOv" data-k="${esc(k)}" style="margin-left:auto">${t("ai.saveOv", "保存释义")}</button>` : ""}</div>
         <div class="d">${esc(v.what || "")} ${v.advice ? "· " + esc(v.advice) : ""}</div>
         <div class="d" style="color:var(--dim2)">${esc(k)}</div></div>`).join("");
   } catch (e) {
     toast(String(e));
   } finally {
     btn.disabled = false; btn.textContent = old;
+  }
+});
+$("aiOut")?.addEventListener("click", async ev => {
+  const b = ev.target.closest(".aiSaveOv");
+  if (!b || b.disabled) return;
+  const k = b.dataset.k || "";
+  const v = (window._aiBatchMap || {})[k];
+  if (!k || !v) return;
+  b.disabled = true;
+  try {
+    await apiJSON(`${API}/__oc__/overrides/set`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: k.toLowerCase(),
+        label: v.title || "",
+        what: v.what || "",
+        rebuild: v.rebuild || "",
+        impact: v.advice || "",
+        cleanable: !!v.cleanable,
+        label_kind: v.cleanable ? "clean" : "keep",
+      }),
+    });
+    b.textContent = t("ai.savedOv", "已保存");
+    toast(t("ai.savedOv", "已保存"));
+  } catch (e) {
+    b.disabled = false;
+    toast(String(e));
   }
 });
 $("btnAiClear").addEventListener("click", () => { AI_PICKS = []; $("aiOut").innerHTML = ""; });
@@ -7470,6 +7499,8 @@ const I18N_EN = {
   "ai.batchNone": "No unrecognized items in current view",
   "ai.batchFail": "Batch explain failed",
   "ai.batchStat": "Explained {n} items (cached {c}, new {f})",
+  "ai.saveOv": "Save note",
+  "ai.savedOv": "Saved",
   "pane.cum": "Cumulative Cleanup & Units",
   "cum.manage": "Add / manage conversion units",
   "unit.label": "Name", "unit.size": "Size", "unit.equals": "= 1 of this unit",
