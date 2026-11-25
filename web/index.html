@@ -411,14 +411,14 @@
   /* 磁盘概览：占比环 + 统计（环保留在扫描概览原位 —— 2026-11-03 用户定稿，
      挪进统计卡会整体错位；组件页签图表放磁盘卡下部原位）。
      环 150px（134 偏小显紧凑）+ 上下留白：环行紧贴进度条/引擎条会显得挤。 */
-  .ovrow{display:flex;gap:24px;align-items:center;flex-wrap:wrap;
-         padding:6px 0;margin-bottom:8px}
-  .ring{width:150px;height:150px;border-radius:50%;flex:none;position:relative;
+  .ovrow{display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+         padding:2px 0;margin-bottom:4px}
+  .ring{width:108px;height:108px;border-radius:50%;flex:none;position:relative;
         background:conic-gradient(var(--track) 0turn,var(--track) 1turn)}
-  .ring::after{content:"";position:absolute;inset:19px;border-radius:50%;background:var(--panel)}
+  .ring::after{content:"";position:absolute;inset:14px;border-radius:50%;background:var(--panel)}
   .ring .rt{position:absolute;inset:0;display:flex;flex-direction:column;
             align-items:center;justify-content:center;z-index:1;text-align:center}
-  .ring .rt .p{font-size:24px;font-weight:800;line-height:1}
+  .ring .rt .p{font-size:19px;font-weight:800;line-height:1}
   .ring .rt .l{font-size:11px;color:var(--dim2);margin-top:3px}
   /* .ovstats 收缩到内容宽（2026-11-03 用户定稿）：数值紧贴「本次扫到」
      标签，不留整行空档 —— 腾出的右侧空间放组件图表坞（#dwDock）。
@@ -535,11 +535,11 @@
      滚过整个模块后这块自然跟着面板走，不会盖到别的面板（「模块内固定」）。
      负 margin 抵消面板内边距，吸顶时行内容不从背后漏出；
      底部分隔线让吸顶态与常态有同一视觉锚。 */
-  .fshead{position:sticky;top:0;z-index:6;margin:-14px -14px 12px;          padding:12px 14px 9px;background:var(--panel);
+  .fshead{position:sticky;top:0;z-index:6;margin:-14px -14px 8px;padding:9px 14px 7px;background:var(--panel);
           border-bottom:1px solid var(--line);border-radius:12px 12px 0 0}
   .fshead h3{margin-bottom:0}
-  .fshead .upcard,.fshead .crumbs{margin-top:9px}
-  .fshead .drillhint{margin-top:6px}
+  .fshead .upcard,.fshead .crumbs{margin-top:5px}
+  .fshead .drillhint{margin-top:4px}
   .fstabbar{margin-top:9px}
   /* 游戏占用概览模块：库分区统一「XX 游戏库」样式（同面板内分隔） +
      残留建议折叠头与勾选行（2026-10-29 用户要求：库名统一、置顶折叠可勾选）。 */
@@ -617,10 +617,10 @@
   /* 分析中心（四轮后新增）：专项工具统一挂在第三个视图的页签下，
      #modal 运行时重挂进 anHost —— 面板化呈现，状态随视图保留 */
   /* 磁盘卡三页签（趋势/清理记录/类型分布）展开后统一对齐基线 */
-  #dwBody{width:100%;min-height:140px}
-  .sdchart{display:flex;align-items:flex-end;gap:6px;height:125px;
+  #dwBody{width:100%;min-height:106px}
+  .sdchart{display:flex;align-items:flex-end;gap:6px;height:98px;
     border-bottom:1px solid var(--line);padding:0 2px 3px;
-    margin:6px 0 4px;flex-wrap:nowrap;overflow-x:auto}
+    margin:4px 0 3px;flex-wrap:nowrap;overflow-x:auto}
   .sdchart .extcol{height:100%;flex:1 0 36px;min-width:36px}
   .sdchart .extcol .extvbar{border-bottom:none}
   /* 中线柱状图（2026-11-15 用户定稿）：中央基线，增长向上暖色/回落向下绿色 */
@@ -1000,8 +1000,10 @@
         <h3><span data-i18n="pane.fsChart">占用排行</span> <span class="hint" id="fsChartHint" data-i18n="pane.fsChartHint">点击下钻 · 右键可自定义标签或提级到顶层</span></h3>
         <div id="fsNav"></div>
         <div class="fstabbar">
-          <div class="segbtns" id="fsModes"></div>
-          <div class="segbtns" id="fsSort" style="margin-top:6px"></div>
+          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px">
+            <div class="segbtns" id="fsModes"></div>
+            <div class="segbtns" id="fsSort" style="margin-left:auto"></div>
+          </div>
           <input type="text" id="fsSearch" data-i18n-ph="fs.searchPh"
                  placeholder="全盘搜索文件/目录名，回车执行…"
                  style="width:100%;margin-top:6px">
@@ -2006,7 +2008,7 @@ function _dwRenderTrend(body, dk) {
   const showPts = pts.slice(-10);
   // 2026-11-17 用户要求：数值带常显（三段定高，同一基线对齐）+ 悬停 title；最多展示近 10 天防日期挤压截断
   body.innerHTML =
-    `<div class="sdchart" style="height:128px">${showPts.map((p, i) => {
+    `<div class="sdchart" style="height:98px">${showPts.map((p, i) => {
       const h = Math.max(4, Math.round((p.free - lo) / (hi - lo) * 100));
       return `<span class="extcol" title="${md(p.t)} · ${tipFree} ${fmt(p.free)}"` +
         `${i === showPts.length - 1 ? ' data-last="1"' : ""}>
