@@ -137,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
         没有目录穿越面。找不到时 404，前端 onerror 直接隐藏图片。"""
         if not appid.isdigit() or len(appid) > 12:
             return self._json({"error": "appid 必须是数字"}, 400)
-        # 2026-11-21 用户反馈「图标显示还是不正确」：竖版海报（600x900/
+        # 「图标显示还是不正确」：竖版海报（600x900/
         # portrait）与横版 header 在 22px 方形容器里裁切后只剩画面局部，
         # 观感等同错图。策略收紧为「只回正方形图标」：named 只留 icon 类，
         # 哈希命名回退也按尺寸过滤（长宽比 > 1.2 的一律跳过）——目录里
@@ -693,7 +693,7 @@ class Handler(BaseHTTPRequestHandler):
                 })
 
             if not selected:
-                # 报错细化（2026-11-10 用户反馈）：整批「目录不存在」＝扫描
+                # 报错细化：整批「目录不存在」＝扫描
                 # 缓存过期（如 Steam 卸载残留目录已随卸载消失）—— 明说原
                 # 因与自救动作，而不是牛头不对马嘴的「没有选择任何清理项」。
                 if skipped_paths and all(

@@ -188,7 +188,7 @@
         background-clip:content-box}
   #leftcol::-webkit-scrollbar-thumb:hover,aside::-webkit-scrollbar-thumb:hover{
         background:var(--scrollbar);background-clip:content-box}
-  /* 窄窗口（≤1100px）保持左右两栏，按宽度分级等比缩小（用户明确要求
+  /* 窄窗口（≤1100px）保持左右两栏，按宽度分级等比缩小（设计约束
      不要上下堆叠——两栏各自独立滚动是本界面的核心操作模型，堆叠后
      磁盘概览与占用排行隔着整页距离，来回对照很别扭）。
      zoom 缩的是布局像素：视口 ÷ zoom = 实际布局宽度，两栏在极窄窗口
@@ -408,8 +408,7 @@
   .fspanel{grid-column:1;display:flex;flex-direction:column;gap:14px}
   .fspanel .panel{margin:0}
 
-  /* 磁盘概览：占比环 + 统计（环保留在扫描概览原位 —— 2026-11-03 用户定稿，
-     挪进统计卡会整体错位；组件页签图表放磁盘卡下部原位）。
+  /* 磁盘概览：占比环 + 统计（环保留在扫描概览原位 —— 挪进统计卡会整体错位；组件页签图表放磁盘卡下部原位）。
      环 150px（134 偏小显紧凑）+ 上下留白：环行紧贴进度条/引擎条会显得挤。 */
   .ovrow{display:flex;gap:16px;align-items:center;flex-wrap:wrap;
          padding:2px 0;margin-bottom:4px}
@@ -420,7 +419,7 @@
             align-items:center;justify-content:center;z-index:1;text-align:center}
   .ring .rt .p{font-size:19px;font-weight:800;line-height:1}
   .ring .rt .l{font-size:11px;color:var(--dim2);margin-top:3px}
-  /* .ovstats 收缩到内容宽（2026-11-03 用户定稿）：数值紧贴「本次扫到」
+  /* .ovstats 收缩到内容宽：数值紧贴「本次扫到」
      标签，不留整行空档 —— 腾出的右侧空间放组件图表坞（#dwDock）。
      需要拉伸的场景（结果卡）自己在行内声明 flex:1。 */
   .ovstats{flex:none;min-width:0}
@@ -431,7 +430,7 @@
      （drawDiskTrend 动态选主：有 #dwDock 用 dock，否则留在卡内 #dwHome）。
      页签用紧凑小胶囊（大号 .seg 在图表旁显得笨重、风格不搭）；
      坞内容总高必须 ≤ 环高 134px，否则页签会冒到环上缘、贴住上方进度条
-     （2026-11-03 用户截图反馈「重合、页签太大」）。 */
+     。 */
   .dwdock{flex:1;min-width:0;align-self:center}
   #dwTabs{gap:5px}
   #dwTabs .seg{padding:2px 9px;font-size:11px;font-weight:500}
@@ -454,7 +453,7 @@
   .extv{display:flex;align-items:flex-end;gap:6px;height:130px;margin-top:3px;
     border-bottom:1px solid var(--line);padding:0 2px 3px}
   /* 2026-11-03 对齐修复：列改三段固定区（数值 2 行高 / 弹性柱区 / 标签
-     2 行高）—— 旧版标签换行会把柱子顶得高低不一（用户截图「换行导致
+     2 行高）—— 旧版标签换行会把柱子顶得高低不一（设计约束「换行导致
      柱状图错位」）；现在所有柱共享同一条基线，长标签在各自固定区内换行。 */
   .extcol{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;
     align-items:stretch;cursor:default}
@@ -472,7 +471,7 @@
      清理记录 / 类型分布，页签切换，图表在占比环右侧。 */
   /* 趋势柱状图（2026-11-05 色彩与形态优化）：
      ① 柱宽上限 40px —— 修复数据点少时 flex:1 把柱子拉成横贯整行的
-        宽色块（用户反馈「色彩不协调」的主因，3 天数据时尤其难看）；
+        宽色块（设计约束「色彩不协调」的主因，3 天数据时尤其难看）；
      ② 满色渐变（与类型分布柱同款）：55% 透明度显得灰淡，与旁边饱满的
         占比环/进度条不协调；历史柱 72%、今日柱 100% + 基线标记区分；
      ③ 基线轴线（--line 色）让图表落地；悬停增亮配合 title 提示。 */
@@ -529,7 +528,7 @@
   .vrow-wrap.hidm .vrow{border-left:2px solid var(--line);padding-left:9px}
 
   .segbtns{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
-  /* 模块头吸顶（2026-10-29 用户要求）：模块名「占用排行」+ 返回上一级/面包屑/
+  /* 模块头吸顶：模块名「占用排行」+ 返回上一级/面包屑/
      当前目录 + 视图页签 + 排序行，整体 sticky 在 #leftcol 滚动容器上 ——
      列表再长，导航与切换始终在手边。sticky 的包围盒是 .panel 本身，
      滚过整个模块后这块自然跟着面板走，不会盖到别的面板（「模块内固定」）。
@@ -542,7 +541,7 @@
   .fshead .drillhint{margin-top:4px}
   .fstabbar{margin-top:9px}
   /* 游戏占用概览模块：库分区统一「XX 游戏库」样式（同面板内分隔） +
-     残留建议折叠头与勾选行（2026-10-29 用户要求：库名统一、置顶折叠可勾选）。 */
+     残留建议折叠头与勾选行。 */
   .libsec{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);
     scroll-margin-top:130px}
   .libsec h3{margin-bottom:8px}
@@ -623,7 +622,7 @@
     margin:4px 0 3px;flex-wrap:nowrap;overflow-x:auto}
   .sdchart .extcol{height:100%;flex:1 0 36px;min-width:36px}
   .sdchart .extcol .extvbar{border-bottom:none}
-  /* 中线柱状图（2026-11-15 用户定稿）：中央基线，增长向上暖色/回落向下绿色 */
+  /* 中线柱状图：中央基线，增长向上暖色/回落向下绿色 */
   .spinechart{display:flex;gap:8px;overflow-x:auto;margin:12px 0 6px;padding:4px 2px 2px}
   .scol{flex:0 0 auto;width:72px;display:flex;flex-direction:column;align-items:stretch}
   .shalf{height:110px;display:flex;flex-direction:column;align-items:center}
@@ -1051,7 +1050,7 @@
     </div>
 
     <div class="panel acc" data-acc="ai">
-      <h3><span data-i18n="pane.ai">AI 助手</span> <span class="hint" id="aiHint" data-i18n="ai.optional">可选</span></h3>
+      <h3><span data-i18n="pane.ai">智能辅助</span> <span class="hint" id="aiHint" data-i18n="ai.optional">可选</span></h3>
       <div class="ab">
         <div style="color:var(--dim);font-size:12.5px;margin-bottom:11px;line-height:1.6"
              data-i18n-html="ai.intro">
@@ -1400,7 +1399,7 @@ function renderTrendBanner() {
   const r = TREND_FC;
   if (!r) { el.style.display = "none"; return; }
   const showDays = r.days_left && (r.level === "warn" || r.level === "crit");
-  // 2026-11-21 用户要求：高频回涨目录提示删除——横幅只保留剩余天数预警
+  // 高频回涨目录提示删除——横幅只保留剩余天数预警
   if (!showDays) { el.style.display = "none"; return; }
   const parts = [];
   if (showDays) {
@@ -1939,7 +1938,7 @@ async function loadDiskTrend() {
 }
 
 function drawDiskTrend() {
-  // 组件槽双宿主（2026-11-03 用户定稿）：扫描后 fsOverview 的占比环一行
+  // 组件槽双宿主：扫描后 fsOverview 的占比环一行
   // 有空档（本次扫到已收紧到标签旁），图表搬去环右侧的 #dwDock；
   // 没做过全盘扫描时 fsOverview 还没渲染，图表留在磁盘卡内 #dwHome。
   // 只写其中一个并把另一个清空，保证 #dwTabs/#dwBody 全页仅一份。
@@ -1977,7 +1976,7 @@ function drawDiskTrend() {
   _dwRenderTrend(body, dk);
 }
 
-/* 剩余空间趋势：类型分布同款竖向柱（DOM 渲染，无 canvas —— 用户定稿
+/* 剩余空间趋势：类型分布同款竖向柱（DOM 渲染，无 canvas —— 设计约束
    「做成类型分布那样的图」）。柱高在 [min−18%, max+18%] 的局部区间映射
    —— 从 0 起画会把几十 GB 的日常波动压成一条平线。悬停每根柱显示日期
    与剩余容量；信息行给日期范围 + 首末对比 + 最低/最高。 */
@@ -2006,7 +2005,7 @@ function _dwRenderTrend(body, dk) {
   else { const zpad = Math.max((dk.total || 0) * 0.01, 2 * 1024 ** 3); lo -= zpad; hi += zpad; }
   const tipFree = t("trend.tipFree", "剩余");
   const showPts = pts.slice(-10);
-  // 2026-11-17 用户要求：数值带常显（三段定高，同一基线对齐）+ 悬停 title；最多展示近 10 天防日期挤压截断
+  // 数值带常显（三段定高，同一基线对齐）+ 悬停 title；最多展示近 10 天防日期挤压截断
   body.innerHTML =
     `<div class="sdchart" style="height:98px">${showPts.map((p, i) => {
       const h = Math.max(4, Math.round((p.free - lo) / (hi - lo) * 100));
@@ -2117,7 +2116,7 @@ window.addEventListener("resize", () => {
    Steam 清单读取成功时记录。两次以上记录才画折线；卸载/删除游戏当天
    就能看到下降（同日体积变化会覆盖当天的点）。 */
 let GAME_TREND = null;
-/* 2026-11-17 用户要求移除游戏库总体积趋势图表——数据拉取与
+/* 移除游戏库总体积趋势图表——数据拉取与
    「异常增长提醒」横幅保留（一周涨 >15% 且 >10GB 仍会提示）。 */
 async function checkGameGrowth() {
   try {
@@ -2615,7 +2614,7 @@ let STEAM = null, steamSort = "size", steamFilter = "";
 // 排序方向：1 = 该维度的默认方向（体积/最久没玩：大到小；名称：A→Z），
 // 再次点击同一排序项时翻转为 -1。seg 上的 ▼/▲ 跟着它走。
 let steamSortDir = 1;
-// 游戏占用概览展示形态（2026-11-03 用户定稿）：C/D/E 盘的游戏清单合并成
+// 游戏占用概览展示形态：C/D/E 盘的游戏清单合并成
 // 一条流展示，不按盘分页签、也不分区块堆叠 —— 每行自带的「位于 …」路径
 // 已表明游戏在哪块盘，库分区（Steam/Epic/GOG/自定义）全部纵向排列。
 // 回收建议面板的折叠态记忆：刷新/重开不再回到默认折叠（oc-orphan-open）
@@ -2670,7 +2669,7 @@ function daysSince(d) {
 }
 
 /** （2026-11-03）按盘分组工具 steamDriveGroups/steamGidOf 已随页签方案一起
-    移除：用户定稿为「C/D/E 盘放一起，不用页签区分」——游戏清单合并成
+    移除：设计约束为「C/D/E 盘放一起，不用页签区分」——游戏清单合并成
     一条流，库分区（Steam/Epic/GOG/自定义）全部纵向排列。今后若要按盘
     聚合展示，从 s.by_drive 与 g.library 首字母重建分组即可。 */
 /** 独立页面：吸顶模块头 + 残留清理（折叠勾选）+ Steam 游戏库（按盘分组）
@@ -2716,7 +2715,7 @@ function renderSteamPage() {
                (s.by_drive || []).map(d => `${d.drive}:${d.apps}`).join(","),
                steamSort, steamSortDir, steamFilter, langParam(),
                (GAMES && GAMES.games ? GAMES.games.length : 0)].join("|");
-  checkGameGrowth();          // 异常增长提醒横幅（图表已按用户要求移除）
+  checkGameGrowth();          // 异常增长提醒横幅（图表已按设计约束移除）
   if (key === _steamPageKey) return;
   _steamPageKey = key;
 
@@ -2771,7 +2770,7 @@ function renderSteamPage() {
   $("stListHint").textContent = q ? t("st.filtered","筛选出 {n} 个").replace("{n}", games.length)
                                   : t("st.totalN","共 {n} 个").replace("{n}", games.length);
 
-  // ---- 游戏清单：全部盘合在一条流里展示（2026-11-03 用户定稿）----
+  // ---- 游戏清单：全部盘合在一条流里展示----
   // C/D/E 盘的游戏不再分页签、也不再按盘分区堆叠：排序/筛选后的完整清单
   // 一次渲染，每行自带的「位于 …」路径已标明游戏在哪块盘。Epic/GOG/自定义
   // 库分区紧随其后纵向排列（不再藏进页签）。
@@ -3881,7 +3880,7 @@ let fsStack = [];
 let hiddenAggOpen = false;
 // 「全盘最大项目」视图剔除的中间容器名（steamapps/common 等）：
 // 容器名对用户没有意义，它的子项才是实体。视图本体与「顶层 vs 全盘最大
-// 重合检测」（2026-11-02 用户要求：显示结果相同时合并展示）共用这份名单。
+// 重合检测」共用这份名单。
 const BIG_CONTAINERS = new Set([
   "common", "steamapps", "steamlibrary", "downloads", "download",
   "appdata", "programdata", "cache", "caches", "temp", "tmp",
@@ -4074,7 +4073,7 @@ async function startFullScan() {
     clearTimeout(pollTimer);
     // 只有当自己仍是「当前扫描」时才清理状态与解禁按钮 —— 被换盘作废的旧扫描
     // 绝不能碰新扫描的面板、进度定时器与按钮状态。
-    // 文案必须一并恢复（2026-11-02 用户反馈「一直显示全盘扫描中」）：
+    // 文案必须一并恢复：
     // 旧代码只在 catch 里改成「重试全盘扫描」、成功路径从不恢复文案，
     // 按钮解禁了字还卡在「全盘扫描中…」。
     if (fsAbort === ac) {
@@ -4088,7 +4087,7 @@ async function startFullScan() {
 }
 
 /** 当前所在目录的子项，拆成「可见」与「默认隐藏」两组。
-    2026-10-30 用户要求：隐藏项不再只是收进页签 —— 主列表里把它们**合并成
+    隐藏项不再只是收进页签 —— 主列表里把它们**合并成
     一行**（点击就地展开成员），任何视图都不出现单独的系统隐藏项行。
     自定义聚合组仍是显式归组优先：下钻进组后成员原样显示（含隐藏项），
     组内不再出合成隐藏行。groupCustom 有副作用（注册 hiddenKids），
@@ -4201,7 +4200,7 @@ function renderOverview() {
   const unkSum = uniqueNodes.filter(n => !n.recognized).reduce((a, n) => a + n.size, 0);
   const mix = Math.max(keepSum + unkSum, 1);
 
-  // 面板头部行不再带「N 个节点」（2026-11-03）：用户反馈该数字显得繁杂，
+  // 面板头部行不再带「N 个节点」（2026-11-03）：设计约束该数字显得繁杂，
   // 体量信息「本次扫到」一格已足够。
   $("fsHint").textContent =
     t("fs.tagline","{drive}: 盘 · 已识别 {explained} 个 · {depth} 层{engine}")
@@ -4212,8 +4211,7 @@ function renderOverview() {
 
   // 磁盘概览面板已吸收本块（原「扫描概览」小板块）：总容量/已使用/可用
   // 由 renderDisk() 的 #diskInfo 独家呈现，这里只补「本次扫到」这个
-  // 全盘扫描特有的信息，占比环保留原位（2026-11-03 用户定稿：环不挪进
-  // #diskInfo，组件页签图表放磁盘卡下部原位）。
+  // 全盘扫描特有的信息，占比环保留原位。
   $("fsOverview").innerHTML = `
     <div class="ovrow">
       <div class="ring" style="background:conic-gradient(${color} 0turn ${(usedPct/100).toFixed(3)}turn, var(--track) ${(usedPct/100).toFixed(3)}turn 1turn)">
@@ -4365,7 +4363,7 @@ async function loadSubLevel(node) {
 function renderChart() {
   const parts = fsLayerParts();
   const here = parts.vis;
-  // 顶层 vs 全盘最大重合检测（2026-11-02 用户要求）：盘根层级上，
+  // 顶层 vs 全盘最大重合检测：盘根层级上，
   // 「全盘最大项目」（剔除容器目录后的目录实体，按体积降序前 30）若与
   // 「顶层」的目录列表逐项相同（同路径同体积），两份列表就是同一信息的
   // 两种说法 —— 隐藏「全盘最大项目」页签、选中它时按顶层渲染。
@@ -4398,7 +4396,7 @@ function renderChart() {
       seen.add(k);
       return true;
     });
-    // 2026-11-17 用户要求：隐藏项合并展示——不再逐行平铺，合成一行汇总
+    // 隐藏项合并展示——不再逐行平铺，合成一行汇总
     // （可展开成员），成员按体积降序、可清理优先。
     rows.sort((a, b) => ((b.cleanable ? 1 : 0) - (a.cleanable ? 1 : 0))
       || ((b.size || 0) - (a.size || 0)));
@@ -4423,13 +4421,13 @@ function renderChart() {
     // 因为容器名对用户没有意义，它的子项才是实体。
     // 默认扫描 1 层（2026-10-15 起）时只有首层节点，这里从 depth>=1 起取，
     // 否则该视图在默认档位下会是空的；容器过滤照常生效。
-    // 隐藏项不单独出现（2026-10-30 用户要求），由下面的合并行承接。
+    // 隐藏项不单独出现，由下面的合并行承接。
     rows = FS.nodes.filter(n => n.type === "dir" && n.depth >= 1 && n.size > 0
       && !BIG_CONTAINERS.has(n.name.toLowerCase()) && !n.in_game_body && !n.hidden_sys);
   }
   else rows = here;
   // 排序方式可选：默认按占用降序；「按名称」用中文locale排序（2026-10-13
-  // 用户要求下钻后支持其他排序方式）。全部视图取前 30。
+  // 设计约束下钻后支持其他排序方式）。全部视图取前 30。
   // 聚合组（hidden_group）不受 size>0 门槛约束：组员的体积可能全是 0
   // （快速扫描量不出隐藏系统文件），但组本身必须可见，否则归组形同虚设。
   // 「隐藏项」页签同理：NTFS 元文件与未量出体积的隐藏目录也要列出来，
@@ -4441,7 +4439,7 @@ function renderChart() {
       : (a, b) => b.size - a.size)
     .slice(0, 30);
 
-  // 隐藏项合并行（2026-10-30 用户要求）：主列表（本层/全盘最大/全部可清理）
+  // 隐藏项合并行：主列表（本层/全盘最大/全部可清理）
   // 不再出现单独的系统隐藏项 —— 合成一行「隐藏项（n 项）」，点击就地展开
   // 成员、再点收起，不需要跳页也没有「返回上一层」的负担。
   // 「隐藏项」页签保留（跨层级全量视图，点页签随时看全部）。
@@ -4531,7 +4529,7 @@ function renderChart() {
 
   // 基准必须取本视图的最大项，而不是首行 —— 「按名称」排序时首行是字母序
   // 最前的，往往是个小项：所有比它大的行全部被钳到 100%，整列柱条一样长
-  // （2026-11-02 用户截图：5.5 MB 与 26.2 GB 的柱条等长）。
+  // 。
   const maxSize = Math.max(1, ...rows.map(r => r.size || 0));
   $("fsChart").innerHTML = rows.map((it, idx) => {
     // 徽章与柱条共用同一个「有效类别」（rowKind）：显式标签样式 > 徽章文字
@@ -4662,7 +4660,7 @@ function renderChart() {
   pinPanelSizing();
 }
 
-/** 吸顶头「钉住后不再随内容走」（2026-10-29 用户要求）：把占用排行面板的
+/** 吸顶头「钉住后不再随内容走」：把占用排行面板的
  *  最小高度撑到与左栏可视高度一致。内容不足时（本层 0 项、空目录）底部
  *  **留白填充** —— 展开子项数量变化也不会让面板高度跌破一屏，吸顶头因此
  *  不会中途脱落跳变，UI 保持线性；向上滚回模块顶之前它始终钉着。
@@ -5641,7 +5639,7 @@ function renderBfRows() {
   if (floorBytes > 0) list = list.filter(f0 => (f0.size || 0) >= floorBytes);
   if (extSel) list = list.filter(f0 => _bfExtOf(f0.name) === extSel);
   const hasFilter = !!cut || floorBytes > 0 || !!extSel;
-  // 2026-11-17 用户要求：只显示顶层目录（聚合），可展开查看目录内的大文件
+  // 只显示顶层目录（聚合），可展开查看目录内的大文件
   const gmap = new Map();
   for (const f0 of list) {
     const nm0 = f0.dir.replace(/^.:\\/, "").split(/[\\/]/)[0] || "系统隐藏项";
@@ -6407,7 +6405,7 @@ async function openSnapDiff(selDrive) {
     if (r.error) { box.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
     const d0 = r.diff || [];
     const nf = r.new_files || [];
-    // 2026-11-15 用户定稿：变化区重构为**中线柱状图**——共用中央基线，
+    // 变化区重构为**中线柱状图**——共用中央基线，
     // 增长向上（暖色）、回落向下（绿色），每根柱即今昔对比条柱
     // （tooltip：当时 → 现在）；两级路径聚合让条目更丰富（修复「只显示
     // 较少条目」）；盘根排除：整盘基数巨大压扁柱形。
@@ -7223,7 +7221,7 @@ $("btnAiBatch")?.addEventListener("click", async () => {
   const src = (FS && (FS.biggest || (FS.tree && FS.tree.children))) || [];
   const unk = src.filter(x => x && (!x.info || !x.info.recognized) && (x.path || x.name)).slice(0, 25);
   if (!unk.length) { toast(t("ai.batchNone", "当前视图没有未识别项")); return; }
-  btn.disabled = true; btn.textContent = t("ai.working", "正在思考…");
+  btn.disabled = true; btn.textContent = t("ai.working", "处理中…");
   try {
     const r = await apiJSON(`${API}/__oc__/ai/explain-batch`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -7500,7 +7498,7 @@ const I18N_EN = {
   "pane.packs": "Resource Packs",
   "packs.import": "Import local pack", "packs.update": "Check updates on GitHub",
   "packs.intro": "Resource packs are pure-JSON \"recognition & explanation\" data: what a folder/file is, whether it rebuilds automatically, what deleting means, when to keep it. The more packs installed, the higher the \"recognized\" share in cards and the disk tree. Drop in your own pack, or have the AI generate one for this machine.",
-  "pane.ai": "AI Assistant", "ai.optional": "optional",
+  "pane.ai": "Smart Assist", "ai.optional": "optional",
   "ai.intro": "Connect your own AI service (any OpenAI Chat Completions compatible endpoint) to explain cleanable items and generate cleanup plans from your requests. The key is stored only in <code>config/ai.json</code> on this machine and is sent nowhere except the endpoint you enter.",
   "ai.base": "Endpoint", "ai.key": "API key", "ai.model": "Model",
   "ai.enable": "Enabled", "ai.test": "Test connection",
@@ -8218,7 +8216,7 @@ function langParam() {
 let _anSeq = 0;              // 分析工具时序号：切页签即递增，旧 fetch 结果作废
 // 展开▾（快照新增文件/重复组）modal 级事件委托：脚本加载即绑定一次——
 // modal 元素持久，子内容重绘不影响；此前绑在工具函数里导致「未打开过
-// 快照页签时重复组的展开▾ 完全失效」（2026-11-17 用户反馈）。
+// 快照页签时重复组的展开▾ 完全失效」。
 document.getElementById("modal").addEventListener("click", e0 => {
   const btn0 = e0.target.closest(".nfexp,.dupexp,.bfexp");
   if (!btn0) return;

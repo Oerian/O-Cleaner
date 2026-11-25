@@ -62,7 +62,7 @@ def _save_scan_snapshot(letter: str) -> None:
         # 截断线：第 300 名的体积。对比时，体积低于基线截断线的文件无法
         # 确认「当时是否存在」（可能只是跌出基线清单），不算新增——否则
         # Steam 等目录会因其他文件消长而在清单间进出，把存量误判成新增
-        # （2026-11-15 用户反馈 Steam 180 GB 假新增的根因）。
+        # 。
         files_cutoff = file_items[299]["size"] if len(file_items) >= 300 else 0
         _core._atomic_write(_core.SNAPSHOTS_DIR / f"{letter}-{today}.json",
                       {"drive": letter, "date": today,
@@ -117,7 +117,7 @@ def snapshot_diff(letter: str, days: int = 7) -> dict:
     past = snaps[past_date]
     now_map = {d["path"]: d["size"] for d in latest.get("dirs", [])}
     then_map = {d["path"]: d["size"] for d in past.get("dirs", [])}
-    # 新增文件（2026-11-10 用户要求「清楚直观看到新增文件和体积」）：
+    # 新增文件：
     # 当前快照有、对比基线没有的文件，按体积降序。基线快照若太老没有
     # 文件清单（files 字段是 2026-11-10 起才落盘的），则如实标注不可比。
     cur_files = {f0["path"]: f0["size"] for f0 in latest.get("files", [])}
@@ -1019,7 +1019,7 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
     groups = []
     # 两阶段进度（2026-11-10）：阶段一全部采样分桶（快，不计入进度），
     # 得出确定的全量哈希总数后阶段二逐文件核验 —— total 一次到位，
-    # 不再出现 2/2 → 2/4 的递增式迷惑进度（用户反馈）。
+    # 不再出现 2/2 → 2/4 的递增式迷惑进度（设计约束）。
     work: list[tuple[int, list]] = []
     total0 = 0
     for sz, fs in cand:
@@ -1058,7 +1058,7 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
                 members.append({"path": full, "name": name, "dup": True,
                                 "mtime": mt, "mtime_h": mth})
             n_dup = len(members)
-            # 跨目录标注（2026-11-10 用户反馈「识别有误」）：副本分布在
+            # 跨目录标注：副本分布在
             # 不同父目录＝大概率是程序/应用自带的多份拷贝（如 Telegram
             # 各实例目录的 nw.dll）——字节一致但功能上是依赖，不是冗余。
             # 前端据此打 ⚠ 并把跨目录组排除出一键全选。

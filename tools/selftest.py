@@ -448,7 +448,7 @@ def phase1() -> None:
 
         # 不归一化就漏判；WindowsApps 是 Store 托管目录，部分盘上只有
 
-        # ReadOnly 属性，必须靠名单兜底（用户截图实测两项都漏进了排行）。
+        # ReadOnly 属性，必须靠名单兜底（设计约束实测两项都漏进了排行）。
 
         check("隐藏项判定：MFT 带尾点的元文件名归一化后仍认出",
 
@@ -2248,7 +2248,7 @@ def phase1() -> None:
 
 
 
-            # ---- 云端同步（2026-11-02 用户要求）：Gist 双向，外部 API 全 stub ----
+            # ---- 云端同步：Gist 双向，外部 API 全 stub ----
 
             # 不发真实网络请求、不碰真实 config/sync.json（指到临时文件）；
 
@@ -3436,7 +3436,7 @@ def phase3_http() -> None:
 
               and "recycleSel" in html)
 
-        # 游戏占用趋势图表退役（2026-11-17 用户要求移除 canvas 图表）；
+        # 游戏占用趋势图表退役；
 
         # 数据快照/端点与「异常增长提醒」横幅保留（checkGameGrowth）
 
@@ -3768,7 +3768,7 @@ def phase3_http() -> None:
 
               and "engine_speed.json" in _impl_src())
 
-        check("引擎更名（2026-11-02 用户要求）：界面不出现「自研」强调字样",
+        check("引擎更名：界面不出现「自研」强调字样",
 
               "自研" not in html
 

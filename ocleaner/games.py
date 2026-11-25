@@ -60,7 +60,7 @@ def game_display_name(appid, name: str, installdir: str = "") -> tuple[str, str]
     这张映射表只影响显示 —— 不参与识别、不参与清理判断、不碰文件。
 
     匹配顺序：appid 精确命中 → 英文名/安装目录模糊命中 → 原名。
-    有中文名时**只显示中文名**（2026-10-13 用户要求：不用忠实原名）；
+    有中文名时**只显示中文名**；
     原目录名在详情弹窗的路径里仍然可见，核对不受影响。
     """
     cfg = load_game_names().get("games") or {}
@@ -294,7 +294,7 @@ def discover_steam() -> dict:
         slot["apps"] += 1
         slot["size"] += g["size"]
 
-    # 按盘符聚合：用户明确要求看到「D 盘 / E 盘各占了多少」。
+    # 按盘符聚合：设计约束看到「D 盘 / E 盘各占了多少」。
     # 这里同时给出该盘的容量与占用率，才能回答「Steam 吃掉了这个盘多少」。
     by_drive: dict[str, dict] = {}
     disk_cache: dict[str, dict] = {}

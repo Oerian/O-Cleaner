@@ -329,7 +329,7 @@ def elevate_relaunch() -> dict:
         return {"ok": False, "error": "当前已经是管理员权限，无需提权"}
     import sys
     script = str((BASE_DIR / "app.py").resolve())
-    # 2026-11-21 用户要求：提权后不再多开新浏览器页——旧页面本来就在
+    # 提权后不再多开新浏览器页——旧页面本来就在
     # 轮询同端口等新实例就绪（收到 is_admin 后 location.reload() 落到
     # 管理员会话），新实例带 --no-browser 即可避免「旧页恢复 + 新页又开」
     # 的双页残留。能点到提权按钮的页面必然活着，无条件加是安全的。
@@ -792,7 +792,7 @@ _HIDDEN_SYS_NAMES = {
     "$boot", "$badclus", "$secure", "$upcase", "$extend",
     # Store 托管的应用目录：系统建立与回收，用户从不手建；部分盘上它只有
     # ReadOnly 属性（实测 D:\WindowsApps），Explorer 语义上仍是系统项，
-    # 不进名单就会单独混在占用排行里（2026-10-30 用户要求合并展示）。
+    # 不进名单就会单独混在占用排行里。
     "windowsapps",
 }
 
@@ -807,7 +807,7 @@ def _is_hidden_sys(name: str, path: str = "", attrs: int | None = None) -> bool:
     此前只看那 20 来个名字，实测漏掉的不少 —— `C:\\Recovery`、
     `C:\\ProgramData`、`C:\\OneDriveTemp`、`C:\\AMTAG.BIN`、`D:\\DumpStack.log`
     都带 Hidden 却不在名单里，于是混在排行里，和资源管理器对不上
-    （用户反馈「默认隐藏的系统项还是不全」正是这个）。
+    （设计约束「默认隐藏的系统项还是不全」正是这个）。
 
     名单保留作为兜底，覆盖属性读不到的两种情况：
       * NTFS 元文件（$MFT / $LogFile…）根本 stat 不到；
@@ -815,7 +815,7 @@ def _is_hidden_sys(name: str, path: str = "", attrs: int | None = None) -> bool:
     """
     # 名字比对前先去掉尾部的点与空白：MFT 扫描（WizTree）会把 NTFS 元文件
     # 报成 "$LogFile." 这类带尾点的名字（它不是 Win32 名，os.stat 也够不着），
-    # 不归一化就匹配不上名单，结果元文件漏进排行（2026-10-30 用户截图实测）。
+    # 不归一化就匹配不上名单，结果元文件漏进排行。
     if str(name or "").rstrip(". ").lower() in _HIDDEN_SYS_NAMES:
         return True
     if attrs is None:
@@ -993,7 +993,7 @@ def scan_disk_overview(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dict
 # 每个盘记录 MFT / WizTree 两引擎最近一次端到端耗时。选择逻辑分两层：
 #   * 用户显式偏好 `_pref`（auto / wiztree / mft，前端下拉 + 端点可改）；
 #   * auto 模式「谁快用谁」：两引擎都有实测值且 MFT 快 10% 以上才让
-#     MFT 先跑，**缺省（无实测值）WizTree 在先** —— 用户定稿「扫描还是
+#     MFT 先跑，**缺省（无实测值）WizTree 在先** —— 设计约束「扫描还是
 #     慢，改用默认 WizTree」；MFT 是无 WizTree 时的加速手段与自研储备。
 # 耗时在扫描成功时顺带记录；非首选引擎的耗时由后台校准线程补测（每
 # 14 天一次，两边对称），否则永远攒不到实测值。缓存落盘
@@ -1172,7 +1172,7 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
     r: dict = {}
     werr = ""
 
-    # 引擎链（2026-11-03 用户定稿：**缺省 WizTree 在先**，MFT 为加速储备）：
+    # 引擎链：
     # 用户嫌 C 盘扫描慢 —— WizTree 由成熟引擎负责读盘，MFT 退居「没装
     # WizTree 时的自研加速 + 离线依赖兜底」。两层选择：
     #   * 用户显式偏好（/__oc__/engine/pref，auto / wiztree / mft）；
@@ -1873,7 +1873,7 @@ def _as_list(v) -> list:
 # %LOCALAPPDATA% 永远展开成 Windows 所在盘的用户目录，无论你选了哪个盘。
 # 所以它们只能在系统盘上出现 —— 否则会出现极荒谬的结果：
 # 选 D 盘时列出「D 盘的 pip 缓存」，而路径实际是 C:\Users\…\pip\Cache。
-# 这正是用户反馈「D/E 盘老是冒出包管理器/浏览器/临时文件」的根因：
+# 这正是设计约束「D/E 盘老是冒出包管理器/浏览器/临时文件」的根因：
 # 这些目标的 system_only 没标，于是每个盘都挂了一遍 C 盘的内容。
 USER_PROFILE_TOKENS = ("%LOCALAPPDATA%", "%APPDATA%", "%USERPROFILE%", "%TEMP%")
 
@@ -2324,7 +2324,7 @@ def _import_bundle(body: dict) -> dict:
 
 
 # ======================================================================
-#  云端同步（2026-11-02 用户要求：数据在线存储、支持双向同步）
+#  云端同步
 # ======================================================================
 # 自定义数据（换算单位 / 释义覆盖 / 固定项规则，与手工导出包同一份数据）
 # 存到用户**自己**的 GitHub 私密 Gist：个人访问令牌（需 gist 权限）只存

@@ -74,7 +74,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 | 云端同步与数据迁移 | 支持把换算单位、释义覆盖与固定项规则导出为单个 JSON 数据包，或通过用户自备的 GitHub 私密 Gist 双向同步；令牌经 Windows DPAPI 加密存储于本机 `config/sync.json` |
 | 定时任务 | 可配置定时自动清理（写入 `data/schedule.json`，随服务进程执行，后台完成后下次打开界面顶部横幅汇报成果） |
 | 版本更新 | 「说明」面板一键检查更新（只读 GitHub Releases 最新版并提示，是否下载升级永远由用户自己决定） |
-| AI 助手 | 可接入自有 AI 服务（DeepSeek / 本机 Ollama 等 OpenAI 兼容接口）解释清理项、生成自定义方案；密钥经 DPAPI 加密存本机；AI 仅能勾选候选，不能执行删除 |
+| 可选智能辅助 | 支持接入自有 OpenAI 兼容接口（如 DeepSeek、SiliconFlow、Gemini 兼容端点或本机 Ollama），辅助释义未识别目录（含批量本地缓存与一键保存为自定义释义）、辅助挑选清理候选；密钥经 DPAPI 加密存本机，不具备直接删除权限 |
 | 界面与无障碍 | 单文件前端；亮 / 暗 / 跟随系统三态主题；界面语言三选（跟随系统 / 中文 / English，右上角切换，偏好本机记忆，中文为源码默认文案、零外部依赖）；支持舒适/紧凑两档行密度、占用排行键盘导航（`↑`/`↓` 移焦、`Space` 勾选、`Enter` 下钻、`Esc` 逐级返回、`/` 快捷聚焦搜索/筛选框）、`:focus-visible` 焦点环、`prefers-reduced-motion` 减动效与弹窗焦点/滚动隔离；触控/粗指针设备默认显示行内操作；窄窗口下左右两栏等比缩放不堆叠；累积清理统计与趣味体积单位换算 |
 
 扫描加速三选一（工具栏「引擎」下拉，默认「自动」实测择快，跨设备拷贝后自动重新校准）：
@@ -108,7 +108,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 `System32` / `WinSxS` / `Installer` 等系统组件、用户文档与桌面、
 已安装程序本体、已下载的 AI 模型。
 
-- 识别结论分层：资源包只能补充说明文案或重新归类未识别项，不能改写已识别项的「可否清理」结论；AI 只能勾选候选。
+- 识别结论分层：资源包只能补充说明文案或重新归类未识别项，不能改写已识别项的「可否清理」结论；外部辅助接口仅能勾选候选。
 - 删除按风险分级：高风险项默认移入回收站（可恢复，可在界面关闭），中/低风险缓存类直接删除。
 - 完整安全模型、信任边界与对抗性测试结果见 [SECURITY.md](SECURITY.md)。
 
@@ -150,7 +150,7 @@ Windows 磁盘空间分析与清理工具。本地运行，浏览器访问 Web �
 - [docs/USAGE.md](docs/USAGE.md) — 完整使用指南
 - [docs/USAGE-en.md](docs/USAGE-en.md) — User guide (English)
 - [docs/ROADMAP.md](docs/ROADMAP.md) — 路线图（近期 / 中期 / 远期规划）
-- [docs/CUSTOMIZE.md](docs/CUSTOMIZE.md) — 自定义数据格式（可导入，可由 AI 生成）
+- [docs/CUSTOMIZE.md](docs/CUSTOMIZE.md) — 自定义数据格式（支持导入与外部脚本生成）
 - [packs/README.md](packs/README.md) — 资源包格式规范
 - [SECURITY.md](SECURITY.md) — 安全模型与漏洞报告
 - [CONTRIBUTING.md](CONTRIBUTING.md) — 贡献流程与测试门禁
