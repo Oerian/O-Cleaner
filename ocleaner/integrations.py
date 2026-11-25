@@ -362,11 +362,34 @@ AI_EXPLAIN_SYS = (
 )
 
 
+def _ai_cache_key(path: str, name: str) -> str:
+    return (path or name or "").strip().lower()
+
+
+def _ai_cache_load() -> dict:
+    data = _core._load_json(_core.AI_CACHE_PATH, {}, use_cache=False)
+    return data if isinstance(data, dict) else {}
+
+
+def _ai_cache_save(cache: dict) -> None:
+    if len(cache) > 500:
+        # 保留最近写入的 500 条
+        items = sorted(cache.items(), key=lambda kv: float((kv[1] or {}).get("ts") or 0))
+        cache = dict(items[-500:])
+    _core._atomic_write(_core.AI_CACHE_PATH, cache)
+
+
 def ai_explain(payload: dict) -> dict:
     name = str(payload.get("name") or "").strip()
     path = str(payload.get("path") or "").strip()
     if not name and not path:
         return {"ok": False, "error": "缺少 name 或 path"}
+    key = _ai_cache_key(path, name)
+    cache = _ai_cache_load()
+    if not payload.get("force") and key in cache and isinstance(cache[key], dict):
+        cached_text = str(cache[key].get("text") or "")
+        if cached_text:
+            return {"ok": True, "text": cached_text, "cached": True}
     kind = str(payload.get("kind") or "dir")
     info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
     local = "\n".join([
@@ -380,7 +403,85 @@ def ai_explain(payload: dict) -> dict:
     msgs = [{"role": "system", "content": AI_EXPLAIN_SYS},
             {"role": "user", "content": local}]
     ok, txt = ai_chat(msgs)
-    return {"ok": ok, "text": txt if ok else "", "error": "" if ok else txt}
+    if ok and txt:
+        cache[key] = {"text": txt, "name": name, "path": path, "ts": _core.time.time()}
+        _ai_cache_save(cache)
+    return {"ok": ok, "text": txt if ok else "", "error": "" if ok else txt, "cached": False}
+
+
+AI_BATCH_SYS = (
+    "你是磁盘清理工具里的批量目录/文件识别助手。用户会给你一组未识别的路径列表。"
+    "请只输出一个 JSON 对象，格式为："
+    '{"items":[{"key":"原样返回输入中的 path 或 name","title":"简短中文名称(<=12字)",'
+    '"category":"缓存/日志/软件本体/游戏/媒体/下载/系统/未知","what":"一句话说明它是什么",'
+    '"rebuild":"能否重建(可重建/不可重建/不确定)","cleanable":false,'
+    '"advice":"一句话清理或保留建议"}]}'
+    "。不确定时 cleanable 一律为 false，不要编造事实，不要输出 JSON 以外的文字。"
+)
+
+
+def ai_explain_batch(payload: dict) -> dict:
+    raw_items = _core._as_list(payload.get("items"))
+    items = [it for it in raw_items if isinstance(it, dict) and (it.get("path") or it.get("name"))][:25]
+    if not items:
+        return {"ok": False, "error": "没有需要识别的未识别项"}
+    cache = _ai_cache_load()
+    results: dict[str, dict] = {}
+    todo: list[dict] = []
+    from_cache = 0
+    for it in items:
+        p = str(it.get("path") or "").strip()
+        n = str(it.get("name") or "").strip()
+        k = _ai_cache_key(p, n)
+        if not payload.get("force") and k in cache and isinstance(cache[k], dict) and cache[k].get("batch"):
+            results[p or n] = dict(cache[k]["batch"])
+            from_cache += 1
+        else:
+            todo.append({"key": p or n, "name": n, "path": p,
+                         "kind": str(it.get("kind") or "dir"),
+                         "size_h": str(it.get("size_h") or "")})
+    fetched = 0
+    if todo:
+        lines = [f"- key={t['key']} | name={t['name']} | {t['kind']} | {t['size_h']}" for t in todo]
+        ok, txt = ai_chat([
+            {"role": "system", "content": AI_BATCH_SYS},
+            {"role": "user", "content": "请识别以下未识别项：\n" + "\n".join(lines)},
+        ])
+        if not ok:
+            if results:
+                return {"ok": True, "results": results, "from_cache": from_cache,
+                        "fetched": 0, "warn": txt}
+            return {"ok": False, "error": txt}
+        parsed = _extract_json(txt)
+        if not isinstance(parsed, dict):
+            return {"ok": False, "error": "模型没有返回可解析的 JSON", "raw": txt[:400]}
+        valid_keys = {t["key"] for t in todo}
+        now = _core.time.time()
+        for row in _core._as_list(parsed.get("items")):
+            if not isinstance(row, dict):
+                continue
+            rk = str(row.get("key") or "").strip()
+            if rk not in valid_keys:
+                continue
+            entry = {
+                "title": str(row.get("title") or rk)[:40],
+                "category": str(row.get("category") or "未知")[:20],
+                "what": str(row.get("what") or "")[:200],
+                "rebuild": str(row.get("rebuild") or "不确定")[:20],
+                "cleanable": bool(row.get("cleanable", False)),
+                "advice": str(row.get("advice") or "")[:200],
+                "source": "ai",
+            }
+            results[rk] = entry
+            ck = _ai_cache_key(rk, rk)
+            prev = cache.get(ck) if isinstance(cache.get(ck), dict) else {}
+            prev["batch"] = entry
+            prev["ts"] = now
+            cache[ck] = prev
+            fetched += 1
+        if fetched:
+            _ai_cache_save(cache)
+    return {"ok": True, "results": results, "from_cache": from_cache, "fetched": fetched}
 
 
 AI_PLAN_SYS = (

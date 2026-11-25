@@ -23,7 +23,7 @@ echo   Starting... your browser will open automatically.
 echo.
 echo   KEEP THIS WINDOW OPEN. Closing it stops the service.
 echo.
-python "%~dp0app.py" %*
+python "%~dp0app.py" --app %*
 echo.
 echo   ----------------------------------------------------------
 echo   Service stopped. You may close this window now.

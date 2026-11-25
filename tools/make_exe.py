@@ -19,7 +19,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -49,7 +52,7 @@ EMBEDDED_BAT = (
     "@echo off\r\n"
     "rem O-Cleaner embedded launcher - no system Python needed.\r\n"
     "rem The embedded runtime lives in the python folder next to this file.\r\n"
-    "start \"\" \"%~dp0python\\python.exe\" \"%~dp0app.py\"\r\n"
+    "start \"\" \"%~dp0python\\pythonw.exe\" \"%~dp0app.py\" --app %*\r\n"
 )
 
 # 免安装版说明（UTF-8 BOM + CRLF，记事本直接可读）。
@@ -126,6 +129,37 @@ def embed_runtime_payloads() -> list[tuple[str, bytes]]:
     return out
 
 
+def _compile_launcher_exe() -> bytes | None:
+    """若本机有 MSVC (cl.exe) 或 MinGW (gcc)，编译轻量无黑框启动器 O-Cleaner.exe。"""
+    src = HERE / "launcher.c"
+    if not src.exists():
+        return None
+    cl = shutil.which("cl")
+    gcc = shutil.which("gcc")
+    if not cl and not gcc:
+        return None
+    with tempfile.TemporaryDirectory() as td:
+        out_exe = Path(td) / "O-Cleaner.exe"
+        if cl:
+            cmd = [cl, "/nologo", "/O2", "/W3", "/DUNICODE", "/D_UNICODE",
+                   str(src), f"/Fe:{out_exe}", "user32.lib"]
+        else:
+            cmd = [gcc, "-mwindows", "-O2", "-municode", str(src), "-o", str(out_exe)]
+        r = subprocess.run(cmd, cwd=td, capture_output=True, text=True)
+        if r.returncode == 0 and out_exe.exists():
+            print("  已编译无控制台启动器: O-Cleaner.exe")
+            return out_exe.read_bytes()
+    return None
+
+
+def _write_sha256sums(out_dir: Path) -> None:
+    zips = sorted(out_dir.glob("O-Cleaner-*.zip"))
+    if not zips:
+        return
+    lines = [f"{hashlib.sha256(z.read_bytes()).hexdigest()}  {z.name}" for z in zips]
+    (out_dir / "SHA256SUMS.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def build_embed_zip(out_path: Path, ver: str) -> None:
     payloads: list[tuple[str, bytes]] = []
     for rel in INCLUDE:
@@ -137,6 +171,9 @@ def build_embed_zip(out_path: Path, ver: str) -> None:
         payloads.append((f"O-Cleaner/{rel}", p.read_bytes()))
     payloads.append(("O-Cleaner/启动 O-Cleaner.bat", EMBEDDED_BAT.encode("ascii")))
     payloads.append(("O-Cleaner/README-RUN.txt", README_RUN.encode("utf-8")))
+    exe_bytes = _compile_launcher_exe()
+    if exe_bytes:
+        payloads.append(("O-Cleaner/O-Cleaner.exe", exe_bytes))
     payloads.extend(embed_runtime_payloads())
 
     tmp = out_path.with_suffix(".zip.tmp")
@@ -184,6 +221,7 @@ def main() -> None:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     build_embed_zip(out_dir / f"O-Cleaner-v{ver}-win64-embed.zip", ver)
+    _write_sha256sums(out_dir)
 
 
 if __name__ == "__main__":

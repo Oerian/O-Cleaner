@@ -89,7 +89,7 @@ from ocleaner.integrations import (_sync_cfg, _sync_save_cfg,  # noqa: F401 re-e
                               _sync_fetch, _sync_pull, _sync_two_way,  # noqa: F401 re-export
                               load_ai_config, save_ai_config,  # noqa: F401 re-export
                               ai_public_config, ai_list_models, ai_chat,  # noqa: F401 re-export
-                              ai_test, ai_explain, ai_plan,  # noqa: F401 re-export
+                              ai_test, ai_explain, ai_explain_batch, ai_plan,  # noqa: F401 re-export
                               app_update_check, _dpapi_migrate_plaintext,  # noqa: F401 re-export
                               _AI_DEFAULTS)  # ai/config 路由过滤用  # noqa: F401 re-export
   # noqa: F401 re-export
@@ -165,6 +165,7 @@ DISK_TREND_PATH = RUNTIME_DIR / "disk-trend.json"
 SCHEDULE_PATH = RUNTIME_DIR / "schedule.json"
 # 游戏库总体积快照（游戏占用趋势曲线的数据源）：每天最多一条，保留 180 天。
 GAME_HISTORY_PATH = RUNTIME_DIR / "game-history.json"
+AI_CACHE_PATH = RUNTIME_DIR / "ai-cache.json"
 # 无图标游戏的默认占位图（用户可通过 /__oc__/cover-placeholder 自定义）。
 # 存原始图片字节；不存在时回内置 SVG。运行数据，不进版本库、不进分发包。
 COVER_PLACEHOLDER_PATH = RUNTIME_DIR / "cover-placeholder.img"

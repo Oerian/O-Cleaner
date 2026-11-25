@@ -401,6 +401,35 @@ def main() -> int:
         srv.shutdown()
         srv.server_close()
 
+    # ---------- AI 批量识别与本地缓存 ----------
+    import ocleaner.integrations as _integ
+    orig_ai_cache = app.AI_CACHE_PATH
+    orig_ai_chat = _integ.ai_chat
+    try:
+        with tempfile.TemporaryDirectory() as td_ai:
+            app.AI_CACHE_PATH = Path(td_ai) / "ai-cache.json"
+            r_empty = app.ai_explain_batch({"items": []})
+            check("AI批量识别：空列表返回错误", not r_empty.get("ok"), f"{r_empty}")
+
+            calls = [0]
+            def _fake_chat(msgs, timeout=None):
+                calls[0] += 1
+                return True, '{"items":[{"key":"D:\\\\FooCache","title":"Foo 缓存","category":"缓存","what":"临时缓存","rebuild":"可重建","cleanable":true,"advice":"可安全清理"}]}'
+            _integ.ai_chat = _fake_chat
+
+            r_b1 = app.ai_explain_batch({"items": [{"path": "D:\\FooCache", "name": "FooCache", "kind": "dir", "size_h": "1.2 GB"}]})
+            check("AI批量识别：首次查询解析并落盘缓存",
+                  r_b1.get("ok") and r_b1.get("fetched") == 1 and r_b1.get("from_cache") == 0
+                  and r_b1["results"]["D:\\FooCache"]["title"] == "Foo 缓存", f"{r_b1}")
+
+            r_b2 = app.ai_explain_batch({"items": [{"path": "D:\\FooCache", "name": "FooCache", "kind": "dir", "size_h": "1.2 GB"}]})
+            check("AI批量识别：二次查询命中本地缓存（零模型调用）",
+                  r_b2.get("ok") and r_b2.get("from_cache") == 1 and r_b2.get("fetched") == 0 and calls[0] == 1,
+                  f"{r_b2} calls={calls[0]}")
+    finally:
+        app.AI_CACHE_PATH = orig_ai_cache
+        _integ.ai_chat = orig_ai_chat
+
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"
           f"失败 {len(failed)} 项 ====")

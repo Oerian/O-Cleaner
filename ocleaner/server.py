@@ -1528,6 +1528,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_core.ai_list_models())
         if route == "/__oc__/ai/explain":
             return self._json(_core.ai_explain(body or {}))
+        if route == "/__oc__/ai/explain-batch":
+            return self._json(_core.ai_explain_batch(body or {}))
         if route == "/__oc__/ai/plan":
             return self._json(_core.ai_plan(body or {}))
 

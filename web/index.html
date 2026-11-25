@@ -1059,6 +1059,8 @@
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin:-3px 0 8px 70px">
           <button class="tiny" data-aipreset="https://api.deepseek.com/v1">DeepSeek</button>
           <button class="tiny" data-aipreset="http://127.0.0.1:11434/v1">Ollama（本机）</button>
+          <button class="tiny" data-aipreset="https://api.siliconflow.cn/v1">SiliconFlow</button>
+          <button class="tiny" data-aipreset="https://generativelanguage.googleapis.com/v1beta/openai">Gemini 兼容</button>
         </div>
         <div class="field"><label style="width:64px" data-i18n="ai.key">密钥</label>
           <input type="password" id="aiKey" placeholder="sk-..." autocomplete="new-password" style="flex:1">
@@ -1094,8 +1096,9 @@
           </div>
           <textarea id="aiAsk" rows="3" placeholder="描述你的清理目标…"
                     style="width:100%;resize:vertical" data-i18n-ph="ai.askPh"></textarea>
-          <div class="field" style="margin-top:8px">
+          <div class="field" style="margin-top:8px;flex-wrap:wrap">
             <button id="btnAiPlan" class="tiny primary" data-i18n="ai.planBtn">生成方案</button>
+            <button id="btnAiBatch" class="tiny" data-i18n="ai.batchBtn">批量识别未识别项</button>
             <button id="btnAiClear" class="tiny ghost" data-i18n="ai.clearBtn">清空结果</button>
           </div>
           <div id="aiOut" style="margin-top:9px"></div>
@@ -7207,6 +7210,36 @@ $("btnAiPlan").addEventListener("click", () => {
   aiRun("plan", { request: req, candidates: aiCandidates() },
         $("btnAiPlan"), t("ai.planBtn","生成方案"));
 });
+$("btnAiBatch")?.addEventListener("click", async () => {
+  const btn = $("btnAiBatch"), old = btn.textContent;
+  const src = (FS && (FS.biggest || (FS.tree && FS.tree.children))) || [];
+  const unk = src.filter(x => x && (!x.info || !x.info.recognized) && (x.path || x.name)).slice(0, 25);
+  if (!unk.length) { toast(t("ai.batchNone", "当前视图没有未识别项")); return; }
+  btn.disabled = true; btn.textContent = t("ai.working", "正在思考…");
+  try {
+    const r = await apiJSON(`${API}/__oc__/ai/explain-batch`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: unk.map(x => ({
+        path: x.path || "", name: x.name || "",
+        kind: x.kind || "dir", size_h: x.size_h || fmt(x.size || 0)
+      })) }),
+    });
+    if (!r.ok) { toast(r.error || t("ai.batchFail", "批量识别失败")); return; }
+    const entries = Object.entries(r.results || {});
+    $("aiOut").innerHTML = `<div class="hint" style="margin-bottom:6px">${
+      t("ai.batchStat", "识别 {n} 项（缓存命中 {c}，新查询 {f}）")
+        .replace("{n}", entries.length).replace("{c}", r.from_cache || 0).replace("{f}", r.fetched || 0)
+    }</div>` + entries.map(([k, v]) => `
+      <div class="logrow"><div class="t"><b>${esc(v.title || k)}</b>
+        <span class="vbadge ${v.cleanable ? "clean" : "keep"}">${esc(v.category || "未知")}</span></div>
+        <div class="d">${esc(v.what || "")} ${v.advice ? "· " + esc(v.advice) : ""}</div>
+        <div class="d" style="color:var(--dim2)">${esc(k)}</div></div>`).join("");
+  } catch (e) {
+    toast(String(e));
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+});
 $("btnAiClear").addEventListener("click", () => { AI_PICKS = []; $("aiOut").innerHTML = ""; });
 
 $("btnClearLog").addEventListener("click", async () => {  if (!confirm(t("confirm.clearHistory","确定清空全部清理历史？累计统计也会归零，此操作不可恢复。"))) return;
@@ -7433,6 +7466,10 @@ const I18N_EN = {
   "ai.planDesc": "Describe what you want cleaned, e.g. \"C: has only 8 GB left, pick out what's safe to clean\".",
   "ai.askPh": "Describe your cleanup goal…",
   "ai.planBtn": "Generate plan", "ai.clearBtn": "Clear result",
+  "ai.batchBtn": "Batch explain unknown",
+  "ai.batchNone": "No unrecognized items in current view",
+  "ai.batchFail": "Batch explain failed",
+  "ai.batchStat": "Explained {n} items (cached {c}, new {f})",
   "pane.cum": "Cumulative Cleanup & Units",
   "cum.manage": "Add / manage conversion units",
   "unit.label": "Name", "unit.size": "Size", "unit.equals": "= 1 of this unit",

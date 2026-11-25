@@ -208,6 +208,10 @@ def main() -> None:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     build_zip(out_dir / f"O-Cleaner-v{ver}.zip", ver)
+    zips = sorted(out_dir.glob("O-Cleaner-*.zip"))
+    if zips:
+        sums = [f"{hashlib.sha256(z.read_bytes()).hexdigest()}  {z.name}" for z in zips]
+        (out_dir / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
