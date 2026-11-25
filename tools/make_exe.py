@@ -140,11 +140,29 @@ def _compile_launcher_exe() -> bytes | None:
         return None
     with tempfile.TemporaryDirectory() as td:
         out_exe = Path(td) / "O-Cleaner.exe"
+        res_file = None
+        rc_src = HERE / "launcher.rc"
+        if rc_src.exists():
+            if cl and shutil.which("rc"):
+                res_tmp = Path(td) / "launcher.res"
+                if subprocess.run(["rc", "/nologo", "/fo", str(res_tmp), str(rc_src)],
+                                  cwd=str(HERE), capture_output=True).returncode == 0:
+                    res_file = str(res_tmp)
+            elif gcc and shutil.which("windres"):
+                res_tmp = Path(td) / "launcher.o"
+                if subprocess.run(["windres", str(rc_src), "-O", "coff", "-o", str(res_tmp)],
+                                  cwd=str(HERE), capture_output=True).returncode == 0:
+                    res_file = str(res_tmp)
         if cl:
-            cmd = [cl, "/nologo", "/O2", "/W3", "/DUNICODE", "/D_UNICODE",
-                   str(src), f"/Fe:{out_exe}", "user32.lib"]
+            cmd = [cl, "/nologo", "/O2", "/W3", "/DUNICODE", "/D_UNICODE", str(src)]
+            if res_file:
+                cmd.append(res_file)
+            cmd.extend([f"/Fe:{out_exe}", "user32.lib"])
         else:
-            cmd = [gcc, "-mwindows", "-O2", "-municode", str(src), "-o", str(out_exe)]
+            cmd = [gcc, "-mwindows", "-O2", "-municode", str(src)]
+            if res_file:
+                cmd.append(res_file)
+            cmd.extend(["-o", str(out_exe)])
         r = subprocess.run(cmd, cwd=td, capture_output=True, text=True)
         if r.returncode == 0 and out_exe.exists():
             print("  已编译无控制台启动器: O-Cleaner.exe")

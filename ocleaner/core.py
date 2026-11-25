@@ -4884,7 +4884,7 @@ def _open_app_window(url: str) -> None:
     for exe in candidates:
         if os.path.isfile(exe):
             try:
-                subprocess.Popen([exe, f"--app={url}"],
+                subprocess.Popen([exe, f"--app={url}", "--start-maximized"],
                                  creationflags=CREATE_NO_WINDOW)
                 return
             except OSError:
