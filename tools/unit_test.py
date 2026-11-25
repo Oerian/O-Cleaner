@@ -362,6 +362,45 @@ def main() -> int:
     finally:
         app.DISK_TREND_PATH = orig_trend
 
+    # ---------- HTTP 路由参数校验与边界 ----------
+    import http.server as _hs
+    import threading as _th
+    import urllib.error as _ue
+    import urllib.request as _ur
+
+    srv = _hs.HTTPServer(("127.0.0.1", 0), app.Handler)
+    port = srv.server_address[1]
+    t_srv = _th.Thread(target=srv.serve_forever, daemon=True)
+    t_srv.start()
+    try:
+        def _req(method, path, body=None, ctype="application/json"):
+            req = _ur.Request(f"http://127.0.0.1:{port}{path}", data=body, method=method)
+            if body is not None:
+                req.add_header("Content-Type", ctype)
+            try:
+                with _ur.urlopen(req, timeout=3) as resp:
+                    return resp.status, resp.read().decode("utf-8", "replace")
+            except _ue.HTTPError as e:
+                return e.code, e.read().decode("utf-8", "replace")
+
+        st1, b1 = _req("GET", "/__oc__/ext-cache?drive=INVALID")
+        check("HTTP路由：ext-cache 非法盘符返回 400", st1 == 400 and "drive" in b1, f"{st1} {b1}")
+
+        st2, _ = _req("GET", "/__oc__/receipt?name=../../secret.json")
+        check("HTTP路由：receipt 路径穿越返回 400", st2 == 400, f"status={st2}")
+
+        st3, _ = _req("GET", "/__oc__/nonexistent_route")
+        check("HTTP路由：未知 GET 路由返回 404", st3 == 404, f"status={st3}")
+
+        st4, _ = _req("POST", "/__oc__/schedule", body=b"{not-json")
+        check("HTTP路由：POST 非法 JSON 返回 400", st4 == 400, f"status={st4}")
+
+        st5, _ = _req("POST", "/__oc__/nonexistent_post", body=b"{}")
+        check("HTTP路由：未知 POST 路由返回 404", st5 == 404, f"status={st5}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"
           f"失败 {len(failed)} 项 ====")

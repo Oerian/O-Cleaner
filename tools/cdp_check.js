@@ -1858,12 +1858,30 @@ class CDP {
         if (!sel) return { ok: false };
         sel.value = '30';
         sel.dispatchEvent(new Event('change'));
-        return { ok: true,
-                 rows30: document.querySelectorAll('#bfRows .logrow').length,
+        const rows30 = document.querySelectorAll('#bfRows .logrow').length;
+        const resetBtn = document.querySelector('#bfReset');
+        const hint = document.querySelector('#bfMatchHint');
+        const resetVisible = !!(resetBtn && resetBtn.style.display !== 'none');
+        const hintText = hint ? hint.textContent : "";
+        if (resetBtn) resetBtn.click();
+        const rowsAfterReset = document.querySelectorAll('#bfRows .logrow').length;
+        const gChk = document.querySelector('#bfRows .bfGChk');
+        let chkWorked = true;
+        if (gChk) {
+          gChk.click();
+          const n1 = typeof selPaths !== 'undefined' ? selPaths.size : 0;
+          gChk.click();
+          const n2 = typeof selPaths !== 'undefined' ? selPaths.size : 0;
+          chkWorked = n1 > 0 && n2 === 0;
+        }
+        return { ok: true, rows30, resetVisible, hintText,
+                 rowsAfterReset, chkWorked,
                  empty: !!document.querySelector('#bfRows .empty') };
       })()`);
-      check("大文件排行：切近 30 天过滤不重扫且行数收敛",
-            bfFilt.ok && bfFilt.rows30 <= bfInfo.rows0, JSON.stringify(bfFilt));
+      check("大文件排行：切近 30 天过滤不重扫、重置还原且重绘后勾选委托有效",
+            bfFilt.ok && bfFilt.rows30 <= bfInfo.rows0 && bfFilt.resetVisible
+            && bfFilt.rowsAfterReset === bfInfo.rows0 && bfFilt.chkWorked,
+            JSON.stringify(bfFilt));
       await evaluate(`(() => {
         const b = document.querySelector('#bfClose'); if (b) b.click();
       })()`);
