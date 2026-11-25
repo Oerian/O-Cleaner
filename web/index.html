@@ -195,13 +195,17 @@
      下仍保持并排。分级而不是连续缩放，是为了让断点之间的渲染稳定。
      弹窗（#mask/#modal 挂在 body 下）不在 main 内，不受缩放影响，
      它们自己已按视口自适应。 */
-  @media(max-width:1100px){ main{zoom:.9} }
-  @media(max-width:1000px){ main{zoom:.8} }
-  @media(max-width:900px){ main{zoom:.72} }
-  @media(max-width:800px){ main{zoom:.64} }
-  @media(max-width:700px){ main{zoom:.56} }
-  @media(max-width:600px){ main{zoom:.5} }
-  @media(max-width:520px){ main{zoom:.45} }
+  @media(max-width:1240px){
+    main{grid-template-columns:minmax(0,1fr) 330px;gap:14px;padding:12px 16px}
+    #leftcol,aside{gap:10px}
+  }
+  @media(max-width:1060px){
+    main{grid-template-columns:minmax(0,1fr) 290px;gap:10px;padding:10px 12px}
+  }
+  @media(max-width:900px){ main{zoom:.86} }
+  @media(max-width:800px){ main{zoom:.74} }
+  @media(max-width:680px){ main{zoom:.62} }
+  @media(max-width:560px){ main{zoom:.52} }
   /* 极窄窗口（≤760px）的附加收紧：留白与表格字号，避免行内换行溢出 */
   @media(max-width:760px){
     .panel{padding:10px}
@@ -456,9 +460,9 @@
     align-items:stretch;cursor:default}
   .extcol i{display:block;width:62%;max-width:30px;min-height:3px;
     border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--accent),var(--accent2))}
-  .extcol .extvval{height:22px;display:flex;align-items:flex-end;justify-content:center;
+  .extcol .extvval{height:20px;display:flex;align-items:flex-end;justify-content:center;
     font-size:9px;line-height:1.1;color:var(--dim2);font-variant-numeric:tabular-nums;
-    overflow-wrap:anywhere;text-align:center}
+    white-space:nowrap;text-align:center}
   .extcol .extvbar{flex:1;display:flex;align-items:flex-end;justify-content:center}
   .extcol .extvlab{height:24px;display:flex;align-items:flex-start;justify-content:center;
     font-size:9.5px;line-height:1.15;color:var(--dim);
@@ -613,11 +617,11 @@
   /* 分析中心（四轮后新增）：专项工具统一挂在第三个视图的页签下，
      #modal 运行时重挂进 anHost —— 面板化呈现，状态随视图保留 */
   /* 磁盘卡三页签（趋势/清理记录/类型分布）展开后统一对齐基线 */
-  #dwBody{width:100%;min-height:200px}
-  .sdchart{display:flex;align-items:flex-end;gap:6px;height:150px;
+  #dwBody{width:100%;min-height:140px}
+  .sdchart{display:flex;align-items:flex-end;gap:6px;height:125px;
     border-bottom:1px solid var(--line);padding:0 2px 3px;
-    margin:10px 0 6px;flex-wrap:nowrap;overflow-x:auto}
-  .sdchart .extcol{height:100%}
+    margin:6px 0 4px;flex-wrap:nowrap;overflow-x:auto}
+  .sdchart .extcol{height:100%;flex:1 0 36px;min-width:36px}
   .sdchart .extcol .extvbar{border-bottom:none}
   /* 中线柱状图（2026-11-15 用户定稿）：中央基线，增长向上暖色/回落向下绿色 */
   .spinechart{display:flex;gap:8px;overflow-x:auto;margin:12px 0 6px;padding:4px 2px 2px}
@@ -1999,14 +2003,15 @@ function _dwRenderTrend(body, dk) {
   if (span > 0) { lo -= span * 0.18; hi += span * 0.18; }
   else { const zpad = Math.max((dk.total || 0) * 0.01, 2 * 1024 ** 3); lo -= zpad; hi += zpad; }
   const tipFree = t("trend.tipFree", "剩余");
-  // 2026-11-17 用户要求：数值带常显（三段定高，同一基线对齐）+ 悬停 title
+  const showPts = pts.slice(-10);
+  // 2026-11-17 用户要求：数值带常显（三段定高，同一基线对齐）+ 悬停 title；最多展示近 10 天防日期挤压截断
   body.innerHTML =
-    `<div class="sdchart" style="height:170px">${pts.map((p, i) => {
+    `<div class="sdchart" style="height:128px">${showPts.map((p, i) => {
       const h = Math.max(4, Math.round((p.free - lo) / (hi - lo) * 100));
       return `<span class="extcol" title="${md(p.t)} · ${tipFree} ${fmt(p.free)}"` +
-        `${i === pts.length - 1 ? ' data-last="1"' : ""}>
+        `${i === showPts.length - 1 ? ' data-last="1"' : ""}>
         <span class="extvval">${fmt(p.free)}</span>
-        <span class="extvbar"><i style="height:${h}%${i === pts.length - 1 ? ";opacity:1" : ""}"></i></span>
+        <span class="extvbar"><i style="height:${h}%${i === showPts.length - 1 ? ";opacity:1" : ""}"></i></span>
         <span class="extvlab">${md(p.t)}</span></span>`;
     }).join("")}</div>` +
     `<div class="tvlbl">${esc(t("trend.freeLbl",

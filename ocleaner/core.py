@@ -4869,7 +4869,7 @@ def pick_port(preferred: int) -> int:
 
 
 def _calc_app_window_rect() -> tuple[int, int, int, int]:
-    """按当前桌面工作区计算居中的等比例默认窗口 (x, y, w, h)。"""
+    """按当前桌面工作区计算居中的等比例默认窗口 (x, y, w, h)（逻辑像素）。"""
     left, top, work_w, work_h = 0, 0, 1440, 900
     try:
         from ctypes import wintypes
@@ -4878,11 +4878,21 @@ def _calc_app_window_rect() -> tuple[int, int, int, int]:
             ww = rect.right - rect.left
             wh = rect.bottom - rect.top
             if ww >= 640 and wh >= 480:
-                left, top, work_w, work_h = rect.left, rect.top, ww, wh
+                scale = 1.0
+                try:
+                    dpi = ctypes.windll.user32.GetDpiForSystem()
+                    if dpi and dpi > 96:
+                        scale = dpi / 96.0
+                except Exception:
+                    pass
+                left = int(rect.left / scale)
+                top = int(rect.top / scale)
+                work_w = int(ww / scale)
+                work_h = int(wh / scale)
     except Exception:
         pass
-    w = max(min(work_w - 32, 1160), min(int(work_w * 0.86), 1600))
-    h = max(min(work_h - 32, 740), min(int(work_h * 0.88), 980))
+    w = max(min(work_w - 40, 1140), min(int(work_w * 0.78), 1440))
+    h = max(min(work_h - 40, 720), min(int(work_h * 0.82), 900))
     x = left + max(0, (work_w - w) // 2)
     y = top + max(0, (work_h - h) // 2)
     return x, y, w, h
@@ -4891,7 +4901,7 @@ def _calc_app_window_rect() -> tuple[int, int, int, int]:
 def _open_app_window(url: str) -> None:
     """Edge --app 无边框窗口（v3.0 原生体验方向）：零依赖实现桌面化外观。
 
-    按桌面工作区 ~86%×88% 居中启动（兼顾美观度与自由缩放），找不到
+    按桌面工作区 ~78%×82% 居中启动（兼顾美观度与自由缩放），找不到
     Edge/Chrome 时回退默认浏览器。
     """
     x, y, w, h = _calc_app_window_rect()
@@ -4905,7 +4915,7 @@ def _open_app_window(url: str) -> None:
     for exe in candidates:
         if os.path.isfile(exe):
             try:
-                subprocess.Popen([exe, f"--app={url}",
+                subprocess.Popen([exe, "--new-window", f"--app={url}",
                                   f"--window-size={w},{h}",
                                   f"--window-position={x},{y}"],
                                  creationflags=CREATE_NO_WINDOW)
