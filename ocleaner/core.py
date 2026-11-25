@@ -4868,12 +4868,33 @@ def pick_port(preferred: int) -> int:
     raise SystemExit(f"{preferred} 起连续 30 个端口都不可用")
 
 
+def _calc_app_window_rect() -> tuple[int, int, int, int]:
+    """按当前桌面工作区计算居中的等比例默认窗口 (x, y, w, h)。"""
+    left, top, work_w, work_h = 0, 0, 1440, 900
+    try:
+        from ctypes import wintypes
+        rect = wintypes.RECT()
+        if ctypes.windll.user32.SystemParametersInfoW(48, 0, ctypes.byref(rect), 0):
+            ww = rect.right - rect.left
+            wh = rect.bottom - rect.top
+            if ww >= 640 and wh >= 480:
+                left, top, work_w, work_h = rect.left, rect.top, ww, wh
+    except Exception:
+        pass
+    w = max(min(work_w - 32, 1160), min(int(work_w * 0.86), 1600))
+    h = max(min(work_h - 32, 740), min(int(work_h * 0.88), 980))
+    x = left + max(0, (work_w - w) // 2)
+    y = top + max(0, (work_h - h) // 2)
+    return x, y, w, h
+
+
 def _open_app_window(url: str) -> None:
     """Edge --app 无边框窗口（v3.0 原生体验方向）：零依赖实现桌面化外观。
 
-    找 Edge（稳定版优先，其次 Beta/Dev/Canary 与 Chrome 兜底——同为
-    Chromium，--app 行为一致）；找不到就回退默认浏览器。
+    按桌面工作区 ~86%×88% 居中启动（兼顾美观度与自由缩放），找不到
+    Edge/Chrome 时回退默认浏览器。
     """
+    x, y, w, h = _calc_app_window_rect()
     candidates = [
         os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
         os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
@@ -4884,7 +4905,9 @@ def _open_app_window(url: str) -> None:
     for exe in candidates:
         if os.path.isfile(exe):
             try:
-                subprocess.Popen([exe, f"--app={url}", "--start-maximized"],
+                subprocess.Popen([exe, f"--app={url}",
+                                  f"--window-size={w},{h}",
+                                  f"--window-position={x},{y}"],
                                  creationflags=CREATE_NO_WINDOW)
                 return
             except OSError:
