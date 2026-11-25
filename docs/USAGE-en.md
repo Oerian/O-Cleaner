@@ -57,7 +57,7 @@ Self-tests and quality gates (fast unit/guard gates plus full end-to-end suite; 
 python -X utf8 tools\lint_rules.py --strict      # rules and resource pack gate
 python -X utf8 tools\_lint_selftest.py           # verifies the previous gate can actually catch defects
 python -X utf8 tools\guard_matrix.py             # 50-case deletion guardrail matrix + rule unit self-check
-python -X utf8 tools\unit_test.py                # 24 fast pure-logic unit tests (<2s, zero disk side effects)
+python -X utf8 tools\unit_test.py                # 49 fast pure-logic unit tests (<2s, zero disk side effects)
 python -X utf8 tools\selftest.py                 # 590+ full end-to-end assertions (real deletions + HTTP)
 ```
 
@@ -689,9 +689,9 @@ O-Cleaner\
 │   └─ index.html          the interface (HTML + CSS + JS + bilingual dictionary all in one file)
 ├─ tools\
 │   ├─ lint_rules.py       rules and resource pack linter (safety gate before release/contribution)
-│   ├─ _lint_selftest.py   reverse defect-injection self-test for the linter itself (44 cases)
+│   ├─ _lint_selftest.py   reverse defect-injection self-test for the linter itself (63 cases)
 │   ├─ guard_matrix.py     50-case deletion guardrail matrix + rule unit self-check
-│   ├─ unit_test.py        fast pure-logic unit tests (24 cases, <2s)
+│   ├─ unit_test.py        fast pure-logic unit tests (49 cases, <2s)
 │   ├─ selftest.py         full functional self-tests (590+ assertions)
 │   ├─ cdp_check.js        real-browser rendering check (140+ assertions, uses system Edge/Chrome)
 │   ├─ doctor.py           environment self-check for new devices

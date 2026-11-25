@@ -100,7 +100,7 @@ python -X utf8 tools/lint_rules.py --strict     # 第 [2/8] 节专门检查资�
 python -X utf8 tools/lint_rules.py --strict   # 规则与资源包门禁（8 项检查，警告计为失败）
 python -X utf8 tools/_lint_selftest.py        # 验证 linter 有检出能力（知识库 15 类 + 资源包 20 类 + 脚本模板 5 类注入，共 44 项）
 python -X utf8 tools/guard_matrix.py          # 删除护栏 50 项对抗矩阵 + 规则单元自检（秒级，动护栏必跑）
-python -X utf8 tools/unit_test.py             # 纯逻辑快速单元测试（24 项，无磁盘写副作用，2 秒内跑完）
+python -X utf8 tools/unit_test.py             # 纯逻辑快速单元测试（49 项，无磁盘写副作用，2 秒内跑完）
 python -m pyflakes app.py ps_scripts.py ocleaner tools   # Python 静态死导入与未定义符号检查
 python -X utf8 tools/selftest.py              # 590+ 项断言，含真实删除与 HTTP 端到端
 node tools/cdp_check.js "http://127.0.0.1:8770"   # 真实浏览器渲染与交互检查（140+ 项断言）
@@ -174,7 +174,7 @@ PowerShell 5.1 在中文 Windows 上会把没有 BOM 的文件按 GBK 读取，�
 - [ ] `tools/lint_rules.py --strict` 通过
 - [ ] `tools/_lint_selftest.py` 通过（linter 有检出能力）
 - [ ] `tools/guard_matrix.py` 通过（删除护栏 50 项矩阵 + 规则单元自检）
-- [ ] `tools/unit_test.py` 通过（24 项快速纯逻辑单测）
+- [ ] `tools/unit_test.py` 通过（49 项快速纯逻辑单测）
 - [ ] `tools/selftest.py` 通过（或受宿主删除配额限制时由 CI 权威验证）
 - [ ] 新增/修改的规则我亲手验证过识别结果符合预期
 - [ ] 如果我改了断言，是因为代码确实对了，而不是为了让它变绿

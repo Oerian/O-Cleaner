@@ -67,7 +67,7 @@ cd /d "你的 O-Cleaner 目录"
 python -X utf8 tools\lint_rules.py --strict      # 规则与资源包门禁
 python -X utf8 tools\_lint_selftest.py           # 验证上一道门禁确实能检出缺陷
 python -X utf8 tools\guard_matrix.py             # 删除护栏 50 项对抗矩阵 + 规则单元自检
-python -X utf8 tools\unit_test.py                # 24 项纯逻辑快速单测（2 秒内跑完，无磁盘写副作用）
+python -X utf8 tools\unit_test.py                # 49 项纯逻辑快速单测（2 秒内跑完，无磁盘写副作用）
 python -X utf8 tools\selftest.py                 # 590+ 项全量自测（含真实删除与 HTTP 端到端）
 ```
 
@@ -95,7 +95,7 @@ node tools\cdp_check.js http://127.0.0.1:8770
 右侧栏每个折叠面板可点标题展开 / 收起（折叠状态本机记忆）；
 侧栏顶部有一条吸顶的**面板目录条**，列出全部面板标题，点击任意一项会自动展开并滚动到那个面板——
 找不到功能时先看目录条，不用逐个展开翻找。
-占用排行支持键盘操作（`↑` / `↓` 移动焦点行、`Space` 勾选/取消、`Enter` 下钻进入子目录），按 `Esc` 可逐级返回上一级（关闭弹窗 → 退回上一层目录 → 返回扫描概览），扫描进行中会提示稍后再退。
+占用排行支持键盘操作（`↑` / `↓` 移动焦点行、`Space` 勾选/取消、`Enter` 下钻进入子目录、`/` 快捷聚焦搜索/筛选框），按 `Esc` 可逐级返回上一级（关闭弹窗 → 退回上一层目录 → 返回扫描概览），扫描进行中会提示稍后再退。
 
 磁盘概览中的**组件图表坞**（全盘扫描后位于占比环右侧）提供三个可切换页签：
 1. **剩余空间趋势**：按盘每日记录可用空间快照，以竖向柱状图呈现最近波动，悬停显示当日日期与剩余容量；
@@ -696,9 +696,9 @@ O-Cleaner\
 │   └─ index.html          界面（HTML + CSS + JS + 双语词典全在这一个文件里）
 ├─ tools\
 │   ├─ lint_rules.py       规则与资源包 linter（发布/贡献前的安全闸门）
-│   ├─ _lint_selftest.py   linter 自身的反向缺陷注入自测（44 项）
+│   ├─ _lint_selftest.py   linter 自身的反向缺陷注入自测（63 项）
 │   ├─ guard_matrix.py     删除护栏 50 项对抗矩阵 + 规则单元自检
-│   ├─ unit_test.py        快速纯逻辑单元测试（24 项，2 秒内跑完）
+│   ├─ unit_test.py        快速纯逻辑单元测试（49 项，2 秒内跑完）
 │   ├─ selftest.py         全量功能自测（590+ 项断言，含真实删除与 HTTP 端到端）
 │   ├─ cdp_check.js        真实浏览器渲染检查（140+ 项断言，用系统 Edge/Chrome，零安装）
 │   ├─ doctor.py           新设备环境自检
