@@ -967,12 +967,6 @@ def appclean_clean(paths: list[str]) -> dict:
             "results": results}
 
 
-def glob_has_dir(pattern: str) -> bool:
-    """通配符路径是否存在匹配目录（无通配符时直接判存在）。"""
-    import glob as _glob
-    return bool(_glob.glob(pattern))
-
-
 def glob_dirs(pattern: str) -> list:
     """通配符展开出的目录清单（如 QQ 多账号包目录）。"""
     import glob as _glob

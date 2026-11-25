@@ -41,7 +41,6 @@ import string
 import struct
 import subprocess
 import sys
-import base64
 import ipaddress
 import traceback
 import webbrowser
@@ -49,10 +48,9 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError as _HTTPError  # noqa: F401 integrations 经 _core 引用
-from urllib.parse import urlparse
 from urllib.request import Request as _UrlRequest, urlopen as _urlopen
 # PS_MEASURE_TREE/PS_MEASURE_GLOB/PS_DIR_KIND/PS_STEAM_ORPHAN_SIZE 的
 # 测量职责已由进程内 os.scandir 实现（P2-4），脚本本体保留：
@@ -221,7 +219,7 @@ from ocleaner.analysis import (_save_scan_snapshot, snapshot_diff,  # noqa: F401
                                _load_bloatware, _parse_uninstall_reg_key,  # noqa: F401 re-export
                                bloatware_scan, bloatware_sweep, junction_move,  # noqa: F401 re-export
                                junction_restore, _load_appclean_apps, appclean_scan,  # noqa: F401 re-export
-                               _appclean_cache_allowed, appclean_clean, glob_has_dir,  # noqa: F401 re-export
+                               _appclean_cache_allowed, appclean_clean,  # noqa: F401 re-export
                                glob_dirs, DUP_PROGRESS, _BIG_CACHE, _APPCLEAN_CACHE,  # noqa: F401 re-export
                                _BLOAT_CACHE, _DUP_CACHE, dupfiles_scan, _downloads_dir,  # noqa: F401 re-export
                                downloads_advice, _dir_size, downloads_archive,  # noqa: F401 re-export

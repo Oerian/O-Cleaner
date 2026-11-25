@@ -1614,7 +1614,7 @@ class CDP {
     //   #stOrphanDel 也已删除 —— 勾选项并入主工具栏「清理选中项」）
     const gadd = await evaluate(`(() => ({
       tabsGone: !document.querySelector('#stTabs'),
-      trendBox: !!document.querySelector('#gameTrendBox'),
+      trendBoxGone: !document.querySelector('#gameTrendBox'),
       suggGone: !document.querySelector('#stSugg'),
       delGone: !document.querySelector('#stOrphanDel'),
       orphanToggle: !!document.querySelector('#stOrphanToggle'),
@@ -1625,8 +1625,8 @@ class CDP {
     }))()`);
     check("吸顶头不再有库分区页签条（2026-11-03 合盘展示）",
           gadd.tabsGone, `tabsGone=${gadd.tabsGone}`);
-    check("游戏占用趋势容器就位且独立建议卡已移除", gadd.trendBox && gadd.suggGone,
-          `trendBox=${gadd.trendBox} suggGone=${gadd.suggGone}`);
+    check("游戏占用趋势旧容器与独立建议卡已移除", gadd.trendBoxGone && gadd.suggGone,
+          `trendBoxGone=${gadd.trendBoxGone} suggGone=${gadd.suggGone}`);
     check("回收建议面板无独立删除按钮（并入主清理出口）",
           gadd.delGone && gadd.recMap, `delGone=${gadd.delGone} recMap=${gadd.recMap}`);
     check("回收建议折叠头存在（无内容时面板隐藏但结构在）", gadd.orphanToggle);
@@ -1684,23 +1684,6 @@ class CDP {
       await evaluate(`(() => { const s = document.querySelector('#stSort .seg.on');
         if (s) s.click(); })()`);          // 还原默认方向
       await sleep(300);
-
-      // 趋势图 hover 提示：向 canvas 派发 mousemove，tooltip 应显示「日期 · 体积」
-      const tip = await evaluate(`(() => {
-        const cv = document.querySelector('#gameTrendCv');
-        const box = document.querySelector('#gameTrendBox');
-        if (!cv || !box || box.style.display === 'none') return { skip: true };
-        cv.dispatchEvent(new MouseEvent('mousemove', { clientX: 0, clientY: 0 }));
-        const t = document.querySelector('#gameTrendTip');
-        return { shown: t && t.style.display !== 'none',
-                 text: t ? t.textContent : "" };
-      })()`);
-      if (!tip || tip.skip) {
-        skip2("趋势图 hover 提示（历史数据不足 2 点，图未显示）");
-      } else {
-        check("趋势图 hover 显示「日期 · 体积」", tip.shown && tip.text.includes("·"),
-              tip.text.slice(0, 30));
-      }
 
       // 导出条（Steam found 时可见）与行内操作浮层
       const exp = await evaluate(`(() => ({

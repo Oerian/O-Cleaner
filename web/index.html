@@ -5663,6 +5663,21 @@ function renderBfRows() {
     `<div class="empty">${hasFilter ? t("bf.filterEmpty", "没有符合过滤条件的大文件")
       : (cut ? t("bf.age.empty", "该时间段内没有大文件")
              : t("bf.empty", "没有超过门槛的大文件"))}</div>`;
+  // 同步分组复选框（全选/半选）与过滤命中数提示
+  $("bfRows").querySelectorAll(".vrow-wrap[data-bfg]").forEach(w0 => {
+    const gChk = w0.querySelector(".bfGChk");
+    const kids = [...w0.querySelectorAll(".bfChk")];
+    if (!gChk || !kids.length) return;
+    const cn = kids.filter(k => k.checked).length;
+    gChk.checked = cn === kids.length;
+    gChk.indeterminate = cn > 0 && cn < kids.length;
+  });
+  const mh = $("bfMatchHint");
+  if (mh) mh.textContent = hasFilter
+    ? t("bf.matched", "筛选 {m}/{n}").replace("{m}", list.length).replace("{n}", _bfFiles.length)
+    : "";
+  const rb = $("bfReset");
+  if (rb) rb.style.display = hasFilter ? "" : "none";
 }
 async function openBigFiles() {
   const anSeq = ++_anSeq;
@@ -5722,7 +5737,9 @@ async function openBigFiles() {
           <option value="7">${t("bf.age.7", "近 7 天")}</option>
           <option value="30">${t("bf.age.30", "近 30 天")}</option>
           <option value="90">${t("bf.age.90", "近 90 天")}</option>
-        </select></div>
+        </select>
+        <span id="bfMatchHint" class="hint"></span>
+        <button id="bfReset" class="tiny ghost" style="display:none">${t("bf.reset", "重置过滤")}</button></div>
       <div id="bfRows"></div>
     <div style="text-align:right;padding-top:10px">
       <button class="tiny" id="bfClose">${t("cc.close", "关闭")}</button></div></div>`;
@@ -5730,30 +5747,47 @@ async function openBigFiles() {
   $("bfAge").addEventListener("change", renderBfRows);
   if ($("bfFloor")) $("bfFloor").addEventListener("input", renderBfRows);
   if ($("bfExt")) $("bfExt").addEventListener("change", renderBfRows);
-  [...document.querySelectorAll("#modal .bfChk")].forEach(c =>
-    c.addEventListener("change", () => {
-      if (c.checked) { selPaths.add(c.dataset.p); _bfSelPaths.add(c.dataset.p); }
-      else { selPaths.delete(c.dataset.p); _bfSelPaths.delete(c.dataset.p); }
+  if ($("bfReset")) $("bfReset").addEventListener("click", () => {
+    if ($("bfFloor")) $("bfFloor").value = "";
+    if ($("bfExt")) $("bfExt").value = "";
+    if ($("bfAge")) $("bfAge").value = "0";
+    renderBfRows();
+  });
+  // 事件委托挂在 #bfRows 上：过滤重绘后复选框与「打开位置」依然可用
+  $("bfRows").addEventListener("change", ev => {
+    const t0 = ev.target;
+    if (t0.classList.contains("bfChk")) {
+      if (t0.checked) { selPaths.add(t0.dataset.p); _bfSelPaths.add(t0.dataset.p); }
+      else { selPaths.delete(t0.dataset.p); _bfSelPaths.delete(t0.dataset.p); }
+      const w0 = t0.closest(".vrow-wrap");
+      if (w0) {
+        const gChk = w0.querySelector(".bfGChk");
+        const kids = [...w0.querySelectorAll(".bfChk")];
+        const cn = kids.filter(k => k.checked).length;
+        if (gChk) { gChk.checked = cn === kids.length; gChk.indeterminate = cn > 0 && cn < kids.length; }
+      }
       updateFooter();
-    }));
-  [...document.querySelectorAll("#modal .bfGChk")].forEach(g0 =>
-    g0.addEventListener("change", () => {
-      const w0 = g0.closest(".vrow-wrap");
+    } else if (t0.classList.contains("bfGChk")) {
+      const w0 = t0.closest(".vrow-wrap");
+      if (!w0) return;
       w0.querySelectorAll(".bfChk").forEach(c0 => {
-        c0.checked = g0.checked;
-        if (g0.checked) { selPaths.add(c0.dataset.p); _bfSelPaths.add(c0.dataset.p); }
+        c0.checked = t0.checked;
+        if (t0.checked) { selPaths.add(c0.dataset.p); _bfSelPaths.add(c0.dataset.p); }
         else { selPaths.delete(c0.dataset.p); _bfSelPaths.delete(c0.dataset.p); }
       });
+      t0.indeterminate = false;
       updateFooter();
-    }));
+    }
+  });
+  $("bfRows").addEventListener("click", ev => {
+    const a = ev.target.closest(".rcpt");
+    if (!a) return;
+    apiJSON(`${API}/__oc__/reveal`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: a.dataset.p, select: true }),
+    });
+  });
   $("bfClose").addEventListener("click", closeModal);
-  [...document.querySelectorAll("#modal .rcpt")].forEach(a =>
-    a.addEventListener("click", () => {
-      apiJSON(`${API}/__oc__/reveal`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: a.dataset.p, select: true }),
-      });
-    }));
 }
 
 /* 重复大文件（#34）：基于全盘扫描明细缓存，同体积分组 + 首尾 1MB 采样
@@ -5887,10 +5921,19 @@ async function openDupFiles() {
     const el = $("dupPickedN");
     if (el) el.textContent = t("dup.pickedN", "已勾选 {n} 个副本")
       .replace("{n}", n);
+    document.querySelectorAll("#modal .vrow-wrap[data-gsize]").forEach(w0 => {
+      const gChk = w0.querySelector(".dupGChk");
+      const kids = [...w0.querySelectorAll(".dupChk")].filter(c => !c.disabled);
+      if (!gChk || !kids.length) return;
+      const cn = kids.filter(c => c.checked).length;
+      gChk.checked = cn === kids.length;
+      gChk.indeterminate = cn > 0 && cn < kids.length;
+    });
   };
   const applyPreset = () => {
     const minv = parseInt(($("dupPreset") || {}).value || "0", 10);
-    document.querySelectorAll("#modal .vrow-wrap").forEach(w0 => {
+    document.querySelectorAll("#modal .vrow-wrap[data-gsize]").forEach(w0 => {
+      if (w0.style.display === "none") return;
       const grp = w0.dataset.gsize;
       w0.querySelectorAll(".dupChk").forEach(c => {
         if (c.disabled) return;
@@ -5947,12 +5990,14 @@ async function openDupFiles() {
     });
   });
   if (allBtn) allBtn.addEventListener("click", () => {
-    // 一键全选跳过跨目录组（data-xdir=1）：功能依赖而非冗余，需逐个确认
-    document.querySelectorAll("#modal .dupChk").forEach(c => {
-      const w0 = c.closest(".vrow-wrap");
-      if (w0 && w0.dataset.xdir === "1") return;
-      c.checked = true;
-      selPaths.add(c.dataset.p);
+    // 一键全选跳过跨目录组（data-xdir=1）与当前被扩展名筛选隐藏的组
+    document.querySelectorAll("#modal .vrow-wrap[data-gsize]").forEach(w0 => {
+      if (w0.style.display === "none" || w0.dataset.xdir === "1") return;
+      w0.querySelectorAll(".dupChk").forEach(c => {
+        if (c.disabled) return;
+        c.checked = true;
+        selPaths.add(c.dataset.p);
+      });
     });
     updateFooter();
     syncPicked();
@@ -7997,6 +8042,8 @@ const I18N_EN = {
   "bf.age.30": "Last 30 days", "bf.age.90": "Last 90 days",
   "bf.age.empty": "No big files in that period",
   "bf.reveal": "Open location in Explorer",
+  "bf.matched": "Filtered {m}/{n}",
+  "bf.reset": "Reset",
   "cc.close": "Close"
 };
 /* 动态文案取词：en 界面且有词条时用译文，否则回落到调用处的中文原文。
