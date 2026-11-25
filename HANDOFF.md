@@ -2079,3 +2079,9 @@ SECURITY 该处表述未动。
 - 修复：动画改为**纯 opacity 淡入**（合成友好，无大层提升），视觉反馈保留；switchView 的 slide-l/slide-r 类与强制回流逻辑不动。
 - 教训：**transform 动画与 will-change 同为合成层提升源**——整页级元素的任何 transform 动画都应改 opacity。
 - 测试：unit_test **44-0** · selftest **595-0-6** · lint strict **0 错**。
+
+**v2.17 后补（2026-11-25）：全量审计、调度域拆分、交互/跨设备优化与打包同步**——
+- **死代码清理与模块拆分**：移除 `ocleaner/core.py` 未使用导入（`base64`、`BaseHTTPRequestHandler`、`urlparse`）及 `ocleaner/analysis.py` 死函数 `glob_has_dir`；将定时清理调度域（`DEFAULT_SCHEDULE` / `schedule_state` / `_scheduler_loop` / `_run_scheduled` 等）从 `core.py` 迁出至 `ocleaner/scheduler.py` 并在 `core.py` 保持再导出兼容，同步补入 `tools/make_package.py` 与 `README.md`（13 模块）。
+- **大文件与重复文件交互修复**：`openBigFiles()` 改用 `#bfRows` 事件委托修复过滤重绘后勾选与「打开位置」失效，增加匹配计数 `#bfMatchHint`、一键重置 `#bfReset`、40 组分页 `#bfMore` 与 EN 词条（`bf.matched` / `bf.reset` / `bf.more`）；`openDupFiles()` 全选与预设跳过隐藏分组并同步分组半选态。
+- **跨设备、无障碍与快捷键**：新增 `/` 快捷聚焦搜索/筛选框、`@media (hover:none),(pointer:coarse)` 下默认展示 `.ract` 行内操作、`:focus-visible` 焦点环、扩展 `prefers-reduced-motion:reduce`、弹窗遮罩模糊/滚动隔离与 `max-width:600px` 窄屏适配；移除未引用 `#syncBox`。
+- **测试同步与补强**：`tools/unit_test.py` 新增 5 项 HTTP 路由参数校验与边界测试（49/49）；`tools/cdp_check.js` 同步已移除的 `#gameTrendBox` 断言并增强大文件过滤/重置/勾选委托验证（134/134 通过，5 跳过）。
