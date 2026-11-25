@@ -397,6 +397,9 @@ def main() -> int:
 
         st5, _ = _req("POST", "/__oc__/nonexistent_post", body=b"{}")
         check("HTTP路由：未知 POST 路由返回 404", st5 == 404, f"status={st5}")
+
+        st6, b6 = _req("GET", "/favicon.ico")
+        check("HTTP路由：favicon.ico 返回 200 且非空", st6 == 200 and len(b6) > 100, f"status={st6} len={len(b6)}")
     finally:
         srv.shutdown()
         srv.server_close()

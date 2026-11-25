@@ -296,6 +296,12 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 html = "<h1>web/index.html 缺失</h1>".encode("utf-8")
             return self._send(200, html, "text/html; charset=utf-8")
+        if route in ("/favicon.ico", "/icon.ico"):
+            try:
+                ico = (_core.WEB_DIR / "icon.ico").read_bytes()
+                return self._send(200, ico, "image/x-icon")
+            except OSError:
+                return self._send(404, b"", "image/x-icon")
         if route == "/__oc__/state":
             return self._json(_core.apply_lang_payload(
                 _core.build_state(q.get("drive"), q.get("custom"),

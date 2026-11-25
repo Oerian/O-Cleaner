@@ -5949,6 +5949,7 @@ async function openDupFiles() {
     }).join("")
       : `<div class="empty">${t("dup.empty", "没有发现互为副本的大文件（≥ {v} 且内容一致）")
           .replace("{v}", fmt((r.floor_mb || 100) * 1024 * 1024))}</div>`}
+    <div id="dupFilterEmpty" class="empty" style="display:none">${t("dup.filterEmpty", "没有符合该扩展名的重复文件组")}</div>
     <div style="text-align:right;padding-top:10px">
       <span class="hint">${t("dup.useGlobal", "勾选后用底部全局「清理选中项」按钮执行")}</span>
       <button class="tiny" id="dupClose">${t("cc.close", "关闭")}</button></div></div>`;
@@ -6022,9 +6023,14 @@ async function openDupFiles() {
   if (keepOldBtn) keepOldBtn.addEventListener("click", () => pickByTime(false));
   if (extEl) extEl.addEventListener("change", () => {
     const want = extEl.value;
+    let shown = 0;
     document.querySelectorAll("#modal .vrow-wrap[data-gsize]").forEach(w0 => {
-      w0.style.display = (!want || w0.dataset.ext === want) ? "" : "none";
+      const ok = !want || w0.dataset.ext === want;
+      w0.style.display = ok ? "" : "none";
+      if (ok) shown++;
     });
+    const fe = $("dupFilterEmpty");
+    if (fe) fe.style.display = (want && shown === 0) ? "" : "none";
   });
   if (allBtn) allBtn.addEventListener("click", () => {
     // 一键全选跳过跨目录组（data-xdir=1）与当前被扩展名筛选隐藏的组
@@ -8004,6 +8010,7 @@ const I18N_EN = {
   "dup.sameSize": "{n} identical copies, {v} each",
   "dup.wasted": "reclaimable {v}",
   "dup.empty": "No duplicate large files found (≥ {v} with identical content)",
+  "dup.filterEmpty": "No duplicate groups match that extension",
   "dl.title": "Downloads tidy-up",
   "dl.loading": "Categorising your Downloads folder…",
   "dl.n": "{n} files · {v} total",
