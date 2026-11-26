@@ -602,6 +602,52 @@ def _mft_read_at(h, offset: int, size: int, buf) -> int:
         return 0
     return got.value
 
+_MFT_FAST_CACHE = False  # False=未探测, None=不可用, CDLL=可用
+
+
+def _load_mft_fast():
+    """若同目录下存在编译好的 mft_fast.dll 且 ABI 匹配，加载之；否则回退纯 Python。"""
+    global _MFT_FAST_CACHE
+    if _MFT_FAST_CACHE is not False:
+        return _MFT_FAST_CACHE
+    _MFT_FAST_CACHE = None
+    if os.name != "nt":
+        return None
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "mft_fast.dll"),
+        os.path.join(str(_core.BASE_DIR), "ocleaner", "mft_fast.dll"),
+    ]
+    for dll_path in candidates:
+        if not os.path.isfile(dll_path):
+            continue
+        try:
+            lib = ctypes.CDLL(dll_path)
+            lib.mft_fast_version.restype = ctypes.c_int
+            if lib.mft_fast_version() != 1:
+                continue
+            lib.mft_scan_chunk.argtypes = [
+                ctypes.c_void_p,                    # buf
+                ctypes.c_uint32,                    # usable
+                ctypes.c_uint32,                    # frs_size
+                ctypes.c_uint64,                    # f_floor
+                ctypes.c_int32,                     # ext_stats
+                ctypes.c_int32,                     # with_mtime
+                ctypes.POINTER(ctypes.c_int64),     # out_parent
+                ctypes.POINTER(ctypes.c_int64),     # out_size
+                ctypes.POINTER(ctypes.c_uint8),     # out_flags
+                ctypes.POINTER(ctypes.c_uint64),    # out_mtime
+                ctypes.POINTER(ctypes.c_uint32),    # out_name_idx
+                ctypes.POINTER(ctypes.c_uint32),    # out_name_off
+                ctypes.POINTER(ctypes.c_uint16),    # out_name_len
+            ]
+            lib.mft_scan_chunk.restype = ctypes.c_int32
+            _MFT_FAST_CACHE = lib
+            return lib
+        except OSError:
+            continue
+    return None
+
+
 def _mft_build_table(letter: str, root: str, on_progress=None,
                      file_floor_mb: int | None = None,
                      ext_stats: bool = False, with_mtime: bool = False):
@@ -742,7 +788,58 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
         # 切换间隔（1140 次 × 1MB 的往返被拉长 5 倍）。ctypes 释放 GIL
         # 不等于重叠免费：**GIL 争用成本 > I/O 重叠收益**，此类流水线
         # 在纯 Python 消费端面前不要重试。提速改走「加大读块 + 局部别名」路线。
+        fast_dll = _load_mft_fast()
+        c_buf_cap = max(1024, (max(frs_size * 1024, 32 * 1024 * 1024) // frs_size) + 2)
+        if fast_dll is not None:
+            c_parent = (ctypes.c_int64 * c_buf_cap)()
+            c_size = (ctypes.c_int64 * c_buf_cap)()
+            c_flags = (ctypes.c_uint8 * c_buf_cap)()
+            c_mtime = (ctypes.c_uint64 * c_buf_cap)() if with_mtime else None
+            c_nidx = (ctypes.c_uint32 * c_buf_cap)()
+            c_noff = (ctypes.c_uint32 * c_buf_cap)()
+            c_nlen = (ctypes.c_uint16 * c_buf_cap)()
+
         for chunk, usable in read_chunks():
+            n_recs = usable // frs_size
+            if fast_dll is not None and n_recs <= c_buf_cap:
+                c_raw = (ctypes.c_uint8 * usable).from_buffer(chunk)
+                kept = fast_dll.mft_scan_chunk(
+                    c_raw, usable, frs_size, f_floor,
+                    1 if ext_stats else 0, 1 if with_mtime else 0,
+                    c_parent, c_size, c_flags, c_mtime,
+                    c_nidx, c_noff, c_nlen,
+                )
+                if kept >= 0:
+                    base_idx = records
+                    records += n_recs
+                    arr_parent.frombytes(memoryview(c_parent)[:n_recs])
+                    arr_size.frombytes(memoryview(c_size)[:n_recs])
+                    arr_flags.extend(memoryview(c_flags)[:n_recs])
+                    mv_chunk = memoryview(chunk)
+                    for k in range(kept):
+                        li = c_nidx[k]
+                        idx = base_idx + li
+                        noff = c_noff[k]
+                        nlen = c_nlen[k]
+                        name_raw = bytes(mv_chunk[noff:noff + nlen])
+                        if c_flags[li]:
+                            if idx != 5:
+                                dir_names[idx] = name_raw
+                        else:
+                            if ext_stats:
+                                ext_bump(exts, name_raw, c_size[li])
+                            p = c_parent[li]
+                            sz = c_size[li]
+                            if sz >= f_floor or p == 5:
+                                file_keep[idx] = (_mft_name_decode(name_raw), sz, p)
+                                if with_mtime and c_mtime[li]:
+                                    file_mtime[idx] = c_mtime[li]
+                    if on_progress:
+                        try:
+                            on_progress(min(1.0, records / est_records))
+                        except Exception:
+                            pass
+                    continue
             for roff in range(0, usable, frs_size):
                 idx = records
                 records += 1

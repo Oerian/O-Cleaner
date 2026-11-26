@@ -170,6 +170,28 @@ def _compile_launcher_exe() -> bytes | None:
     return None
 
 
+def _compile_mft_fast_dll() -> bytes | None:
+    """若本机有 MSVC (cl.exe) 或 MinGW (gcc)，编译原生 MFT 加速 DLL (mft_fast.dll)。"""
+    src = ROOT / "ocleaner" / "mft_fast.c"
+    if not src.exists():
+        return None
+    cl = shutil.which("cl")
+    gcc = shutil.which("gcc")
+    if not cl and not gcc:
+        return None
+    with tempfile.TemporaryDirectory() as td:
+        out_dll = Path(td) / "mft_fast.dll"
+        if cl:
+            cmd = [cl, "/nologo", "/O2", "/MT", "/LD", str(src), f"/Fe:{out_dll}"]
+        else:
+            cmd = [gcc, "-O2", "-shared", "-static", str(src), "-o", str(out_dll)]
+        r = subprocess.run(cmd, cwd=td, capture_output=True, text=True)
+        if r.returncode == 0 and out_dll.exists():
+            print("  已编译原生 MFT 加速库: ocleaner/mft_fast.dll")
+            return out_dll.read_bytes()
+    return None
+
+
 def _write_sha256sums(out_dir: Path) -> None:
     zips = sorted(out_dir.glob("O-Cleaner-*.zip"))
     if not zips:
@@ -192,6 +214,9 @@ def build_embed_zip(out_path: Path, ver: str) -> None:
     exe_bytes = _compile_launcher_exe()
     if exe_bytes:
         payloads.append(("O-Cleaner/O-Cleaner.exe", exe_bytes))
+    dll_bytes = _compile_mft_fast_dll()
+    if dll_bytes:
+        payloads.append(("O-Cleaner/ocleaner/mft_fast.dll", dll_bytes))
     payloads.extend(embed_runtime_payloads())
 
     tmp = out_path.with_suffix(".zip.tmp")

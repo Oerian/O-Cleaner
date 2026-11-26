@@ -460,6 +460,14 @@ def main() -> int:
         app.AI_CACHE_PATH = orig_ai_cache
         _integ.ai_chat = orig_ai_chat
 
+    # ---------- MFT 原生加速桥接与回退 ----------
+    import ocleaner.engines as _eng
+    c_src = Path(app.BASE_DIR) / "ocleaner" / "mft_fast.c"
+    dll_obj = _eng._load_mft_fast()
+    check("MFT 原生加速：mft_fast.c 就位且缺失 DLL 时安全回退 Python",
+          c_src.is_file() and (dll_obj is None or dll_obj.mft_fast_version() == 1),
+          f"c_src={c_src.is_file()} dll={dll_obj}")
+
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"
           f"失败 {len(failed)} 项 ====")

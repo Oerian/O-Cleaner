@@ -50,6 +50,7 @@ INCLUDE = [
     "ocleaner/games.py",
     "ocleaner/integrations.py",
     "ocleaner/measure.py",
+    "ocleaner/mft_fast.c",
     "ocleaner/receipts.py",
     "ocleaner/scheduler.py",
     "ocleaner/server.py",
