@@ -3837,16 +3837,23 @@ async function findLockHolders(bad, btn) {
     const unknown = (d.results || []).filter(x => x.locked === null);
     const cs = d.candidates || [];
     const strong = cs.filter(c => c.strong), weak = cs.filter(c => !c.strong);
-    const row = c => `<tr>
+    const _protProcs = new Set(["system","idle","smss.exe","csrss.exe","wininit.exe","winlogon.exe","services.exe","lsass.exe","svchost.exe","dwm.exe","explorer.exe","conhost.exe"]);
+    const row = c => {
+      const pidNum = parseInt(c.pid, 10) || 0;
+      const nmLow = String(c.name || "").toLowerCase();
+      const prot = pidNum <= 4 || _protProcs.has(nmLow);
+      return `<tr>
+      <td><input type="checkbox" class="lkPidChk" value="${pidNum}" data-name="${esc(c.name || "?")}" ${prot ? "disabled" : (c.strong ? "checked" : "")}></td>
       <td class="n">${c.pid}</td>
       <td>${esc(c.name || "?")}</td>
       <td style="font-size:11.5px;color:var(--dim2)">${esc(c.why || "")}${
         c.hits > 1 ? `${t("lk.hitFiles","（命中 {n} 个文件）").replace("{n}", c.hits)}` : ""}${
         c.exe ? `<br><span style="color:var(--dim2)">${esc(c.exe)}</span>` : ""}</td>
     </tr>`;
+    };
     const table = (title, arr) => arr.length ? `
       <div style="font-size:12.5px;margin:11px 0 5px"><b>${title}</b>（${arr.length}）</div>
-      <table><thead><tr><th class="n">PID</th><th>${t("lk.thProc","进程")}</th><th>${t("lk.thWhy","判断依据")}</th></tr></thead>
+      <table><thead><tr><th></th><th class="n">PID</th><th>${t("lk.thProc","进程")}</th><th>${t("lk.thWhy","判断依据")}</th></tr></thead>
         <tbody>${arr.map(row).join("")}</tbody></table>` : "";
     pane.innerHTML = `
       <div style="margin-top:11px;font-size:12.5px">
@@ -3857,6 +3864,10 @@ async function findLockHolders(bad, btn) {
       </div>
       ${table(t("lk.strong","可能性高（程序本体在该目录下，或命令行里出现了完整路径）"), strong)}
       ${table(t("lk.weak","也值得一看（命令行里出现了同名文件）"), weak)}
+      ${(strong.length || weak.length) ? `
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="tiny go" id="btnStopRetry">${t("lk.stopRetry","停止选中进程并重试清理")}</button>
+        </div>` : ""}
       ${(!strong.length && !weak.length) ? `
         <div style="margin-top:9px;font-size:12.5px">
           ${t("lk.noCandidate","没能从进程列表里定位到可疑项 —— 这很正常，Windows 不允许直接把「文件句柄」反查成进程。可以打开「任务管理器 → 性能 → 资源监视器 → CPU → 关联的句柄」，在里面搜索这个文件名，就能看到真正持有它的进程。")}</div>` : ""}
@@ -3864,6 +3875,30 @@ async function findLockHolders(bad, btn) {
         ${t("lk.psError","进程枚举未完成：")}${esc(d.ps_error)}</div>` : ""}
       <div style="color:var(--dim2);font-size:11.5px;margin-top:10px">
         ${t("lk.disclaimer","※ 以上是<b>候选</b>，不是确证；<b>不要结束 System、explorer.exe 等系统进程</b>。多数程序一退出就自动解锁 —— 先在它们里面保存并退出，再回来重新清理即可。")}</div>`;
+    const stopBtn = $("btnStopRetry");
+    if (stopBtn) stopBtn.addEventListener("click", async () => {
+      const chks = [...pane.querySelectorAll(".lkPidChk:checked")];
+      if (!chks.length) { toast(t("lk.stopNone","请先勾选要停止的进程")); return; }
+      const desc = chks.map(c => `${c.dataset.name} (PID ${c.value})`).join("、");
+      if (!confirm(t("lk.stopConfirm","确定停止以下进程并重试清理？未保存的工作可能会丢失：\n") + desc)) return;
+      stopBtn.disabled = true;
+      try {
+        const sr = await apiJSON(`${API}/__oc__/process/stop`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pids: chks.map(c => Number(c.value)) }),
+        });
+        const sn = (sr.stopped || []).length;
+        const fn = (sr.failed || []).length;
+        toast(t("lk.stopDone","已停止 {s} 个进程（失败 {f} 个）").replace("{s}", sn).replace("{f}", fn));
+        if (sn > 0 && (selected.size + selPaths.size + recycleSel.size) > 0 && typeof doClean === "function") {
+          await doClean();
+        }
+      } catch (e) {
+        toast(t("lk.stopFail","停止进程失败：") + (e.message || String(e)));
+      } finally {
+        stopBtn.disabled = false;
+      }
+    });
   } catch (ex) {
     pane.innerHTML = `<div style="margin-top:10px;font-size:12.5px;color:var(--warn)">
       ${t("lk.fail","查找失败：")}${esc(ex.message || String(ex))}</div>`;
@@ -8063,6 +8098,11 @@ const I18N_EN = {
   "lk.unknownN": "; {n} more could not be judged (insufficient rights; run as administrator to read more)",
   "lk.truncated": "; too many files, only the first 80 were checked",
   "lk.noneNow": "If none of them are locked right now, simply clean again.",
+  "lk.stopRetry": "Stop selected processes & retry clean",
+  "lk.stopNone": "Please select at least one process first",
+  "lk.stopConfirm": "Stop the selected processes and retry cleanup? Unsaved work may be lost:\n",
+  "lk.stopDone": "Stopped {s} process(es) ({f} failed)",
+  "lk.stopFail": "Failed to stop process: ",
   "lk.strong": "Likely (the program lives in that folder, or its command line contains the full path)",
   "lk.weak": "Also worth a look (the command line contains a file with the same name)",
   "lk.noCandidate": "No suspicious process was located — that is normal; Windows offers no API to map a file handle back to its process. Open \"Task Manager → Performance → Resource Monitor → CPU → Associated Handles\" and search the file name there to find the real holder.",

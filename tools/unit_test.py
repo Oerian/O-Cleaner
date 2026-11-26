@@ -400,9 +400,36 @@ def main() -> int:
 
         st6, b6 = _req("GET", "/favicon.ico")
         check("HTTP路由：favicon.ico 返回 200 且非空", st6 == 200 and len(b6) > 100, f"status={st6} len={len(b6)}")
+
+        st7, _ = _req("POST", "/__oc__/process/stop", body=b"{}")
+        check("HTTP路由：process/stop 空 pids 返回 400", st7 == 400, f"status={st7}")
     finally:
         srv.shutdown()
         srv.server_close()
+
+    # ---------- 进程停止护栏 ----------
+    r_stop = app.stop_lock_processes([0, 4, os.getpid()])
+    check("进程停止护栏：拒绝 PID<=4 与自身 PID",
+          r_stop.get("ok") and len(r_stop.get("skipped") or []) == 3
+          and not r_stop.get("stopped"), f"{r_stop}")
+
+    # ---------- 自定义数据打包导入/导出（含 fs_groups） ----------
+    orig_fg_path = app.FS_GROUPS_PATH
+    try:
+        with tempfile.TemporaryDirectory() as td_fg:
+            app.FS_GROUPS_PATH = Path(td_fg) / "fs-groups.json"
+            imp_rep = app._import_bundle({
+                "kind": "ocleaner-custom",
+                "fs_groups": [{"name": "TestGrp", "drive": "D", "paths": ["D:\\Foo", "D:\\Bar"]}],
+            })
+            exp_b = app._export_bundle()
+            check("自定义包导入导出：包含 fs_groups 往返",
+                  imp_rep.get("groups_added") == 1
+                  and len(exp_b.get("fs_groups") or []) == 1
+                  and exp_b["fs_groups"][0]["name"] == "TestGrp",
+                  f"imp={imp_rep} exp={exp_b.get('fs_groups')}")
+    finally:
+        app.FS_GROUPS_PATH = orig_fg_path
 
     # ---------- AI 批量识别与本地缓存 ----------
     import ocleaner.integrations as _integ

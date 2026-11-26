@@ -1530,6 +1530,11 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/elevate":
             # 一键提权重启（清理时遇到权限不足，不用找 bat 右键「以管理员运行」）
             return self._json(_core.elevate_relaunch())
+        if route == "/__oc__/process/stop":
+            pids = (body or {}).get("pids")
+            if not isinstance(pids, list) or not pids:
+                return self._json({"error": "pids 不能为空"}, 400)
+            return self._json(_core.stop_lock_processes(pids))
         if route == "/__oc__/ai/models":
             return self._json(_core.ai_list_models())
         if route == "/__oc__/ai/explain":

@@ -2186,6 +2186,7 @@ def _export_bundle() -> dict:
         "units": units,
         "overrides": load_overrides().get("targets", {}),
         "rules": load_custom_rules(),
+        "fs_groups": load_fs_groups(),
     }
 
 
@@ -2199,7 +2200,8 @@ def _import_bundle(body: dict) -> dict:
                          "（kind 应为 ocleaner-custom）")
     rep = {"units_added": 0, "units_updated": 0, "units_skipped": [],
            "overrides_applied": 0, "overrides_skipped": [],
-           "rules_added": 0, "rules_updated": 0, "rules_skipped": []}
+           "rules_added": 0, "rules_updated": 0, "rules_skipped": [],
+           "groups_added": 0, "groups_updated": 0}
 
     # 1) 换算单位：按 id 更新、按 label 去重，其余新增
     cfg = load_convert()
@@ -2323,6 +2325,32 @@ def _import_bundle(body: dict) -> dict:
             })
             rep["rules_added"] += 1
     save_custom_rules(rules)
+
+    # 4) 自定义聚合组（可选字段，兼容旧版导出的包）
+    if isinstance(body.get("fs_groups"), list):
+        groups = load_fs_groups()
+        by_gname = {str(g.get("name") or ""): g for g in groups if isinstance(g, dict)}
+        for g0 in body.get("fs_groups") or []:
+            if not isinstance(g0, dict):
+                continue
+            gname = str(g0.get("name") or "").strip()[:60]
+            gpaths = [os.path.normpath(str(x).strip()).lower()
+                      for x in (g0.get("paths") or []) if str(x).strip()]
+            if not gname or not gpaths:
+                continue
+            if gname in by_gname:
+                merged = list(dict.fromkeys((by_gname[gname].get("paths") or []) + gpaths))
+                by_gname[gname]["paths"] = merged[:200]
+                rep["groups_updated"] += 1
+            else:
+                groups.append({
+                    "id": str(g0.get("id") or f"grp-{int(time.time() * 1000) % 10 ** 10}"),
+                    "name": gname,
+                    "drive": str(g0.get("drive") or "").rstrip(":").upper(),
+                    "paths": list(dict.fromkeys(gpaths))[:200],
+                })
+                rep["groups_added"] += 1
+        save_fs_groups(groups)
     return rep
 
 
@@ -3748,6 +3776,76 @@ def find_lock_holders(paths: list) -> dict:
             candidates = candidates[:LOCK_CANDIDATE_LIMIT]
     return {"results": results, "candidates": candidates,
             "truncated": truncated, "ps_error": ps_error}
+
+
+_PROTECTED_PROCESS_NAMES = {
+    "system", "idle", "system idle process", "smss.exe", "csrss.exe",
+    "wininit.exe", "winlogon.exe", "services.exe", "lsass.exe",
+    "svchost.exe", "dwm.exe", "explorer.exe", "conhost.exe",
+    "audiodg.exe", "fontdrvhost.exe", "sihost.exe", "taskmgr.exe",
+    "runtimebroker.exe", "searchindexer.exe",
+}
+
+
+def _pid_process_name(pid: int) -> str:
+    """用 tasklist 读取指定 PID 的进程映像名（失败回空串）。"""
+    if not IS_WINDOWS or pid <= 4:
+        return ""
+    try:
+        r = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if line.startswith('"'):
+                return line.split('"', 2)[1].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def stop_lock_processes(pids: list) -> dict:
+    """按用户明确勾选的 PID 列表安全停止非系统关键进程。"""
+    if not IS_WINDOWS:
+        return {"ok": False, "error": "进程停止仅支持 Windows",
+                "stopped": [], "skipped": [], "failed": []}
+    self_pid = os.getpid()
+    parent_pid = os.getppid()
+    stopped: list[dict] = []
+    skipped: list[dict] = []
+    failed: list[dict] = []
+    seen: set[int] = set()
+    for raw in _as_list(pids)[:20]:
+        try:
+            pid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if pid in seen:
+            continue
+        seen.add(pid)
+        if pid <= 4 or pid == self_pid or pid == parent_pid:
+            skipped.append({"pid": pid, "name": "", "reason": "系统或本工具自身进程禁止结束"})
+            continue
+        pname = _pid_process_name(pid)
+        if pname.lower() in _PROTECTED_PROCESS_NAMES:
+            skipped.append({"pid": pid, "name": pname, "reason": "受保护的系统关键进程禁止结束"})
+            continue
+        try:
+            r = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True, text=True, timeout=10,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            if r.returncode == 0:
+                stopped.append({"pid": pid, "name": pname or str(pid)})
+            else:
+                err = (r.stderr or r.stdout or "").strip() or f"exit {r.returncode}"
+                failed.append({"pid": pid, "name": pname or str(pid), "error": err})
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"pid": pid, "name": pname or str(pid), "error": str(exc)})
+    return {"ok": True, "stopped": stopped, "skipped": skipped, "failed": failed}
 
 # 自动发现的深度上限 = 2（盘符根的直接子目录，及其子目录）。
 # 这里刻意用下面两段展开的循环实现，而不是递归 + 深度常量：

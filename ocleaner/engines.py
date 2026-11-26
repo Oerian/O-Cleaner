@@ -699,27 +699,27 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
 
             常驻缓冲原地解析：记录不再逐条切片拷贝（百万级 1KB 分配），
             块间零头（跨 run 边界不足一条记录的尾巴）留在缓冲头部，仅做
-            每块一次 ≤1KB 的小搬运 —— 旧版每 32MB 块要整块 memcpy 两次。
+            每块一次 ≤1KB 的小搬运 —— 32MB 大块减少系统调用次数。
             """
-            CH = max(frs_size * 1024, 16 * 1024 * 1024) - \
-                (max(frs_size * 1024, 16 * 1024 * 1024) % frs_size)
+            CH = max(frs_size * 1024, 32 * 1024 * 1024)
+            CH -= CH % frs_size
             buf = bytearray(CH + frs_size)     # 尾部留一条记录给零头拼接
             held = 0                           # 头部已持有的上块零头字节数
             for lcn, clusters in runs:
+                if lcn <= 0 or clusters <= 0:
+                    continue                   # 跳过稀疏或异常盘区，避免误读 0 号簇
                 pos = lcn * bpc
                 left = clusters * bpc
                 while left > 0:
                     want = min(left, CH)
-                    want -= want % frs_size
-                    if want <= 0:
-                        break
                     got = _mft_read_at(h, pos, want,
                                        memoryview(buf)[held:held + want])
                     if got <= 0:
-                        return
+                        break                  # 跳过单个不可读盘区，不中止整盘扫描
                     held += got
                     usable = held - held % frs_size
-                    yield buf, usable
+                    if usable > 0:
+                        yield buf, usable
                     held -= usable             # ≤ frs_size 的零头挪回头部
                     if held:
                         buf[:held] = buf[usable:usable + held]
@@ -727,36 +727,41 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                     left -= got
             # 尾块不足一条记录：丢弃（截断的卷尾）
 
+        ap_append = arr_parent.append
+        as_append = arr_size.append
+        af_append = arr_flags.append
+        parse_at = _mft_parse_at
+        ext_bump = _core._ext_bump_raw
+
         # 读/解析流水线（2026-11-03）：**实测负优化，已回退**。C 盘探针：
         # 串行 read 4.44s + 解析 ~6.1s = 11.09s；改后台读线程 + 队列深度 3
         # 后 read 段膨胀到 21.14s、总耗时 35.55s —— 解析端纯 Python 几乎
         # 不放 GIL，读线程每次 DeviceIoControl 后重新拿 GIL 都要挨系统
         # 切换间隔（1140 次 × 1MB 的往返被拉长 5 倍）。ctypes 释放 GIL
         # 不等于重叠免费：**GIL 争用成本 > I/O 重叠收益**，此类流水线
-        # 在纯 Python 消费端面前不要重试。提速改走「加大读块」路线
-        # （减少系统调用次数，见 CH 取值）。
+        # 在纯 Python 消费端面前不要重试。提速改走「加大读块 + 局部别名」路线。
         for chunk, usable in read_chunks():
             for roff in range(0, usable, frs_size):
                 idx = records
                 records += 1
                 in_use = roff + 0x18 <= usable and (chunk[roff + 0x16] & 0x01)
-                info = _mft_parse_at(chunk, roff, frs_size,
-                                     with_mtime) if in_use else None
+                info = parse_at(chunk, roff, frs_size,
+                                with_mtime) if in_use else None
                 if info is None:
-                    arr_parent.append(0)
-                    arr_size.append(0)
-                    arr_flags.append(0)
+                    ap_append(0)
+                    as_append(0)
+                    af_append(0)
                     continue
                 p, name_raw, size, is_dir, mtime = info
-                arr_parent.append(p if 0 <= p < (1 << 47) else 0)
-                arr_size.append(size)
-                arr_flags.append(1 if is_dir else 0)
+                ap_append(p if 0 <= p < (1 << 47) else 0)
+                as_append(size)
+                af_append(1 if is_dir else 0)
                 if is_dir:
                     if name_raw and idx != 5:
                         dir_names[idx] = name_raw     # 惰性解码（见上）
                 elif name_raw:
                     if ext_stats:
-                        _core._ext_bump_raw(exts, name_raw, size)
+                        ext_bump(exts, name_raw, size)
                     if size >= f_floor or p == 5:
                         # 与 _wiztree_parse 同一门槛：达标文件 + 盘根全保留
                         # （AMTAG.BIN 这类小体积隐藏文件必须进「隐藏项」页签）
