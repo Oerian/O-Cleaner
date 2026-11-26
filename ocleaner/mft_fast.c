@@ -1,14 +1,25 @@
 /* Minimal Win32 C99 accelerator for O-Cleaner MFT record chunk parsing.
- * Compiles with MSVC (`cl /O2 /LD mft_fast.c /Fe:mft_fast.dll`)
- * or MinGW (`gcc -O2 -shared mft_fast.c -o mft_fast.dll`).
+ * Compiles with MSVC (`cl /O2 /MT /LD mft_fast.c /Fe:mft_fast.dll`)
+ * or MinGW (`gcc -O2 -shared -static mft_fast.c -o mft_fast.dll`).
  */
 #include <stdint.h>
+#include <string.h>
 
 #ifdef _WIN32
 #define OC_EXPORT __declspec(dllexport)
 #else
 #define OC_EXPORT
 #endif
+
+#define EXT_SLOTS 4096u
+
+typedef struct {
+    uint64_t bytes;
+    uint32_t count;
+    uint32_t hash;
+    uint8_t  len;      /* UTF-16LE byte length (<= 32, even) */
+    uint8_t  key[32];
+} ExtSlot;
 
 static inline uint16_t rd_u16(const uint8_t *p) {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
@@ -24,20 +35,64 @@ static inline uint64_t rd_u64(const uint8_t *p) {
 }
 
 OC_EXPORT int mft_fast_version(void) {
-    return 1;
+    return 2;
 }
 
-/* Parse `n_recs = usable / frs_size` MFT records in `buf` (in-place USA fixup).
- *
- * out_parent[i] : uint64 parent FRN (0 on invalid/unused)
- * out_size[i]   : uint64 real size (0 on invalid/unused)
- * out_flags[i]  : uint8 bit0 = is_dir, bit1 = valid_in_use
- * out_mtime[i]  : uint64 FILETIME (only filled when with_mtime != 0)
- * out_name_idx[k], out_name_off[k], out_name_len[k] :
- *   kept records with valid $FILE_NAME raw UTF-16LE bytes (dirs, root files,
- *   files >= f_floor, or all files when ext_stats != 0).
- * Returns k (>= 0), or -1 on invalid parameters.
+/* Try to aggregate UTF-16LE extension into fixed ExtSlot[4096] hash table.
+ * Returns 1 if aggregated in C, 0 if caller should fall back to Python.
  */
+static int ext_bump_c(ExtSlot *tbl, const uint8_t *name, uint32_t nlen, uint64_t size) {
+    if (!tbl) return 0;
+    int32_t dot = -1;
+    for (int32_t j = (int32_t)nlen - 2; j >= 0; j -= 2) {
+        if (name[j] == '.' && name[j + 1] == 0) {
+            dot = j;
+            break;
+        }
+    }
+    uint8_t kbuf[32];
+    uint8_t klen = 0;
+    if (dot >= 0) {
+        uint32_t start = (uint32_t)dot + 2u;
+        uint32_t rem = nlen - start;
+        if (rem > 32u) rem = 32u;
+        for (uint32_t j = 0; j + 1 < rem; j += 2) {
+            uint8_t lo = name[start + j];
+            uint8_t hi = name[start + j + 1];
+            if (hi != 0) return 0;  /* non-ASCII ext -> Python handles Unicode lower() */
+            if (lo >= 'A' && lo <= 'Z') lo = (uint8_t)(lo + 32);
+            kbuf[j] = lo;
+            kbuf[j + 1] = 0;
+        }
+        klen = (uint8_t)(rem & ~1u);
+    }
+    uint32_t h = 2166136261u;
+    for (uint32_t j = 0; j < klen; j++) {
+        h ^= kbuf[j];
+        h *= 16777619u;
+    }
+    uint32_t mask = EXT_SLOTS - 1u;
+    uint32_t idx = h & mask;
+    for (uint32_t probe = 0; probe < 64u; probe++) {
+        ExtSlot *s = &tbl[idx];
+        if (s->count == 0) {
+            s->hash = h;
+            s->len = klen;
+            if (klen) memcpy(s->key, kbuf, klen);
+            s->bytes = size;
+            s->count = 1;
+            return 1;
+        }
+        if (s->hash == h && s->len == klen && (klen == 0 || memcmp(s->key, kbuf, klen) == 0)) {
+            s->bytes += size;
+            s->count += 1;
+            return 1;
+        }
+        idx = (idx + 1u) & mask;
+    }
+    return 0;
+}
+
 OC_EXPORT int32_t mft_scan_chunk(
     uint8_t *buf,
     uint32_t usable,
@@ -51,7 +106,8 @@ OC_EXPORT int32_t mft_scan_chunk(
     uint64_t *out_mtime,
     uint32_t *out_name_idx,
     uint32_t *out_name_off,
-    uint16_t *out_name_len
+    uint16_t *out_name_len,
+    ExtSlot *out_ext_tbl
 ) {
     if (!buf || frs_size < 0x40 || usable < frs_size ||
         !out_parent || !out_size || !out_flags ||
@@ -73,7 +129,6 @@ OC_EXPORT int32_t mft_scan_chunk(
             out_mtime[i] = 0;
         }
 
-        /* in_use flag at 0x16 & magic "FILE" (0x454C4946 little-endian) */
         if ((rec[0x16] & 0x01) == 0 || rd_u32(rec) != 0x454C4946u) {
             continue;
         }
@@ -167,10 +222,19 @@ OC_EXPORT int32_t mft_scan_chunk(
         }
 
         if (name_len > 0) {
-            if (is_dir || ext_stats || size >= f_floor || parent == 5) {
+            int need_py = is_dir || (size >= f_floor) || (parent == 5);
+            uint16_t ext_ok = 0;
+            if (!is_dir && ext_stats && out_ext_tbl) {
+                if (ext_bump_c(out_ext_tbl, buf + name_off, name_len, size)) {
+                    ext_ok = 0x8000u;
+                } else {
+                    need_py = 1;
+                }
+            }
+            if (need_py) {
                 out_name_idx[kept] = i;
                 out_name_off[kept] = name_off;
-                out_name_len[kept] = name_len;
+                out_name_len[kept] = (uint16_t)(name_len | ext_ok);
                 kept++;
             }
         }

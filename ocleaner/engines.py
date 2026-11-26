@@ -605,6 +605,16 @@ def _mft_read_at(h, offset: int, size: int, buf) -> int:
 _MFT_FAST_CACHE = False  # False=未探测, None=不可用, CDLL=可用
 
 
+class _ExtSlot(ctypes.Structure):
+    _fields_ = [
+        ("bytes", ctypes.c_uint64),
+        ("count", ctypes.c_uint32),
+        ("hash", ctypes.c_uint32),
+        ("len", ctypes.c_uint8),
+        ("key", ctypes.c_uint8 * 32),
+    ]
+
+
 def _load_mft_fast():
     """若同目录下存在编译好的 mft_fast.dll 且 ABI 匹配，加载之；否则回退纯 Python。"""
     global _MFT_FAST_CACHE
@@ -623,7 +633,7 @@ def _load_mft_fast():
         try:
             lib = ctypes.CDLL(dll_path)
             lib.mft_fast_version.restype = ctypes.c_int
-            if lib.mft_fast_version() != 1:
+            if lib.mft_fast_version() != 2:
                 continue
             lib.mft_scan_chunk.argtypes = [
                 ctypes.c_void_p,                    # buf
@@ -639,6 +649,7 @@ def _load_mft_fast():
                 ctypes.POINTER(ctypes.c_uint32),    # out_name_idx
                 ctypes.POINTER(ctypes.c_uint32),    # out_name_off
                 ctypes.POINTER(ctypes.c_uint16),    # out_name_len
+                ctypes.POINTER(_ExtSlot),           # out_ext_tbl
             ]
             lib.mft_scan_chunk.restype = ctypes.c_int32
             _MFT_FAST_CACHE = lib
@@ -790,6 +801,7 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
         # 在纯 Python 消费端面前不要重试。提速改走「加大读块 + 局部别名」路线。
         fast_dll = _load_mft_fast()
         c_buf_cap = max(1024, (max(frs_size * 1024, 32 * 1024 * 1024) // frs_size) + 2)
+        c_ext_tbl = None
         if fast_dll is not None:
             c_parent = (ctypes.c_int64 * c_buf_cap)()
             c_size = (ctypes.c_int64 * c_buf_cap)()
@@ -798,6 +810,8 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
             c_nidx = (ctypes.c_uint32 * c_buf_cap)()
             c_noff = (ctypes.c_uint32 * c_buf_cap)()
             c_nlen = (ctypes.c_uint16 * c_buf_cap)()
+            if ext_stats:
+                c_ext_tbl = (_ExtSlot * 4096)()
 
         for chunk, usable in read_chunks():
             n_recs = usable // frs_size
@@ -807,7 +821,7 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                     c_raw, usable, frs_size, f_floor,
                     1 if ext_stats else 0, 1 if with_mtime else 0,
                     c_parent, c_size, c_flags, c_mtime,
-                    c_nidx, c_noff, c_nlen,
+                    c_nidx, c_noff, c_nlen, c_ext_tbl,
                 )
                 if kept >= 0:
                     base_idx = records
@@ -820,13 +834,14 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                         li = c_nidx[k]
                         idx = base_idx + li
                         noff = c_noff[k]
-                        nlen = c_nlen[k]
+                        raw_len = c_nlen[k]
+                        nlen = raw_len & 0x7FFF
                         name_raw = bytes(mv_chunk[noff:noff + nlen])
                         if c_flags[li]:
                             if idx != 5:
                                 dir_names[idx] = name_raw
                         else:
-                            if ext_stats:
+                            if ext_stats and not (raw_len & 0x8000):
                                 ext_bump(exts, name_raw, c_size[li])
                             p = c_parent[li]
                             sz = c_size[li]
@@ -873,6 +888,17 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                     on_progress(min(1.0, records / est_records))
                 except Exception:
                     pass
+
+        if c_ext_tbl is not None:
+            for slot in c_ext_tbl:
+                if slot.count:
+                    ext = bytes(slot.key[:slot.len]).decode("utf-16-le")
+                    cur = exts.get(ext)
+                    if cur is None:
+                        exts[ext] = [slot.bytes, slot.count]
+                    else:
+                        cur[0] += slot.bytes
+                        cur[1] += slot.count
 
         # 目录体积聚合 + 路径拼装（2026-11-03 定向化）：只为「会进树的
         # 目录」（体积达标 / 一层 / 文件父目录）拼路径，35 万目录里省掉
