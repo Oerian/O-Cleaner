@@ -773,7 +773,12 @@
      改成 flex 子项（不再 fixed）：body 是 height:100vh 的纵向 flex，
      两栏各自滚动后，底栏本来就常驻可见，fixed 反而会盖住左栏最后一行。 */
   footer{flex:none;z-index:40;background:var(--foot-bg);
-         backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:11px 20px}
+         backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:11px 20px;
+         transition:border-color .15s,box-shadow .15s}
+  footer.has-sel{border-top-color:var(--accent);box-shadow:0 -4px 18px rgba(37,99,235,.08)}
+  .panel.acc.open{border-color:var(--line2)}
+  #fsChart .vrow .tiny.ghost{opacity:.68;transition:opacity .12s}
+  #fsChart .vrow:hover .tiny.ghost,#fsChart .vrow:focus-within .tiny.ghost,#fsChart .vrow.kbd .tiny.ghost{opacity:1}
   .frow{display:flex;align-items:center;gap:14px;max-width:1560px;margin:0 auto;flex-wrap:wrap}
   .selinfo{font-size:13px;color:var(--dim)}
   .selinfo b{color:var(--fg);font-size:16px;font-variant-numeric:tabular-nums}
@@ -2315,6 +2320,7 @@ function updateFooter() {
   $("selFree").innerHTML = (d && total > 0)
     ? ` · ${t("foot.afterClean","清理后 {drive}: 可用约").replace("{drive}", d.letter)} <span class="free">${fmt(d.free + total)}</span>` : "";
   $("btnClean").disabled = n === 0 || busy;
+  document.querySelector("footer")?.classList.toggle("has-sel", n > 0);
   const mv = $("btnMoveSel");
   if (mv) {
     mv.style.display = selPaths.size ? "" : "none";
@@ -3381,7 +3387,6 @@ function confirmDialog() {
   $("mCancel").addEventListener("click", closeModal);
   $("mGo").addEventListener("click", doClean);
 }
-function closeModal() { $("mask").classList.remove("on"); }
 
 // P3-3 焦点管理 v2（二轮审计 3.1：修三处边界问题）：
 // ① 开窗自动聚焦「安全按钮」（取消/关闭类优先），杜绝回车误触删除；

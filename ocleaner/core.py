@@ -230,6 +230,9 @@ from ocleaner.scheduler import (DEFAULT_SCHEDULE, schedule_state,  # noqa: F401 
                                 _resolve_preset, _schedule_run_interval,  # noqa: F401 re-export
                                 _apply_preset_to_targets, _scheduler_loop,  # noqa: F401 re-export
                                 _run_scheduled, _error_result)  # noqa: F401 re-export
+from ocleaner.receipts import (load_history, append_history,  # noqa: F401 re-export
+                               _write_receipt, list_receipts,  # noqa: F401 re-export
+                               read_receipt)  # noqa: F401 re-export
 
 
 def _image_mime(data: bytes) -> str:
@@ -2364,110 +2367,10 @@ def _bundle_unit_bytes(u: dict) -> int | None:
 
 
 
-def load_history() -> list:
-    data = _load_json(HISTORY_PATH, [], use_cache=False)
-    return data if isinstance(data, list) else []
-
-
-def append_history(entry: dict) -> None:
-    # 两层锁：_lock 防本进程多线程交错，_cross_process_lock 防双开实例
-    # 各自「读-改-写」互相覆盖（丢的是清理凭据，事后无法追溯删了什么）。
-    with _lock, _cross_process_lock("history"):
-        hist = load_history()
-        hist.insert(0, entry)
-        _atomic_write(HISTORY_PATH, hist[:200])
-    # 同步落一份独立回执：history.json 只保留最近 200 条且可能被清空，
-    # 回执文件是每次清理的永久凭据（路径/体积/文件数/结果），用户可单独拷走。
-    try:
-        _write_receipt(entry)
-    except Exception:
-        traceback.print_exc()  # 回执失败不影响清理本身，也不影响历史入账
-
-
 RECEIPT_DIR = RUNTIME_DIR / "receipts"
 # 改名暂存的中断恢复日志：rm_tree_strict 改名前后登记，启动时据此还原
 PENDING_DELETES_PATH = RUNTIME_DIR / "pending-deletes.json"
-
-
-def _write_receipt(entry: dict) -> None:
-    """把一次清理的逐项结果写成独立 JSON 回执，落在数据目录 receipts/ 下。
-
-    文件名取自清理记录自身的时间戳（与 history.json 里的条目一一对应）；
-    解析不出时退回当前时间。
-    """
-    RECEIPT_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = str(entry.get("time") or "")
-    stamp = re.sub(r"[^0-9]", "", stamp)[:15]  # YYYYMMDD-HHMMSS
-    if len(stamp) < 14:
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S").replace("-", "")[:14]
-    path = RECEIPT_DIR / f"cleanup-{stamp}.json"
-    n = 0
-    while path.exists():  # 同一秒多次清理时加序号，绝不覆盖
-        n += 1
-        path = RECEIPT_DIR / f"cleanup-{stamp}-{n}.json"
-    receipt = {"tool": "O-Cleaner", "app_version": APP_VERSION, **entry}
-    _atomic_write(path, receipt)
-
-
-def list_receipts(q: str = "", drive: str = "", limit: int = 50) -> dict:
-    """列出 data/receipts/ 下已落盘的清理回执摘要（按文件名倒序，支持关键词与盘符过滤）。"""
-    q0 = str(q or "").strip().lower()
-    drv0 = str(drive or "").strip().rstrip(":").upper()
-    lim = max(1, min(200, int(limit or 50)))
-    items: list[dict] = []
-    if not RECEIPT_DIR.is_dir():
-        return {"ok": True, "receipts": [], "total": 0}
-    files = sorted(RECEIPT_DIR.glob("cleanup-*.json"), reverse=True)
-    for fp in files:
-        data = _load_json(fp, None, use_cache=True)
-        if not isinstance(data, dict):
-            continue
-        r_drv = str(data.get("drive") or "").upper()
-        if drv0 and drv0 not in r_drv.split(","):
-            continue
-        res = data.get("results") or []
-        if q0:
-            hay = " ".join([
-                fp.name,
-                str(data.get("time") or ""),
-                str(data.get("trigger") or ""),
-                r_drv,
-                " ".join(f"{x.get('label', '')} {x.get('path', '')}"
-                         for x in res if isinstance(x, dict)),
-            ]).lower()
-            if q0 not in hay:
-                continue
-        items.append({
-            "name": fp.name,
-            "time": str(data.get("time") or ""),
-            "drive": r_drv,
-            "trigger": str(data.get("trigger") or ""),
-            "freed": int(data.get("freed") or 0),
-            "freed_h": str(data.get("freed_h") or human(int(data.get("freed") or 0))),
-            "failed": int(data.get("failed") or 0),
-            "targets": int(data.get("targets") or len(res)),
-        })
-        if len(items) >= lim:
-            break
-    return {"ok": True, "receipts": items, "total": len(items)}
-
-
-def read_receipt(name: str) -> tuple[dict | None, str]:
-    """按文件名读取单份清理回执（严格限制单段 .json 文件名，杜绝路径穿越）。"""
-    nm = str(name or "").strip()
-    if not re.fullmatch(r"[A-Za-z0-9._-]+\.json", nm) or ".." in nm:
-        return None, "非法回执文件名"
-    try:
-        base = RECEIPT_DIR.resolve()
-        fp = (RECEIPT_DIR / nm).resolve()
-        if fp.parent != base or not fp.is_file():
-            return None, "回执文件不存在"
-        data = json.loads(fp.read_text(encoding="utf-8-sig"))
-        if not isinstance(data, dict):
-            return None, "回执内容格式无效"
-        return data, ""
-    except (OSError, ValueError) as exc:
-        return None, f"读取回执失败：{exc}"
+# 清理历史与回执档案已迁出至 ocleaner/receipts.py
 
 
 # ======================================================================
