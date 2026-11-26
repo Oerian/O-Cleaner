@@ -75,3 +75,7 @@ tools/_tmp_*.py
 
 # 编年文档（参与模型/用户提示词）—— 仅本机留存，不进 GitHub
 CHRONICLE.md
+
+# 本机编译产出的原生二进制（可由 tools/make_exe.py 自动编译）
+O-Cleaner.exe
+ocleaner/mft_fast.dll
