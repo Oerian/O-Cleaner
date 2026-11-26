@@ -1222,6 +1222,50 @@
       </div>
     </div>
 
+    <div class="panel acc" data-acc="aiprompt">
+      <h3><span data-i18n="pane.aiprompt">AI 提示词与导入</span> <span class="hint" data-i18n="aiprompt.hint">预设生成 · 编辑保存 · 一键导入</span></h3>
+      <div class="ab">
+        <div style="color:var(--dim);font-size:12.5px;margin-bottom:10px;line-height:1.6"
+             data-i18n="aiprompt.help">
+          按预设生成给外部 AI 助手的提示词（可自动附带当前盘未识别文件清单），自由编辑或另存为自定义预设；把 AI 返回的固定格式 JSON 贴入下方即可一键导入生效。
+        </div>
+        <div class="field" style="gap:6px">
+          <select id="aiPresetSel" style="flex:1"></select>
+          <button id="btnAiGen" class="tiny ghost" data-i18n="aiprompt.gen">刷新提示词</button>
+          <button id="btnAiCopy" class="tiny primary" data-i18n="aiprompt.copy">复制提示词</button>
+        </div>
+        <div class="field" style="gap:6px">
+          <input type="text" id="aiPresetName" data-i18n-ph="aiprompt.namePh"
+                 placeholder="输入预设名称即可保存当前提示词…" style="flex:1">
+          <button id="btnAiPresetSave" class="tiny" data-i18n="aiprompt.savePreset">保存预设</button>
+          <button id="btnAiPresetDel" class="tiny danger" style="display:none"
+                  data-i18n="aiprompt.delPreset">删除</button>
+        </div>
+        <div class="field" style="margin-bottom:12px">
+          <textarea id="aiPromptText" rows="7"
+                    style="width:100%;resize:vertical;font-family:var(--mono);font-size:11.5px;line-height:1.5"
+                    data-i18n-ph="aiprompt.promptPh"
+                    placeholder="选择预设或点击「刷新提示词」生成…"></textarea>
+        </div>
+        <div style="border-top:1px solid var(--line);padding-top:11px;margin-top:4px">
+          <div style="color:var(--dim);font-size:12px;margin-bottom:6px" data-i18n="aiprompt.importHead">
+            粘贴 AI 输出的固定格式内容（自动提取 ```json 代码块），一键导入生效：
+          </div>
+          <textarea id="aiImportText" rows="5"
+                    style="width:100%;resize:vertical;font-family:var(--mono);font-size:11.5px;line-height:1.5"
+                    data-i18n-ph="aiprompt.importPh"
+                    placeholder='粘贴 AI 输出的 {"kind":"ocleaner-custom", ...} 内容…'></textarea>
+          <div class="field" style="gap:8px;margin-top:8px">
+            <button id="btnAiImport" class="primary" style="flex:1"
+                    data-i18n="aiprompt.importBtn">一键导入生效</button>
+            <button id="btnAiImportClear" class="tiny ghost"
+                    data-i18n="aiprompt.clear">清空</button>
+          </div>
+          <div id="aiImportMsg" style="color:var(--dim2);font-size:11.5px;margin-top:6px;line-height:1.6"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="panel acc" data-acc="schedule">
       <h3 data-i18n="pane.sched">定时自动清理</h3>
       <div class="ab">
@@ -2004,17 +2048,18 @@ function _dwRenderTrend(body, dk) {
       "剩余空间趋势从今天开始记录，明天起这里会画出柱状图"))}</div>`;
     return;
   }
-  const lo0 = Math.min(...pts.map(p => p.free)), hi0 = Math.max(...pts.map(p => p.free));
+  const showPts = pts.slice(-10);
+  const lo0 = Math.min(...showPts.map(p => p.free)), hi0 = Math.max(...showPts.map(p => p.free));
+  const loAll = Math.min(...pts.map(p => p.free)), hiAll = Math.max(...pts.map(p => p.free));
   const span = hi0 - lo0;
   let lo = lo0, hi = hi0;
   if (span > 0) { lo -= span * 0.18; hi += span * 0.18; }
   else { const zpad = Math.max((dk.total || 0) * 0.01, 2 * 1024 ** 3); lo -= zpad; hi += zpad; }
   const tipFree = t("trend.tipFree", "剩余");
-  const showPts = pts.slice(-10);
   // 数值带常显（三段定高，同一基线对齐）+ 悬停 title；最多展示近 10 天防日期挤压截断
   body.innerHTML =
-    `<div class="sdchart" style="height:98px">${showPts.map((p, i) => {
-      const h = Math.max(4, Math.round((p.free - lo) / (hi - lo) * 100));
+    `<div class="sdchart" style="height:108px">${showPts.map((p, i) => {
+      const h = Math.max(6, Math.round((p.free - lo) / (hi - lo) * 100));
       return `<span class="extcol" title="${md(p.t)} · ${tipFree} ${fmt(p.free)}"` +
         `${i === showPts.length - 1 ? ' data-last="1"' : ""}>
         <span class="extvval">${fmt(p.free)}</span>
@@ -2025,7 +2070,7 @@ function _dwRenderTrend(body, dk) {
         "剩余空间趋势（{d1} ~ {d2}）：{a} → {b} · 最低 {min} · 最高 {max}")
       .replace("{d1}", md(pts[0].t)).replace("{d2}", md(pts[pts.length - 1].t))
       .replace("{a}", fmt(pts[0].free)).replace("{b}", fmt(pts[pts.length - 1].free))
-      .replace("{min}", fmt(lo0)).replace("{max}", fmt(hi0)))}</div>`;
+      .replace("{min}", fmt(loAll)).replace("{max}", fmt(hiAll)))}</div>`;
 }
 
 /* 清理记录（当前盘）：/__oc__/history 最近 5 次带释放量的清理，60s 缓存 */
@@ -4055,7 +4100,7 @@ async function startFullScan() {
       <div class="scanfacts">
         ${t("scan.facts","展开 {n} 层；更深处点击任意目录下钻看子项（可按占用/名称排序）。").replace("{n}", depth)}
         <b>${t("scan.keepOpen","请保持本窗口与命令行窗口开启。")}</b>
-        ${(() => {
+        <span id="scanEngHint">${(() => {
           const ep = ($("engPref") && $("engPref").value) || "auto";
           const wiz = !!STATE?.wiztree?.found;
           const adm = !!STATE?.is_admin;
@@ -4071,13 +4116,13 @@ async function startFullScan() {
           if (wiz) return t("scan.wizOn","（已启用 WizTree 加速）");
           if (adm) return t("scan.mftOn","（已启用内置 MFT 直读）");
           return t("scan.wizOff","（未装 WizTree，逐目录递归会慢一些）");
-        })()}
+        })()}</span>
       </div>
     </div>`;
 
   const paint = p => {
     const sec = $("scanSec"), bar = $("scanBar"),
-          st = $("scanStage"), hint = $("scanHint");
+          st = $("scanStage"), hint = $("scanHint"), eh = $("scanEngHint");
     if (!bar) return;                                     // 已被别的视图替换掉
     if (sec) sec.textContent = String(Math.round((Date.now() - t0) / 1000));
     const ind = !p || !p.active || p.indeterminate;
@@ -4085,6 +4130,11 @@ async function startFullScan() {
     bar.firstElementChild.style.width =
       ind ? "" : Math.max(3, Math.min(100, Number(p.pct) || 0)) + "%";
     if (st && p && p.text) st.textContent = p.text;
+    if (eh && p && p.stage) {
+      if (p.stage === "mft") eh.textContent = t("scan.mftOn","（已启用内置 MFT 直读）");
+      else if (p.stage === "export" || p.stage === "parse") eh.textContent = t("scan.wizOn","（已启用 WizTree 加速）");
+      else if (p.stage === "walk" || p.stage === "ps") eh.textContent = t("scan.wizOff","（未装 WizTree，逐目录递归会慢一些）");
+    }
     if (hint) hint.textContent = ind
       ? t("fs.progressInd","这一步无法预知总工作量，条纹表示仍在推进")
       : t("fs.progressPct","整体进度 {n}%").replace("{n}", Math.round(p.pct));
@@ -5497,8 +5547,10 @@ function renderSubdirList(it, r) {
       <div class="dtip">${t("part.treeTip",
         "带「▸ 可继续展开」的目录可以点开继续往下拆（WizTree 加速下任意层都是即时返回）。绿色是知识库判定可清理的，橙红是建议保留的，灰色是知识库不认识、工具不做判断的。")}</div>
     </div>
-    ${r.engine === "wiztree"
-      ? `<div class="enginebar fast"><b>${t("part.mftFast","WizTree MFT 加速")}</b>
+    ${r.engine === "wiztree" || r.engine === "mft"
+      ? `<div class="enginebar fast"><b>${r.engine === "mft"
+          ? t("fs.mftOwn2","MFT 直读加速")
+          : t("part.mftFast","WizTree MFT 加速")}</b>
          <span>${t("part.mftNote","子项清单直接取自全盘 MFT 快照，未再次扫描磁盘。")}</span></div>`
       : ""}`;
   // 点「可继续展开」的行继续下钻，形成真正的多级目录浏览
@@ -5627,11 +5679,25 @@ $("fsDepthSel").addEventListener("change", () => {
    wiztree/mft 强制固定。选择存后端 config/engine_speed.json（跨会话），
    初始化时从 /__oc__/engine/pref 读回。 */
 $("engPref").addEventListener("change", async () => {
+  FS_CACHE.clear();
   try {
     const r = await apiJSON(`${API}/__oc__/engine/pref`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pref: $("engPref").value }) });
+    const eh = $("scanEngHint");
+    if (eh) {
+      const ep = r.pref || $("engPref").value;
+      const wiz = !!STATE?.wiztree?.found, adm = !!STATE?.is_admin;
+      eh.textContent = ep === "mft"
+        ? (adm ? t("scan.mftOn","（已选内置 MFT 直读）") : t("scan.mftNeedAdmin","（MFT 需管理员权限，将回退可用引擎）"))
+        : ep === "wiztree"
+        ? (wiz ? t("scan.wizOn","（已启用 WizTree 加速）") : t("scan.wizOff","（未装 WizTree，逐目录递归会慢一些）"))
+        : (wiz && adm ? t("scan.autoBoth","（自动择快：WizTree / 内置 MFT）")
+           : wiz ? t("scan.wizOn","（已启用 WizTree 加速）")
+           : adm ? t("scan.mftOn","（已启用内置 MFT 直读）")
+           : t("scan.wizOff","（未装 WizTree，逐目录递归会慢一些）"));
+    }
     toast(t("eng.saved","扫描引擎偏好已保存：{p}").replace("{p}", r.pref || "?"));
   } catch (e) { toast(String(e && e.message || e)); }
 });
@@ -7136,6 +7202,329 @@ $("bundleFile").addEventListener("change", async e => {
 });
 $("ruleName").addEventListener("keydown", e => { if (e.key === "Enter") saveRule(); });
 
+/* ---- AI 提示词预设生成器 & AI 输出固定格式一键导入 ---- */
+(() => {
+  const LS_KEY = "ocleaner.aiPresets.v1";
+  const _collectFsItems = (limit = 40) => {
+    const out = [];
+    if (FS && Array.isArray(FS.nodes)) {
+      const walk = list => {
+        for (const n of list || []) {
+          if (!n || !n.path) continue;
+          if (n.verdict === "unk" || !n.verdict) {
+            out.push({ path: n.path, size: n.size || 0, size_h: n.size_h || fmt(n.size || 0), kind: "dir" });
+          }
+          if (n.children && n.children.length) walk(n.children);
+        }
+      };
+      walk(FS.nodes);
+      for (const f of FS.rootfiles || []) {
+        if (f && f.path && (f.verdict === "unk" || !f.verdict)) {
+          out.push({ path: f.path, size: f.size || 0, size_h: f.size_h || fmt(f.size || 0), kind: "file" });
+        }
+      }
+    }
+    out.sort((a, b) => (b.size || 0) - (a.size || 0));
+    return out.slice(0, limit);
+  };
+
+  const _builtinPresets = () => {
+    const drv = (STATE && STATE.current_drive) || "C";
+    const items = _collectFsItems(40);
+    const itemLines = items.length
+      ? items.map(x => `- ${x.path} (${x.size_h}, ${x.kind})`).join("\n")
+      : `（当前尚未对 ${drv}: 盘执行全盘扫描，请先扫描或在此手动粘贴路径清单）\n- ${drv}:\\ExampleCache (2.4 GB, dir)\n- ${drv}:\\Temp\\build.log (512 MB, file)`;
+    return [
+      {
+        id: "builtin:fs_clean",
+        name: "全盘未识别文件/目录清理判定（自动带入扫描清单）",
+        build: () =>
+`你是 Windows 磁盘清理与系统安全专家。请逐条评估以下 ${drv}: 盘未识别目录/文件是否可以安全清理，并严格只输出一个符合 O-Cleaner 导入格式的 JSON 代码块（不要额外废话）。
+
+【输出固定格式要求】
+\`\`\`json
+{
+  "kind": "ocleaner-custom",
+  "overrides": {
+    "路径键(保持原样大小写与反斜杠)": {
+      "label": "简短中文名称(<=20字)",
+      "label_kind": "clean 或 keep 或 unk",
+      "cleanable": true,
+      "what": "它是什么（1~2句话）",
+      "rebuild": "删后是否会自动重建/影响",
+      "impact": "删除后的风险或影响",
+      "keep_if": "什么情况下建议保留",
+      "note": "一句话操作建议"
+    }
+  }
+}
+\`\`\`
+判定原则：不确定的目录务必设为 "label_kind": "keep", "cleanable": false；仅缓存/临时/日志等确认可重建项设为 "clean" + true。
+
+【待评估 ${drv}: 盘清单】
+${itemLines}`
+      },
+      {
+        id: "builtin:fs_groups",
+        name: "全盘目录归类分组 + 清理规则（fs_groups + overrides）",
+        build: () =>
+`请帮我把以下 ${drv}: 盘目录按用途归纳为几个自定义聚合分组（如「开发编译缓存」「游戏录屏」「安装包归档」），并同步给出每个路径的清理判定，严格输出 O-Cleaner 固定导入 JSON：
+
+\`\`\`json
+{
+  "kind": "ocleaner-custom",
+  "fs_groups": [
+    {
+      "name": "分组名称",
+      "paths": ["${drv}:\\\\Path1", "${drv}:\\\\Path2"]
+    }
+  ],
+  "overrides": {
+    "${drv}:\\\\Path1": {
+      "label": "简短名称",
+      "label_kind": "clean",
+      "cleanable": true,
+      "what": "用途说明",
+      "note": "清理建议"
+    }
+  }
+}
+\`\`\`
+
+【当前 ${drv}: 盘待归类清单】
+${itemLines}`
+      },
+      {
+        id: "builtin:full_audit",
+        name: "全盘文件/规则通用审查模板（手动贴入任意路径）",
+        build: () =>
+`你是 Windows 磁盘空间审计助手。下面是我导出的磁盘目录/大文件清单，请判断哪些可以清理、哪些必须保留，并严格输出如下 JSON 以便我一键导入 O-Cleaner：
+
+\`\`\`json
+{
+  "kind": "ocleaner-custom",
+  "overrides": {
+    "D:\\\\SomeFolder": {
+      "label": "简短中文标签",
+      "label_kind": "clean",
+      "cleanable": true,
+      "what": "用途说明",
+      "rebuild": "删后能否重建",
+      "keep_if": "何时应保留",
+      "note": "一句话建议"
+    }
+  }
+}
+\`\`\`
+
+【请在此粘贴你的全盘路径清单】
+`
+      },
+      {
+        id: "builtin:units",
+        name: "自定义空间换算单位生成（units）",
+        build: () =>
+`请帮我生成 5~8 个有趣且直观的存储空间换算单位（例如：4K 电影、3A 游戏、无损专辑、照片张数等），严格按 O-Cleaner 固定 JSON 格式输出：
+
+\`\`\`json
+{
+  "kind": "ocleaner-custom",
+  "units": [
+    {
+      "label": "部 4K 电影",
+      "plural": "部 4K 电影",
+      "size": { "value": 15, "unit": "GB" },
+      "note": "按单部 15 GB 估算",
+      "category": "影音"
+    }
+  ]
+}
+\`\`\``
+      }
+    ];
+  };
+
+  const _loadUserPresets = () => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LS_KEY) || "[]");
+      return Array.isArray(raw) ? raw.filter(x => x && x.id && x.name && typeof x.prompt === "string") : [];
+    } catch { return []; }
+  };
+  const _saveUserPresets = list => {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch {}
+  };
+
+  const _refreshSelect = selectId => {
+    const sel = $("aiPresetSel");
+    if (!sel) return;
+    const builtins = _builtinPresets();
+    const customs = _loadUserPresets();
+    const prev = selectId || sel.value || builtins[0].id;
+    sel.innerHTML = "";
+    const g1 = document.createElement("optgroup");
+    g1.label = t("aiprompt.grpBuiltin", "内置预设");
+    for (const p of builtins) {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = p.name;
+      g1.appendChild(o);
+    }
+    sel.appendChild(g1);
+    if (customs.length) {
+      const g2 = document.createElement("optgroup");
+      g2.label = t("aiprompt.grpCustom", "我的自定义预设");
+      for (const p of customs) {
+        const o = document.createElement("option");
+        o.value = p.id;
+        o.textContent = "★ " + p.name;
+        g2.appendChild(o);
+      }
+      sel.appendChild(g2);
+    }
+    sel.value = [...sel.options].some(o => o.value === prev) ? prev : builtins[0].id;
+    _applySelected(false);
+  };
+
+  const _applySelected = (forceRegen) => {
+    const sel = $("aiPresetSel");
+    if (!sel) return;
+    const id = sel.value;
+    const builtins = _builtinPresets();
+    const customs = _loadUserPresets();
+    const u = customs.find(x => x.id === id);
+    const delBtn = $("btnAiPresetDel");
+    if (u) {
+      $("aiPromptText").value = u.prompt;
+      $("aiPresetName").value = u.name;
+      if (delBtn) delBtn.style.display = "";
+      return;
+    }
+    if (delBtn) delBtn.style.display = "none";
+    const b = builtins.find(x => x.id === id) || builtins[0];
+    if (forceRegen || !$("aiPromptText").value.trim() || $("aiPromptText").dataset.src === id || !$("aiPromptText").dataset.dirty) {
+      $("aiPromptText").value = b.build();
+      $("aiPromptText").dataset.src = b.id;
+      delete $("aiPromptText").dataset.dirty;
+    }
+  };
+
+  $("aiPromptText").addEventListener("input", () => {
+    $("aiPromptText").dataset.dirty = "1";
+  });
+  $("aiPresetSel").addEventListener("change", () => {
+    delete $("aiPromptText").dataset.dirty;
+    _applySelected(true);
+  });
+  $("btnAiGen").addEventListener("click", () => {
+    delete $("aiPromptText").dataset.dirty;
+    _applySelected(true);
+    toast(t("aiprompt.refreshed", "已按当前扫描结果刷新提示词"));
+  });
+  $("btnAiCopy").addEventListener("click", async () => {
+    const txt = $("aiPromptText").value;
+    if (!txt.trim()) { toast(t("aiprompt.emptyPrompt", "提示词为空")); return; }
+    try {
+      await navigator.clipboard.writeText(txt);
+      toast(t("aiprompt.copied", "提示词已复制到剪贴板"));
+    } catch {
+      $("aiPromptText").select();
+      document.execCommand("copy");
+      toast(t("aiprompt.copied", "提示词已复制到剪贴板"));
+    }
+  });
+  $("btnAiPresetSave").addEventListener("click", () => {
+    const name = $("aiPresetName").value.trim();
+    const prompt = $("aiPromptText").value.trim();
+    if (!name) { toast(t("aiprompt.needName", "请先输入预设名称")); $("aiPresetName").focus(); return; }
+    if (!prompt) { toast(t("aiprompt.emptyPrompt", "提示词为空")); return; }
+    const customs = _loadUserPresets();
+    const existing = customs.find(x => x.name === name);
+    let id;
+    if (existing) {
+      existing.prompt = prompt;
+      id = existing.id;
+    } else {
+      id = "user:" + Date.now();
+      customs.push({ id, name, prompt });
+    }
+    _saveUserPresets(customs);
+    _refreshSelect(id);
+    toast(t("aiprompt.saved", "自定义预设已保存：{n}").replace("{n}", name));
+  });
+  $("btnAiPresetDel").addEventListener("click", () => {
+    const id = $("aiPresetSel").value;
+    if (!id.startsWith("user:")) return;
+    const customs = _loadUserPresets().filter(x => x.id !== id);
+    _saveUserPresets(customs);
+    $("aiPresetName").value = "";
+    _refreshSelect();
+    toast(t("aiprompt.deleted", "已删除自定义预设"));
+  });
+
+  const _extractJson = raw => {
+    const s = String(raw || "").trim();
+    if (!s) return null;
+    const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const cand = fence ? fence[1].trim() : s;
+    try { return JSON.parse(cand); } catch {}
+    const i0 = cand.indexOf("{"), i1 = cand.lastIndexOf("}");
+    if (i0 >= 0 && i1 > i0) {
+      try { return JSON.parse(cand.slice(i0, i1 + 1)); } catch {}
+    }
+    return null;
+  };
+
+  $("btnAiImportClear").addEventListener("click", () => {
+    $("aiImportText").value = "";
+    $("aiImportMsg").textContent = "";
+  });
+  $("btnAiImport").addEventListener("click", async () => {
+    const raw = $("aiImportText").value;
+    const msg = $("aiImportMsg");
+    const data = _extractJson(raw);
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      msg.innerHTML = `<span class="res-err">${esc(t("aiprompt.badJson", "未能识别合法的 JSON 对象，请检查是否完整复制了 AI 输出"))}</span>`;
+      return;
+    }
+    if (!data.kind && (data.overrides || data.units || data.rules || data.fs_groups)) {
+      data.kind = "ocleaner-custom";
+    }
+    msg.textContent = t("aiprompt.importing", "正在校验并导入…");
+    try {
+      const r = await apiJSON(`${API}/__oc__/bundle/import`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+      });
+      if (r.error) {
+        msg.innerHTML = `<span class="res-err">${esc(r.error)}</span>`;
+        return;
+      }
+      const parts = [];
+      if (r.overrides_applied) parts.push(t("io.overrides", "释义 {n} 条").replace("{n}", r.overrides_applied));
+      if (r.units_added) parts.push(t("io.unitsAdded", "单位 +{n}").replace("{n}", r.units_added));
+      if (r.units_updated) parts.push(t("io.unitsUpdated", "单位 ~{n}").replace("{n}", r.units_updated));
+      if (r.rules_added) parts.push(t("io.rulesAdded", "规则 +{n}").replace("{n}", r.rules_added));
+      if (r.rules_updated) parts.push(t("io.rulesUpdated", "规则 ~{n}").replace("{n}", r.rules_updated));
+      if (r.groups_added) parts.push(`分组 +${r.groups_added}`);
+      if (r.groups_updated) parts.push(`分组 ~${r.groups_updated}`);
+      const skipped = [].concat(r.units_skipped, r.overrides_skipped, r.rules_skipped).filter(Boolean);
+      const summary = parts.length ? t("io.imported", "已导入：") + parts.join("，") : t("io.nothing", "没有可导入的内容");
+      msg.innerHTML = `<span class="res-ok">${esc(summary)}</span>` +
+        (skipped.length ? ` <span style="color:var(--warn)">(${esc(skipped.slice(0, 3).join("; "))})</span>` : "");
+      toast(summary);
+      await loadState();
+      if (typeof FS !== "undefined" && FS && view === "full") {
+        renderOverview();
+        renderChart();
+      }
+    } catch (e) {
+      msg.innerHTML = `<span class="res-err">${esc(t("io.importFail", "导入失败，请重试") + " " + (e && e.message || ""))}</span>`;
+    }
+  });
+
+  _refreshSelect();
+})();
+
 /* ---- 云端同步（GitHub Gist 双向）：自定义数据在线存储 ----
    令牌只经「保存」写入本机 config/sync.json；推送/拉取/双向三种动作，
    结果统一汇报到 #syncMsg（成功给计数 + 时间，失败给原因）。 */
@@ -8212,6 +8601,29 @@ const I18N_EN = {
   "cr.lockHint": "Hint",
   "btn.cleanSelected": "Clean selected",
   "pane.sched": "Scheduled Auto-Clean",
+  "pane.aiprompt": "AI Prompts & Import",
+  "aiprompt.hint": "Presets · Edit & Save · 1-Click Import",
+  "aiprompt.help": "Generate prompts from presets (auto-including unrecognized items from the current scan), edit or save custom presets, and paste AI's JSON output below to apply in one click.",
+  "aiprompt.gen": "Refresh",
+  "aiprompt.copy": "Copy Prompt",
+  "aiprompt.namePh": "Preset name to save…",
+  "aiprompt.savePreset": "Save Preset",
+  "aiprompt.delPreset": "Delete",
+  "aiprompt.promptPh": "Select a preset or click Refresh…",
+  "aiprompt.importHead": "Paste AI's JSON output (auto-extracts ```json code blocks) to apply:",
+  "aiprompt.importPh": "Paste {\"kind\":\"ocleaner-custom\", ...} JSON from AI…",
+  "aiprompt.importBtn": "Import & Apply",
+  "aiprompt.clear": "Clear",
+  "aiprompt.grpBuiltin": "Built-in Presets",
+  "aiprompt.grpCustom": "My Custom Presets",
+  "aiprompt.refreshed": "Prompt refreshed with current scan",
+  "aiprompt.emptyPrompt": "Prompt is empty",
+  "aiprompt.copied": "Prompt copied to clipboard",
+  "aiprompt.needName": "Enter a preset name first",
+  "aiprompt.saved": "Custom preset saved: {n}",
+  "aiprompt.deleted": "Custom preset deleted",
+  "aiprompt.badJson": "No valid JSON object found — check that you copied the full AI output",
+  "aiprompt.importing": "Validating & importing…",
   "pane.history": "Recent Cleanups",
   "pane.help": "Guide",
   "unit.clearAll": "Clear all",
