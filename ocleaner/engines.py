@@ -452,6 +452,11 @@ def _mft_runlist(buf: bytes, off: int) -> list[tuple[int, int]]:
             runs.append((lcn, clusters))
     return runs
 
+_S_U16 = struct.Struct("<H").unpack_from
+_S_U32 = struct.Struct("<I").unpack_from
+_S_U64 = struct.Struct("<Q").unpack_from
+
+
 def _mft_parse_at(buf: bytearray, off: int, frs_size: int,
                   with_mtime: bool = False):
     """解析 buf[off:off+frs_size] 处的单条 MFT 文件记录（原地 fixup）。
@@ -465,10 +470,13 @@ def _mft_parse_at(buf: bytearray, off: int, frs_size: int,
     INFORMATION 修改时间，FILETIME 整数），目录树路径不付这笔开销。
     """
     end = off + frs_size
-    if off + 0x40 > end or buf[off:off + 4] != b"FILE":
+    u32 = _S_U32
+    if off + 0x40 > end or u32(buf, off)[0] != 0x454C4946:
         return None
-    usa_off = buf[off + 4] | (buf[off + 5] << 8)
-    usa_cnt = buf[off + 6] | (buf[off + 7] << 8)
+    u16 = _S_U16
+    u64 = _S_U64
+    usa_off = u16(buf, off + 4)[0]
+    usa_cnt = u16(buf, off + 6)[0]
     # 更新序列修正：每 512 字节扇区末 2 字节被检查值占用，须换回真实数据，
     # 否则跨扇区边界的属性字段会读到脏字节（体积算错、名字乱码）。
     if 0 < usa_off and usa_cnt > 1 and usa_off + usa_cnt * 2 <= frs_size:
@@ -483,31 +491,25 @@ def _mft_parse_at(buf: bytearray, off: int, frs_size: int,
     size = 0
     is_dir = False
     mtime = 0
-    # 热点路径全用 struct.unpack_from 直接内联（up 局部别名省一次属性查
-    # 找）：记录解析每盘跑百万次，切片 + int.from_bytes 的每次小拷贝和
-    # lambda 间接调用都是主要 CPU 成本。type+len 合并为一次 u64 读，
-    # 每条属性省一次 unpack_from 调用（基准合计：内联版比切片版快约六成）。
-    up = struct.unpack_from
-    used = up("<I", buf, off + 0x18)[0] or frs_size
-    a = off + up("<H", buf, off + 0x14)[0]
+    # 热点路径全用预编译 Struct.unpack_from 直接内联，省去格式串查找与切片拷贝。
+    used = u32(buf, off + 0x18)[0] or frs_size
+    a = off + u16(buf, off + 0x14)[0]
     # 行走边界用「记录已用大小」：最后一条属性之后到记录尾部是零填充，
     # 读到 a_len==0 就当属性区结束（不能当损坏 —— 真实 MFT 大多如此）。
     while off + 0x10 <= a <= end - 16 and a - off < used:
-        tl = up("<Q", buf, a)[0]
+        tl = u64(buf, a)[0]
         a_type = tl & 0xFFFFFFFF
         a_len = tl >> 32
-        if a_type == 0xFFFFFFFF:
-            break
-        if a_len == 0:
+        if a_type == 0xFFFFFFFF or a_len == 0:
             break
         if a_len < 24 or a + a_len > end or a_len % 8:
             return None                      # 属性越界/未对齐：记录视为损坏
         nonres = buf[a + 8]
         if a_type == 0x30 and nonres == 0:   # $FILE_NAME（驻留）
             if name_raw is None:
-                c = a + up("<H", buf, a + 0x14)[0]
+                c = a + u16(buf, a + 0x14)[0]
                 if 0x42 <= c - off <= frs_size - 0x42:
-                    parent = up("<Q", buf, c)[0] & 0xFFFFFFFFFFFF
+                    parent = u64(buf, c)[0] & 0xFFFFFFFFFFFF
                     nl = buf[c + 0x40]
                     ns = buf[c + 0x41]
                     if ns != 2 and 0 < nl <= 255:   # ns==2 是 DOS 8.3 短名
@@ -515,9 +517,9 @@ def _mft_parse_at(buf: bytearray, off: int, frs_size: int,
         elif a_type == 0x80:                 # $DATA
             if nonres:
                 if not size:
-                    size = up("<Q", buf, a + 0x38)[0]
+                    size = u64(buf, a + 0x38)[0]
             else:
-                size = up("<I", buf, a + 0x10)[0]
+                size = u32(buf, a + 0x10)[0]
             # 主数据流已到且父已定 → 提前收工。NTFS 属性按类型码排序
             # （0x10 < 0x30 < 0x80），$DATA 之后只可能是 DOS 短名/ADS 之类
             # 解析用不上的尾巴 —— 真实记录（STD_INFO + Win32 名 + DOS 名 +
@@ -528,9 +530,9 @@ def _mft_parse_at(buf: bytearray, off: int, frs_size: int,
         elif a_type == 0x90:                 # $INDEX_ROOT → 目录
             is_dir = True
         elif a_type == 0x10 and with_mtime and not mtime and nonres == 0:
-            c = a + up("<H", buf, a + 0x14)[0]
+            c = a + u16(buf, a + 0x14)[0]
             if off + 0x18 <= c <= end - 0x18:  # 修改时间在 STD_INFO 内容 +8
-                mtime = up("<Q", buf, c + 8)[0]
+                mtime = u64(buf, c + 8)[0]
         a += a_len
     if parent < 0:
         return None

@@ -4055,8 +4055,23 @@ async function startFullScan() {
       <div class="scanfacts">
         ${t("scan.facts","展开 {n} 层；更深处点击任意目录下钻看子项（可按占用/名称排序）。").replace("{n}", depth)}
         <b>${t("scan.keepOpen","请保持本窗口与命令行窗口开启。")}</b>
-        ${STATE?.wiztree?.found ? t("scan.wizOn","（已启用 WizTree 加速）")
-                                : t("scan.wizOff","（未装 WizTree，逐目录递归会慢一些）")}
+        ${(() => {
+          const ep = ($("engPref") && $("engPref").value) || "auto";
+          const wiz = !!STATE?.wiztree?.found;
+          const adm = !!STATE?.is_admin;
+          if (ep === "mft") {
+            return adm ? t("scan.mftOn","（已选内置 MFT 直读）")
+                       : t("scan.mftNeedAdmin","（MFT 需管理员权限，将回退可用引擎）");
+          }
+          if (ep === "wiztree") {
+            return wiz ? t("scan.wizOn","（已启用 WizTree 加速）")
+                       : t("scan.wizOff","（未装 WizTree，逐目录递归会慢一些）");
+          }
+          if (wiz && adm) return t("scan.autoBoth","（自动择快：WizTree / 内置 MFT）");
+          if (wiz) return t("scan.wizOn","（已启用 WizTree 加速）");
+          if (adm) return t("scan.mftOn","（已启用内置 MFT 直读）");
+          return t("scan.wizOff","（未装 WizTree，逐目录递归会慢一些）");
+        })()}
       </div>
     </div>`;
 
@@ -8124,6 +8139,9 @@ const I18N_EN = {
   "scan.keepOpen": "Keep this window and the console window open.",
   "scan.wizOn": " (WizTree acceleration enabled)",
   "scan.wizOff": " (No WizTree — recursive scan will be slower)",
+  "scan.mftOn": " (Built-in MFT direct read selected)",
+  "scan.mftNeedAdmin": " (MFT requires Admin — falling back to available engine)",
+  "scan.autoBoth": " (Auto-fast: WizTree / Built-in MFT)",
   "toast.noPath": "Can't open this path (may not exist or no permission)",
   "toast.openFail": "Open failed: ",
   "toast.picked": "Picked {n} items — click \"Clean selected\" at the bottom",
