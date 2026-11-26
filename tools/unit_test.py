@@ -468,6 +468,34 @@ def main() -> int:
           c_src.is_file() and (dll_obj is None or dll_obj.mft_fast_version() == 2),
           f"c_src={c_src.is_file()} dll={dll_obj}")
 
+    # ---------- 社区规则一键上传（无令牌 Issue 模式） ----------
+    orig_export = app._export_bundle
+    orig_sync_cfg = _integ._sync_cfg
+    try:
+        _integ._sync_cfg = lambda: {}
+        app._export_bundle = lambda: {"kind": "ocleaner-custom"}
+        empty_err = False
+        try:
+            _integ.community_upload({"scope": "all"})
+        except ValueError:
+            empty_err = True
+        check("社区上传：空自定义数据时拒绝提交", empty_err)
+
+        app._export_bundle = lambda: {
+            "kind": "ocleaner-custom",
+            "overrides": {"D:\\TestCache": {"label": "测试缓存", "cleanable": True, "label_kind": "clean"}},
+            "units": [{"label": "张照片", "bytes_per_unit": 5242880}],
+        }
+        up_res = _integ.community_upload({"scope": "all", "title": "测试规则"})
+        check("社区上传：无令牌走 Issue 预填模式且产出合法 JSON",
+              up_res.get("ok") and up_res.get("mode") == "issue" and up_res.get("count") == 2
+              and "Oerian/O-Cleaner/issues/new" in (up_res.get("issue_url") or "")
+              and "TestCache" in (up_res.get("json_text") or ""),
+              f"{up_res}")
+    finally:
+        app._export_bundle = orig_export
+        _integ._sync_cfg = orig_sync_cfg
+
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"
           f"失败 {len(failed)} 项 ====")

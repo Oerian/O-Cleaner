@@ -137,6 +137,89 @@ def _sync_push(token: str, gist_id: str = "") -> dict:
     return {"gist_id": gid, "html_url": str(r.get("html_url") or "")}
 
 
+_COMMUNITY_REPO = "Oerian/O-Cleaner"
+
+
+def community_upload(body: dict | None = None) -> dict:
+    """打包本机自定义规则/释义/单位用于社区贡献（脱敏，不含令牌与主机名）。
+    若已配置 GitHub 令牌则顺带创建公开 Gist 并生成带 Gist 链接的 Issue 链接；
+    否则直接返回预填 GitHub Issue 链接 + 格式化 JSON 供一键提交。"""
+    from urllib.parse import quote as _url_quote
+
+    b = body or {}
+    scope = str(b.get("scope") or "all").strip().lower()
+    title = str(b.get("title") or "").strip()[:120]
+    raw = _core._export_bundle()
+    out: dict = {"kind": "ocleaner-custom",
+                 "version": getattr(_core, "APP_VERSION", "")}
+    if scope in ("all", "overrides"):
+        if raw.get("overrides"):
+            out["overrides"] = raw["overrides"]
+        if raw.get("fs_groups"):
+            out["fs_groups"] = raw["fs_groups"]
+    if scope in ("all", "rules") and raw.get("rules"):
+        out["rules"] = raw["rules"]
+    if scope in ("all", "units") and raw.get("units"):
+        out["units"] = raw["units"]
+
+    n_ov = len(out.get("overrides") or {})
+    n_gr = len(out.get("fs_groups") or [])
+    n_ru = len(out.get("rules") or [])
+    n_un = len(out.get("units") or [])
+    total = n_ov + n_gr + n_ru + n_un
+    if total == 0:
+        raise ValueError("当前所选范围内没有可上传的自定义规则、释义、分组或换算单位")
+
+    json_text = json.dumps(out, ensure_ascii=False, indent=2)
+    issue_title = f"[规则贡献] {title or '自定义规则与释义分享'} ({total} 项)"
+    summary = (f"- 释义覆盖: {n_ov} 条\n"
+               f"- 路径分组: {n_gr} 个\n"
+               f"- 固定规则: {n_ru} 条\n"
+               f"- 换算单位: {n_un} 个\n")
+
+    token = _sync_token(b)
+    if token:
+        gist_body = {
+            "description": f"O-Cleaner 社区规则贡献: {title or '自定义规则'} ({total} 项)",
+            "public": True,
+            "files": {"ocleaner-community-rules.json": {"content": json_text}},
+        }
+        st, r = _gist_request("POST", _GIST_API, token, gist_body)
+        if st not in (200, 201) or not r.get("html_url"):
+            raise RuntimeError(f"公开 Gist 创建失败（{st}）")
+        gist_url = str(r["html_url"])
+        fobj = (r.get("files") or {}).get("ocleaner-community-rules.json") or {}
+        raw_url = str(fobj.get("raw_url") or gist_url)
+        issue_body = (
+            f"### 规则说明\n{title or '社区贡献规则包'}\n\n"
+            f"### 内容统计\n{summary}\n"
+            f"### 公开 Gist 链接\n- Gist: {gist_url}\n- Raw: {raw_url}\n\n"
+            "*(由 O-Cleaner 一键上传生成)*\n"
+        )
+        issue_url = (f"https://github.com/{_COMMUNITY_REPO}/issues/new"
+                     f"?labels=rule-contribution&title={_url_quote(issue_title)}"
+                     f"&body={_url_quote(issue_body)}")
+        return {"ok": True, "mode": "gist", "count": total,
+                "gist_url": gist_url, "raw_url": raw_url,
+                "issue_url": issue_url, "json_text": json_text}
+
+    # 无令牌模式：直接生成预填 GitHub Issue（超长时提示从剪贴板粘贴）
+    if len(json_text) <= 4500:
+        payload_block = f"```json\n{json_text}\n```"
+    else:
+        payload_block = "```json\n（规则 JSON 较长，O-Cleaner 已自动复制到剪贴板，请在此处 Ctrl+V 粘贴）\n```"
+    issue_body = (
+        f"### 规则说明\n{title or '社区贡献规则包'}\n\n"
+        f"### 内容统计\n{summary}\n"
+        f"### 规则数据包 (`ocleaner-custom`)\n{payload_block}\n"
+    )
+    issue_url = (f"https://github.com/{_COMMUNITY_REPO}/issues/new"
+                 f"?labels=rule-contribution&title={_url_quote(issue_title)}"
+                 f"&body={_url_quote(issue_body)}")
+    return {"ok": True, "mode": "issue", "count": total,
+            "issue_url": issue_url, "json_text": json_text}
+
+
 def _sync_fetch(token: str, gist_id: str) -> dict:
     """取回 Gist 里的同步载荷；远端为空/未建返回 {}。"""
     if not gist_id:

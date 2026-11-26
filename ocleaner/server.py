@@ -1070,6 +1070,14 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json({"error": str(e)}, 400)
             return self._json({"ok": True, **rep})
+        if route == "/__oc__/community/upload":
+            try:
+                res = _integ.community_upload(body)
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+            except (RuntimeError, OSError) as e:
+                return self._json({"error": str(e)}, 502)
+            return self._json(res)
         # ---- 云端同步：自定义数据存用户自己的 GitHub 私密 Gist ----
         if route == "/__oc__/engine/pref":
             try:
