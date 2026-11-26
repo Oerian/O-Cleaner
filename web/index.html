@@ -307,12 +307,12 @@
   .switch{width:17px;height:17px;accent-color:var(--ok);cursor:pointer;flex:none}
 
   /* ================= 历史可视化 ================= */
-  .chart{display:flex;align-items:flex-end;gap:3px;height:72px;margin:6px 0 2px;padding-top:4px}
+  .chart{display:flex;align-items:flex-end;gap:3px;height:84px;margin:6px 0 4px;padding:4px 2px 2px;max-width:100%;overflow:hidden;border-bottom:1px solid var(--line)}
   .chart .bar{flex:1 1 0;min-width:3px;background:linear-gradient(180deg,var(--accent),#1d4ed8);
               border-radius:3px 3px 0 0;transition:.15s;cursor:default}
   .chart .bar:hover{background:linear-gradient(180deg,#60a5fa,#2563eb)}
   .chart .bar.zero{background:var(--track)}
-  .chart-x{display:flex;justify-content:space-between;color:var(--dim2);font-size:10.5px}
+  .chart-x{display:flex;justify-content:space-between;color:var(--dim2);font-size:11px;font-variant-numeric:tabular-nums}
   /* 近 30 天趋势（#33）：柱多更密，有清理的日子用第二色与按次图区分 */
   .chart.day{gap:1px;height:56px}
   .chart.day .bar{background:linear-gradient(180deg,#34d399,#059669)}
@@ -431,7 +431,7 @@
      页签用紧凑小胶囊（大号 .seg 在图表旁显得笨重、风格不搭）；
      坞内容总高必须 ≤ 环高 134px，否则页签会冒到环上缘、贴住上方进度条
      。 */
-  .dwdock{flex:1;min-width:0;align-self:center}
+  .dwdock{flex:1 1 280px;min-width:0;align-self:center;max-width:100%;overflow:hidden}
   #dwTabs{gap:5px}
   #dwTabs .seg{padding:2px 9px;font-size:11px;font-weight:500}
   #dwTabs .seg.on{font-weight:600}
@@ -457,14 +457,15 @@
      柱状图错位」）；现在所有柱共享同一条基线，长标签在各自固定区内换行。 */
   .extcol{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;
     align-items:stretch;cursor:default}
-  .extcol i{display:block;width:62%;max-width:30px;min-height:3px;
+  .extcol i{display:block;width:62%;max-width:30px;min-height:4px;
     border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--accent),var(--accent2))}
-  .extcol .extvval{height:22px;display:flex;align-items:flex-end;justify-content:center;
-    font-size:9px;line-height:1.1;color:var(--dim2);font-variant-numeric:tabular-nums;
-    overflow-wrap:anywhere;text-align:center}
-  .extcol .extvbar{flex:1;display:flex;align-items:flex-end;justify-content:center}
-  .extcol .extvlab{height:24px;display:flex;align-items:flex-start;justify-content:center;
-    font-size:9.5px;line-height:1.15;color:var(--dim);
+  .extcol[data-last="1"] i{box-shadow:0 0 0 1px var(--accent)}
+  .extcol .extvval{height:20px;display:flex;align-items:flex-end;justify-content:center;
+    font-size:10.5px;font-weight:600;line-height:1.1;color:var(--dim);font-variant-numeric:tabular-nums;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;text-align:center}
+  .extcol .extvbar{flex:1;min-height:0;display:flex;align-items:flex-end;justify-content:center}
+  .extcol .extvlab{height:22px;padding-top:3px;display:flex;align-items:flex-start;justify-content:center;
+    font-size:10.5px;line-height:1.15;color:var(--dim);
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;max-width:100%}
 
   /* 磁盘卡组件槽（2026-11-03）：剩余空间趋势（类型分布同款竖柱）/
@@ -503,7 +504,7 @@
   .vrow .fname{font-weight:600;font-size:13px;overflow-wrap:anywhere;
                display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
   .vrow .fsize{margin-left:auto;color:var(--dim);font-size:12px;
-               font-variant-numeric:tabular-nums;white-space:nowrap}
+               font-variant-numeric:tabular-nums;white-space:nowrap;flex:0 0 auto}
   .vrow .vtrack{height:17px;border-radius:4px;background:var(--panel-hover);overflow:hidden;
                 display:flex;align-items:center}
   .logrow .vtrack{height:14px;border-radius:4px;background:var(--panel-hover);
@@ -616,16 +617,16 @@
   /* 分析中心（四轮后新增）：专项工具统一挂在第三个视图的页签下，
      #modal 运行时重挂进 anHost —— 面板化呈现，状态随视图保留 */
   /* 磁盘卡三页签（趋势/清理记录/类型分布）展开后统一对齐基线 */
-  #dwBody{width:100%;min-height:106px}
-  .sdchart{display:flex;align-items:flex-end;gap:6px;height:98px;
-    border-bottom:1px solid var(--line);padding:0 2px 3px;
-    margin:4px 0 3px;flex-wrap:nowrap;overflow-x:auto}
-  .sdchart .extcol{height:100%;flex:1 0 36px;min-width:36px}
+  #dwBody{width:100%;min-height:126px;max-width:100%;overflow:hidden}
+  .sdchart{display:flex;align-items:flex-end;gap:8px;height:122px;max-width:100%;box-sizing:border-box;
+    border-bottom:1px solid var(--line);padding:4px 4px 3px;
+    margin:4px 0 4px;flex-wrap:nowrap;overflow-x:auto}
+  .sdchart .extcol{height:100%;flex:1 0 56px;min-width:56px}
   .sdchart .extcol .extvval{white-space:nowrap}
   .sdchart .extcol .extvbar{border-bottom:none}
   /* 中线柱状图：中央基线，增长向上暖色/回落向下绿色 */
-  .spinechart{display:flex;gap:8px;overflow-x:auto;margin:12px 0 6px;padding:4px 2px 2px}
-  .scol{flex:0 0 auto;width:72px;display:flex;flex-direction:column;align-items:stretch}
+  .spinechart{display:flex;gap:8px;max-width:100%;overflow-x:auto;margin:12px 0 6px;padding:4px 2px 2px}
+  .scol{flex:0 0 84px;width:84px;display:flex;flex-direction:column;align-items:stretch}
   .shalf{height:110px;display:flex;flex-direction:column;align-items:center}
   .shalf.up{justify-content:flex-end}
   .shalf.down{justify-content:flex-start}
@@ -633,12 +634,14 @@
   .shalf.up i{border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--warn),var(--danger))}
   .shalf.down i{border-radius:0 0 3px 3px;background:linear-gradient(180deg,var(--ok2),var(--ok))}
   .saxis{height:2px;background:var(--line2)}
-  .sval{font-size:9.5px;color:var(--dim2);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .sval{font-size:10.5px;font-weight:600;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
   .shalf.up .sval{margin-bottom:2px}
   .shalf.down .sval{margin-top:2px}
-  .slab{font-size:9.5px;line-height:1.2;color:var(--dim);text-align:center;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  .slab{font-size:10.5px;line-height:1.2;color:var(--dim);text-align:center;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;
     font-weight:normal}
+  .hubpane{display:none}
+  .hubpane.on{display:block}
   #dwBody > div{width:100%}
   .antabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px;
     position:sticky;top:0;z-index:5;background:var(--panel);
@@ -1036,47 +1039,6 @@
     <!-- 2026-10-29：原「Steam 游戏库」侧栏面板删去 —— 与顶部导航的
          「游戏占用概览」整页完全重复（同一份数据渲染两处）。 -->
 
-    <div class="panel acc" data-acc="packs">
-      <h3><span data-i18n="pane.packs">资源包</span> <span class="hint" id="packsHint"></span></h3>
-      <div class="ab">
-        <div style="color:var(--dim);font-size:12.5px;margin-bottom:11px;line-height:1.6"
-             data-i18n-html="packs.intro">
-          资源包是纯 JSON 的「识别与释义」数据：某个目录/文件是什么、能不能自动重建、
-          删掉有什么影响、什么情况该保留。装得越多，卡片与磁盘树里「已识别」的比例越高。
-          也可以把自己的包丢进来，或用 AI 按本机情况生成一份。
-        </div>
-        <div id="packsList"></div>
-        <div class="field" style="margin-top:11px">
-          <button id="btnPackImport" class="tiny primary" data-i18n="packs.import">导入本地资源包</button>
-          <button id="btnPackUpdate" class="tiny" data-i18n="packs.update">从 GitHub 检查更新</button>
-        </div>
-        <input type="file" id="packFile" accept=".json,application/json" style="display:none">
-        <div id="packMsg" style="color:var(--dim2);font-size:11.5px;margin-top:9px"></div>
-        <details style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" id="commBox">
-          <summary style="cursor:pointer;color:var(--dim);font-size:12.5px"
-                   data-i18n="comm.head">社区贡献 · 一键上传规则到 GitHub</summary>
-          <div style="margin-top:9px;color:var(--dim2);font-size:11.5px;line-height:1.6"
-               data-i18n="comm.intro">
-            把你整理的盘符释义、分组或清理规则分享给社区：若已在「云端同步」配置 GitHub 令牌，将自动发布公开 Gist 并打开提交页；未配置令牌也可免登录一键复制并跳转 GitHub Issue 提交。
-          </div>
-          <div class="field" style="margin-top:8px;gap:6px">
-            <select id="commScope" style="flex:1">
-              <option value="all" data-i18n="comm.all">全部自定义（释义+分组+规则+单位）</option>
-              <option value="overrides" data-i18n="comm.ov">仅全盘释义与分组</option>
-              <option value="rules" data-i18n="comm.rules">仅固定清理规则</option>
-              <option value="units" data-i18n="comm.units">仅换算单位</option>
-            </select>
-          </div>
-          <div class="field" style="gap:6px">
-            <input type="text" id="commTitle" data-i18n-ph="comm.titlePh"
-                   placeholder="规则标题或适用软件/场景（可选）" style="flex:1">
-            <button id="btnCommUpload" class="tiny primary" data-i18n="comm.uploadBtn">一键上传规则</button>
-          </div>
-          <div id="commMsg" style="color:var(--dim2);font-size:11.5px;margin-top:6px;line-height:1.6"></div>
-        </details>
-      </div>
-    </div>
-
     <div class="panel acc" data-acc="ai">
       <h3><span data-i18n="pane.ai">AI 助手</span> <span class="hint" id="aiHint" data-i18n="ai.optional">可选</span></h3>
       <div class="ab">
@@ -1171,119 +1133,162 @@
     </div>
 
     <div class="panel acc" data-acc="rules">
-      <h3><span data-i18n="pane.rules">自定义规则</span> <span class="hint" data-i18n="rules.hint">勾选固定项，命名保存</span></h3>
+      <h3><span data-i18n="pane.rulesHub">规则 · 预设 · 资源包</span> <span class="hint" id="packsHint"></span></h3>
       <div class="ab">
-        <div style="color:var(--dim);font-size:12.5px;margin-bottom:11px;line-height:1.6"
-             data-i18n-html="rules.help">
-          把当前勾选的清理项存成一条规则，以后一键套用；勾选「保存后立即清理」
-          则保存时直接清理这些项。
+        <div class="segbtns" id="hubTabs" style="margin-bottom:12px">
+          <button class="seg on" data-hub="rules" data-i18n="hub.rules">我的规则</button>
+          <button class="seg" data-hub="presets" data-i18n="hub.presets">AI 预设</button>
+          <button class="seg" data-hub="packs" data-i18n="hub.packs">资源包</button>
         </div>
-        <div class="field">
-          <input type="text" id="ruleName" data-i18n-ph="rules.namePh"
-                 placeholder="给规则起个名字，例如「每周清缓存」">
-        </div>
-        <div class="field" style="gap:14px">
-          <label style="display:flex;align-items:center;gap:7px;color:var(--fg);cursor:pointer">
-            <input type="checkbox" class="switch" id="ruleAuto" style="accent-color:var(--danger)">
-            <span data-i18n="rules.auto">保存后立即清理</span>
-          </label>
-          <span style="color:var(--dim2);font-size:11.5px" id="ruleSelInfo"></span>
-        </div>
-        <div class="field" style="margin-bottom:12px">
-          <button id="btnRuleSave" class="primary" style="flex:1"
-                  data-i18n="rules.saveBtn">保存当前勾选为规则</button>
-        </div>
-        <div id="ruleList"></div>
-        <details style="margin-top:12px" id="syncBox">
-          <summary style="cursor:pointer;color:var(--dim);font-size:12.5px"
-                   data-i18n="sync.head">云端同步（GitHub Gist · 双向）</summary>
-          <div style="margin-top:9px;color:var(--dim2);font-size:11.5px;line-height:1.7"
-               data-i18n-html="sync.intro">
-            把换算单位、释义覆盖与固定项规则存到<b>你自己的 GitHub 私密 Gist</b>，
-            多台设备互相同步。需要一个带 gist 权限的
-            <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">个人访问令牌</a>，
-            令牌只存本机 config/sync.json，不经过任何第三方。
-            双向同步 = 拉取合并（远端逐项并进本地，不覆盖你本地的已有项）→ 把合并后的全集推回；删除不传播。
-          </div>
-          <div class="field" style="margin-top:9px">
-            <label style="width:76px;flex:none" data-i18n="sync.token">访问令牌</label>
-            <input type="password" id="syncToken" placeholder="ghp_…（只存本机）"
-                   autocomplete="new-password" style="flex:1">
-            <button id="btnSyncSave" class="tiny" style="flex:none" data-i18n="sync.save">保存</button>
+
+        <div class="hubpane on" data-hub="rules">
+          <div style="color:var(--dim);font-size:12.5px;margin-bottom:11px;line-height:1.6"
+               data-i18n-html="rules.help">
+            把当前勾选的清理项存成一条规则，以后一键套用；勾选「保存后立即清理」
+            则保存时直接清理这些项。
           </div>
           <div class="field">
-            <label style="width:76px;flex:none" data-i18n="sync.gistId">Gist ID</label>
-            <input type="text" id="syncGist" placeholder="留空 = 首次推送自动创建" style="flex:1">
+            <input type="text" id="ruleName" data-i18n-ph="rules.namePh"
+                   placeholder="给规则起个名字，例如「每周清缓存」">
           </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin:-3px 0 0 82px">
-            <button id="btnSyncPush" class="tiny" data-i18n="sync.push">推送到云端</button>
-            <button id="btnSyncPull" class="tiny" data-i18n="sync.pull">拉取合并</button>
-            <button id="btnSyncMerge" class="tiny primary" data-i18n="sync.merge">双向同步</button>
+          <div class="field" style="gap:14px">
+            <label style="display:flex;align-items:center;gap:7px;color:var(--fg);cursor:pointer">
+              <input type="checkbox" class="switch" id="ruleAuto" style="accent-color:var(--danger)">
+              <span data-i18n="rules.auto">保存后立即清理</span>
+            </label>
+            <span style="color:var(--dim2);font-size:11.5px" id="ruleSelInfo"></span>
           </div>
-          <div id="syncMsg" style="color:var(--dim2);font-size:11.5px;margin-top:9px;line-height:1.7"></div>
-        </details>
-        <details style="margin-top:12px">
-          <summary style="cursor:pointer;color:var(--dim);font-size:12px"
-                   data-i18n="rules.bundleHead">导入 / 导出自定义数据（含换算单位与释义）</summary>
-          <div style="margin-top:9px">
-            <div style="color:var(--dim2);font-size:11.5px;line-height:1.6;margin-bottom:8px"
-                 data-i18n-html="rules.bundleDesc">
-              把换算单位、释义/结论覆盖和固定项规则打包成一个 JSON，
-              便于换机迁移或让 AI 按规范生成后导回。格式见
-              docs\CUSTOMIZE.md；导入时逐项校验，不合格的会说明原因。
+          <div class="field" style="margin-bottom:12px">
+            <button id="btnRuleSave" class="primary" style="flex:1"
+                    data-i18n="rules.saveBtn">保存当前勾选为规则</button>
+          </div>
+          <div id="ruleList"></div>
+          <details style="margin-top:12px" id="syncBox">
+            <summary style="cursor:pointer;color:var(--dim);font-size:12.5px"
+                     data-i18n="sync.head">云端同步（GitHub Gist · 双向）</summary>
+            <div style="margin-top:9px;color:var(--dim2);font-size:11.5px;line-height:1.7"
+                 data-i18n-html="sync.intro">
+              把换算单位、释义覆盖与固定项规则存到<b>你自己的 GitHub 私密 Gist</b>，
+              多台设备互相同步。需要一个带 gist 权限的
+              <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">个人访问令牌</a>，
+              令牌只存本机 config/sync.json，不经过任何第三方。
+              双向同步 = 拉取合并（远端逐项并进本地，不覆盖你本地的已有项）→ 把合并后的全集推回；删除不传播。
             </div>
-            <div class="field" style="gap:8px">
-              <button id="btnBundleExport" class="tiny ghost" style="flex:1"
-                      data-i18n="bundle.export">导出自定义数据</button>
-              <button id="btnBundleImport" class="tiny ghost" style="flex:1"
-                      data-i18n="bundle.import">导入自定义数据</button>
+            <div class="field" style="margin-top:9px">
+              <label style="width:76px;flex:none" data-i18n="sync.token">访问令牌</label>
+              <input type="password" id="syncToken" placeholder="ghp_…（只存本机）"
+                     autocomplete="new-password" style="flex:1">
+              <button id="btnSyncSave" class="tiny" style="flex:none" data-i18n="sync.save">保存</button>
             </div>
-            <input type="file" id="bundleFile" accept=".json,application/json" style="display:none">
-          </div>
-        </details>
-      </div>
-    </div>
+            <div class="field">
+              <label style="width:76px;flex:none" data-i18n="sync.gistId">Gist ID</label>
+              <input type="text" id="syncGist" placeholder="留空 = 首次推送自动创建" style="flex:1">
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin:-3px 0 0 82px">
+              <button id="btnSyncPush" class="tiny" data-i18n="sync.push">推送到云端</button>
+              <button id="btnSyncPull" class="tiny" data-i18n="sync.pull">拉取合并</button>
+              <button id="btnSyncMerge" class="tiny primary" data-i18n="sync.merge">双向同步</button>
+            </div>
+            <div id="syncMsg" style="color:var(--dim2);font-size:11.5px;margin-top:9px;line-height:1.7"></div>
+          </details>
+          <details style="margin-top:12px">
+            <summary style="cursor:pointer;color:var(--dim);font-size:12px"
+                     data-i18n="rules.bundleHead">导入 / 导出自定义数据（含换算单位与释义）</summary>
+            <div style="margin-top:9px">
+              <div style="color:var(--dim2);font-size:11.5px;line-height:1.6;margin-bottom:8px"
+                   data-i18n-html="rules.bundleDesc">
+                把换算单位、释义/结论覆盖和固定项规则打包成一个 JSON，
+                便于换机迁移或让 AI 按规范生成后导回。格式见
+                docs\CUSTOMIZE.md；导入时逐项校验，不合格的会说明原因。
+              </div>
+              <div class="field" style="gap:8px">
+                <button id="btnBundleExport" class="tiny ghost" style="flex:1"
+                        data-i18n="bundle.export">导出自定义数据</button>
+                <button id="btnBundleImport" class="tiny ghost" style="flex:1"
+                        data-i18n="bundle.import">导入自定义数据</button>
+              </div>
+              <input type="file" id="bundleFile" accept=".json,application/json" style="display:none">
+            </div>
+          </details>
+        </div>
 
-    <div class="panel acc" data-acc="aiprompt">
-      <h3><span data-i18n="pane.aiprompt">AI 提示词与导入</span> <span class="hint" data-i18n="aiprompt.hint">预设生成 · 编辑保存 · 一键导入</span></h3>
-      <div class="ab">
-        <div style="color:var(--dim);font-size:12.5px;margin-bottom:10px;line-height:1.6"
-             data-i18n="aiprompt.help">
-          按预设生成给外部 AI 助手的提示词（可自动附带当前盘未识别文件清单），自由编辑或另存为自定义预设；把 AI 返回的固定格式 JSON 贴入下方即可一键导入生效。
-        </div>
-        <div class="field" style="gap:6px">
-          <select id="aiPresetSel" style="flex:1"></select>
-          <button id="btnAiGen" class="tiny ghost" data-i18n="aiprompt.gen">刷新提示词</button>
-          <button id="btnAiCopy" class="tiny primary" data-i18n="aiprompt.copy">复制提示词</button>
-        </div>
-        <div class="field" style="gap:6px">
-          <input type="text" id="aiPresetName" data-i18n-ph="aiprompt.namePh"
-                 placeholder="输入预设名称即可保存当前提示词…" style="flex:1">
-          <button id="btnAiPresetSave" class="tiny" data-i18n="aiprompt.savePreset">保存预设</button>
-          <button id="btnAiPresetDel" class="tiny danger" style="display:none"
-                  data-i18n="aiprompt.delPreset">删除</button>
-        </div>
-        <div class="field" style="margin-bottom:12px">
-          <textarea id="aiPromptText" rows="7"
-                    style="width:100%;resize:vertical;font-family:var(--mono);font-size:11.5px;line-height:1.5"
-                    data-i18n-ph="aiprompt.promptPh"
-                    placeholder="选择预设或点击「刷新提示词」生成…"></textarea>
-        </div>
-        <div style="border-top:1px solid var(--line);padding-top:11px;margin-top:4px">
-          <div style="color:var(--dim);font-size:12px;margin-bottom:6px" data-i18n="aiprompt.importHead">
-            粘贴 AI 输出的固定格式内容（自动提取 ```json 代码块），一键导入生效：
+        <div class="hubpane" data-hub="presets">
+          <div style="color:var(--dim);font-size:12.5px;margin-bottom:10px;line-height:1.6"
+               data-i18n="aiprompt.help">
+            按预设生成给外部 AI 助手的提示词（可自动附带当前盘未识别文件清单），自由编辑或另存为自定义预设；把 AI 返回的固定格式 JSON 贴入下方即可一键导入生效。
           </div>
-          <textarea id="aiImportText" rows="5"
-                    style="width:100%;resize:vertical;font-family:var(--mono);font-size:11.5px;line-height:1.5"
-                    data-i18n-ph="aiprompt.importPh"
-                    placeholder='粘贴 AI 输出的 {"kind":"ocleaner-custom", ...} 内容…'></textarea>
-          <div class="field" style="gap:8px;margin-top:8px">
-            <button id="btnAiImport" class="primary" style="flex:1"
-                    data-i18n="aiprompt.importBtn">一键导入生效</button>
-            <button id="btnAiImportClear" class="tiny ghost"
-                    data-i18n="aiprompt.clear">清空</button>
+          <div class="field" style="gap:6px">
+            <select id="aiPresetSel" style="flex:1"></select>
+            <button id="btnAiGen" class="tiny ghost" data-i18n="aiprompt.gen">刷新提示词</button>
+            <button id="btnAiCopy" class="tiny primary" data-i18n="aiprompt.copy">复制提示词</button>
           </div>
-          <div id="aiImportMsg" style="color:var(--dim2);font-size:11.5px;margin-top:6px;line-height:1.6"></div>
+          <div class="field" style="gap:6px">
+            <input type="text" id="aiPresetName" data-i18n-ph="aiprompt.namePh"
+                   placeholder="输入预设名称即可保存当前提示词…" style="flex:1">
+            <button id="btnAiPresetSave" class="tiny" data-i18n="aiprompt.savePreset">保存预设</button>
+            <button id="btnAiPresetDel" class="tiny danger" style="display:none"
+                    data-i18n="aiprompt.delPreset">删除</button>
+          </div>
+          <div class="field" style="margin-bottom:12px">
+            <textarea id="aiPromptText" rows="7"
+                      style="width:100%;resize:vertical;font-family:var(--mono);font-size:11.5px;line-height:1.5"
+                      data-i18n-ph="aiprompt.promptPh"
+                      placeholder="选择预设或点击「刷新提示词」生成…"></textarea>
+          </div>
+          <div style="border-top:1px solid var(--line);padding-top:11px;margin-top:4px">
+            <div style="color:var(--dim);font-size:12px;margin-bottom:6px" data-i18n="aiprompt.importHead">
+              粘贴 AI 输出的固定格式内容（自动提取 ```json 代码块），一键导入生效：
+            </div>
+            <textarea id="aiImportText" rows="5"
+                      style="width:100%;resize:vertical;font-family:var(--mono);font-size:11.5px;line-height:1.5"
+                      data-i18n-ph="aiprompt.importPh"
+                      placeholder='粘贴 AI 输出的 {"kind":"ocleaner-custom", ...} 内容…'></textarea>
+            <div class="field" style="gap:8px;margin-top:8px">
+              <button id="btnAiImport" class="primary" style="flex:1"
+                      data-i18n="aiprompt.importBtn">一键导入生效</button>
+              <button id="btnAiImportClear" class="tiny ghost"
+                      data-i18n="aiprompt.clear">清空</button>
+            </div>
+            <div id="aiImportMsg" style="color:var(--dim2);font-size:11.5px;margin-top:6px;line-height:1.6"></div>
+          </div>
+        </div>
+
+        <div class="hubpane" data-hub="packs">
+          <div style="color:var(--dim);font-size:12.5px;margin-bottom:11px;line-height:1.6"
+               data-i18n-html="packs.intro">
+            资源包是纯 JSON 的「识别与释义」数据：某个目录/文件是什么、能不能自动重建、
+            删掉有什么影响、什么情况该保留。装得越多，卡片与磁盘树里「已识别」的比例越高。
+            也可以把自己的包丢进来，或用 AI 按本机情况生成一份。
+          </div>
+          <div id="packsList"></div>
+          <div class="field" style="margin-top:11px">
+            <button id="btnPackImport" class="tiny primary" data-i18n="packs.import">导入本地资源包</button>
+            <button id="btnPackUpdate" class="tiny" data-i18n="packs.update">从 GitHub 检查更新</button>
+          </div>
+          <input type="file" id="packFile" accept=".json,application/json" style="display:none">
+          <div id="packMsg" style="color:var(--dim2);font-size:11.5px;margin-top:9px"></div>
+          <details style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" id="commBox">
+            <summary style="cursor:pointer;color:var(--dim);font-size:12.5px"
+                     data-i18n="comm.head">社区贡献 · 一键上传规则到 GitHub</summary>
+            <div style="margin-top:9px;color:var(--dim2);font-size:11.5px;line-height:1.6"
+                 data-i18n="comm.intro">
+              把你整理的盘符释义、分组或清理规则分享给社区：若已在「云端同步」配置 GitHub 令牌，将自动发布公开 Gist 并打开提交页；未配置令牌也可免登录一键复制并跳转 GitHub Issue 提交。
+            </div>
+            <div class="field" style="margin-top:8px;gap:6px">
+              <select id="commScope" style="flex:1">
+                <option value="all" data-i18n="comm.all">全部自定义（释义+分组+规则+单位）</option>
+                <option value="overrides" data-i18n="comm.ov">仅全盘释义与分组</option>
+                <option value="rules" data-i18n="comm.rules">仅固定清理规则</option>
+                <option value="units" data-i18n="comm.units">仅换算单位</option>
+              </select>
+            </div>
+            <div class="field" style="gap:6px">
+              <input type="text" id="commTitle" data-i18n-ph="comm.titlePh"
+                     placeholder="规则标题或适用软件/场景（可选）" style="flex:1">
+              <button id="btnCommUpload" class="tiny primary" data-i18n="comm.uploadBtn">一键上传规则</button>
+            </div>
+            <div id="commMsg" style="color:var(--dim2);font-size:11.5px;margin-top:6px;line-height:1.6"></div>
+          </details>
         </div>
       </div>
     </div>
@@ -2080,7 +2085,7 @@ function _dwRenderTrend(body, dk) {
   const tipFree = t("trend.tipFree", "剩余");
   // 数值带常显（三段定高，同一基线对齐）+ 悬停 title；最多展示近 10 天防日期挤压截断
   body.innerHTML =
-    `<div class="sdchart" style="height:108px">${showPts.map((p, i) => {
+    `<div class="sdchart">${showPts.map((p, i) => {
       const h = Math.max(6, Math.round((p.free - lo) / (hi - lo) * 100));
       return `<span class="extcol" title="${md(p.t)} · ${tipFree} ${fmt(p.free)}"` +
         `${i === showPts.length - 1 ? ' data-last="1"' : ""}>
@@ -7224,6 +7229,24 @@ $("bundleFile").addEventListener("change", async e => {
 });
 $("ruleName").addEventListener("keydown", e => { if (e.key === "Enter") saveRule(); });
 
+/* ---- 「规则 · 预设 · 资源包」整合面板子页签切换 ---- */
+(() => {
+  const HUB_KEY = "ocleaner.rulesHubTab.v1";
+  const tabs = document.querySelectorAll("#hubTabs .seg");
+  const panes = document.querySelectorAll(".hubpane");
+  const setTab = name => {
+    const valid = ["rules", "presets", "packs"].includes(name) ? name : "rules";
+    tabs.forEach(b => b.classList.toggle("on", b.dataset.hub === valid));
+    panes.forEach(p => p.classList.toggle("on", p.dataset.hub === valid));
+    try { localStorage.setItem(HUB_KEY, valid); } catch {}
+  };
+  tabs.forEach(b => b.addEventListener("click", () => setTab(b.dataset.hub)));
+  try {
+    const saved = localStorage.getItem(HUB_KEY);
+    if (saved) setTab(saved);
+  } catch {}
+})();
+
 /* ---- AI 提示词预设生成器 & AI 输出固定格式一键导入 ---- */
 (() => {
   const LS_KEY = "ocleaner.aiPresets.v1";
@@ -8694,6 +8717,10 @@ const I18N_EN = {
   "comm.gistOk": "Public Gist created ({n} items) & JSON copied:",
   "comm.issueOk": "Copied {n} items JSON & opened GitHub Issue:",
   "comm.openIssue": "Open GitHub Issue",
+  "pane.rulesHub": "Rules · Presets · Packs",
+  "hub.rules": "My Rules",
+  "hub.presets": "AI Presets",
+  "hub.packs": "Packs",
   "pane.history": "Recent Cleanups",
   "pane.help": "Guide",
   "unit.clearAll": "Clear all",
