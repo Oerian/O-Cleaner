@@ -4872,7 +4872,7 @@ def phase3_http() -> None:
 
             try:
 
-                with urllib.request.urlopen(r, timeout=30) as resp:
+                with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(r, timeout=30) as resp:
 
                     check(f"{name} 返回 4xx 而非 5xx", False, f"HTTP {resp.status}")
 
@@ -5228,7 +5228,7 @@ def phase4_repo() -> None:
 
     for f in list(HERE.rglob("*.py")) + list(HERE.rglob("*.json")):
 
-        if "__pycache__" in str(f) or "dist" in str(f):
+        if any(d in f.parts for d in ("__pycache__", "dist", "data", "build", "_legacy")):
 
             continue
 

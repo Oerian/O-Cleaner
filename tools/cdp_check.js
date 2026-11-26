@@ -2193,6 +2193,23 @@ class CDP {
   } catch (e) {
     skip("键盘导航", "评估失败：" + e.message);
   }
+  try {
+    const slashAndIcon = await evaluate(`(async () => {
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
+      const focused = document.activeElement && document.activeElement.id === 'fsSearch';
+      if (focused) document.activeElement.blur();
+      const favLink = !!document.querySelector('#ocFavicon');
+      const r = await fetch('/favicon.ico');
+      const okIco = r.status === 200 && (r.headers.get('content-type') || '').includes('icon');
+      return { focused, favLink, okIco, status: r.status };
+    })()`);
+    check("快捷键 / 聚焦搜索框且应用图标与 /favicon.ico 就位",
+          slashAndIcon.focused && slashAndIcon.favLink && slashAndIcon.okIco,
+          JSON.stringify(slashAndIcon));
+  } catch (e) {
+    check("快捷键 / 与图标检查", false, e.message);
+  }
 
   // ---------- 小视口响应式 ----------
   // 浏览器窗口缩到 ~800×600 后界面必须仍完整可用：不允许出现横向滚动条，
