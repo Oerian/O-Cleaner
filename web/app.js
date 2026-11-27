@@ -7500,7 +7500,7 @@ const I18N_EN = {
   "lk.rebootDone": "Scheduled {s} file(s) for reboot deletion ({k} skipped)",
   "lk.rebootFail": "Failed to schedule reboot deletion: ",
   "mig.head": "Data Migration & Full Backup",
-  "mig.intro": "Move history, disk trends, and custom rules to another folder, or export a portable zip backup for a new PC — no command line needed.",
+  "mig.intro": "Relocate history, disk trends, and custom rules to a designated folder, or export a portable backup archive for cross-device recovery.",
   "mig.dirPh": "New data folder, e.g. D:\\O-Cleaner-Data",
   "mig.moveBtn": "Move Folder",
   "mig.resetBtn": "Reset Default",
