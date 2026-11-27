@@ -2436,14 +2436,30 @@ function showCleanResult(e, stats, t0, title) {
       </div>
       ${e.results.some(r => r.trashed > 0) ? `<div style="color:var(--dim2);font-size:12.5px;margin:-6px 0 10px">
         ${t("cr.trashedNote","部分高风险项已移入回收站（可恢复）：这部分空间会在清空回收站后释放，未计入上面的数字。")}</div>` : ""}
-      ${trashPaths.length ? `
-      <div class="warnpane" style="margin:-2px 0 10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button id="btnEmptyBin" class="primary" style="font-size:12.5px">
-          ${t("eb.armLabel","清空这些项的回收站")}</button>
-        <span style="font-size:11.5px;color:var(--dim2)">
-          ${t("eb.scopeNote","只移除本次清理移入回收站的 {n} 项并彻底释放空间；回收站里其它内容不受影响。不可恢复。").replace("{n}", trashPaths.length)}</span>
+      ${trashPaths.length ? (() => {
+        let defPurge = false;
+        try { defPurge = localStorage.getItem("oc_purge_bin_default") === "1"; } catch (_) {}
+        return `
+      <div class="warnpane" style="margin:-2px 0 10px;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--fg)">
+            <input type="checkbox" id="chkPurgeBin" ${defPurge ? "checked" : ""}>
+            <span>${t("eb.chkPurge","彻底清理本次移入回收站的 {n} 项（勾选即确认，不可恢复）").replace("{n}", trashPaths.length)}</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--dim)">
+            <input type="checkbox" id="chkPurgeBinDefault" ${defPurge ? "checked" : ""}>
+            <span>${t("eb.chkDefault","此后默认勾选此选项")}</span>
+          </label>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button id="btnEmptyBin" class="primary" style="font-size:12.5px">
+            ${t("eb.armLabel","清空这些项的回收站")}</button>
+          <span style="font-size:11.5px;color:var(--dim2)">
+            ${t("eb.scopeNote","只移除本次清理移入回收站的 {n} 项并彻底释放空间；回收站里其它内容不受影响。不可恢复。").replace("{n}", trashPaths.length)}</span>
+        </div>
         <div id="binPane" style="width:100%"></div>
-      </div>` : ""}
+      </div>`;
+      })() : ""}
       <table>
         <thead><tr><th>${t("cc.thItem","清理项")}</th><th class="n">${t("cr.thFreed","释放")}</th><th class="n">${t("cr.thDeleted","已删")}</th><th class="n">${t("cr.thSkipped","跳过")}</th></tr></thead>
         <tbody>${(() => {
@@ -2522,45 +2538,83 @@ function showCleanResult(e, stats, t0, title) {
   // 确切移入回收站的原始路径精确匹配，只删配对的 $I/$R 文件——用户
   // 自己删的其它文件原样保留。仍是不可恢复操作，边界要足够显眼。
   const eb = $("btnEmptyBin");
+  const chkPurge = $("chkPurgeBin");
+  const chkPurgeDef = $("chkPurgeBinDefault");
+  const doneBtn = $("mDone");
+  let binPurged = false;
+  const syncDoneText = () => {
+    if (!doneBtn || !chkPurge) return;
+    doneBtn.textContent = (!binPurged && chkPurge.checked)
+      ? t("eb.donePurge", "完成并彻底清理")
+      : t("cr.done", "完成");
+  };
+  if (chkPurge) {
+    chkPurge.addEventListener("change", syncDoneText);
+    syncDoneText();
+  }
+  if (chkPurgeDef) {
+    chkPurgeDef.addEventListener("change", () => {
+      try { localStorage.setItem("oc_purge_bin_default", chkPurgeDef.checked ? "1" : "0"); } catch (_) {}
+      if (chkPurgeDef.checked && chkPurge && !chkPurge.checked) {
+        chkPurge.checked = true;
+        syncDoneText();
+      }
+    });
+  }
+  const runPurgeBin = async () => {
+    if (!eb || binPurged) return true;
+    eb.disabled = true;
+    eb.innerHTML = `<span class="spin"></span>${t("eb.emptying","清空中")}`;
+    const pane = $("binPane");
+    try {
+      const r = await fetch(`${API}/__oc__/recycle-purge`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: trashPaths })
+      });
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+      binPurged = true;
+      if (data.stats) STATE.stats = data.stats;
+      loadDiskTrend();
+      const missed = (data.results || []).filter(x => !x.matched && x.note);
+      if (pane) pane.innerHTML = `<div style="margin-top:8px;font-size:12.5px${
+        missed.length ? ';color:var(--warn, #e0a040)' : ';color:var(--dim2)'}">${
+        t("eb.removed","已从回收站移除 {n} 项，额外释放 {v}。").replace("{n}", data.matched || 0).replace("{v}", fmt(data.freed || 0)) +
+        t("eb.total","累计已释放 {n}。").replace("{n}", esc(STATE.stats?.total_freed_h || "0 B"))}${
+        missed.length ? `<br>${esc(missed.map(x => x.note).slice(0, 3).join("；"))}` : ""}</div>`;
+      eb.style.display = "none";
+      if (chkPurge) chkPurge.disabled = true;
+      syncDoneText();
+      toast(t("eb.removedToast","所选项已从回收站移除"));
+      return true;
+    } catch (err) {
+      eb.disabled = false;
+      eb.textContent = t("eb.armLabel","清空这些项的回收站");
+      if (pane) pane.innerHTML = `<div style="margin-top:8px;font-size:12.5px;color:var(--warn, #e0a040)">${t("eb.fail","清空失败：{n}（可稍后重试）").replace("{n}", esc(err.message))}</div>`;
+      toast(t("eb.failToast","回收站清空失败，详见弹窗说明"));
+      return false;
+    }
+  };
   if (eb) {
     let armed = false;
     eb.addEventListener("click", async () => {
-      if (!armed) {
+      if (!(chkPurge && chkPurge.checked) && !armed) {
         armed = true;
         eb.textContent = t("eb.armConfirm","确认清空（不可恢复）");
         eb.classList.add("go");
         return;
       }
-      eb.disabled = true;
-      eb.innerHTML = `<span class="spin"></span>${t("eb.emptying","清空中")}`;
-      const pane = $("binPane");
-      try {
-        const r = await fetch(`${API}/__oc__/recycle-purge`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paths: trashPaths })
-        });
-        const data = await r.json();
-        if (data.error) throw new Error(data.error);
-        if (data.stats) STATE.stats = data.stats;
-        loadDiskTrend();
-        const missed = (data.results || []).filter(x => !x.matched && x.note);
-        if (pane) pane.innerHTML = `<div style="margin-top:8px;font-size:12.5px${
-          missed.length ? ';color:var(--warn, #e0a040)' : ';color:var(--dim2)'}">${
-          t("eb.removed","已从回收站移除 {n} 项，额外释放 {v}。").replace("{n}", data.matched || 0).replace("{v}", fmt(data.freed || 0)) +
-          t("eb.total","累计已释放 {n}。").replace("{n}", esc(STATE.stats?.total_freed_h || "0 B"))}${
-          missed.length ? `<br>${esc(missed.map(x => x.note).slice(0, 3).join("；"))}` : ""}</div>`;
-        eb.style.display = "none";
-        toast(t("eb.removedToast","所选项已从回收站移除"));
-      } catch (err) {
-        eb.disabled = false;
-        armed = false;
-        eb.textContent = t("eb.armLabel","清空这些项的回收站");
-        if (pane) pane.innerHTML = `<div style="margin-top:8px;font-size:12.5px;color:var(--warn, #e0a040)">${t("eb.fail","清空失败：{n}（可稍后重试）").replace("{n}", esc(err.message))}</div>`;
-        toast(t("eb.failToast","回收站清空失败，详见弹窗说明"));
-      }
+      const ok = await runPurgeBin();
+      if (!ok) armed = false;
     });
   }
-  $("mDone").addEventListener("click", async () => {
+  doneBtn.addEventListener("click", async () => {
+    if (!binPurged && chkPurge && chkPurge.checked) {
+      doneBtn.disabled = true;
+      const ok = await runPurgeBin();
+      doneBtn.disabled = false;
+      if (!ok) return;
+    }
     closeModal(); subSel = {};
     await loadState(); await scan();
   });
@@ -7473,6 +7527,9 @@ const I18N_EN = {
   "eb.armLabel": "Empty these items from the recycle bin",
   "eb.fail": "Empty failed: {n} (retry later)",
   "eb.failToast": "Recycle-bin empty failed — see dialog",
+  "eb.chkPurge": "Permanently purge these {n} trashed item(s) now (checked = confirmed, irreversible)",
+  "eb.chkDefault": "Check this by default next time",
+  "eb.donePurge": "Done & Purge",
   "ov.resetDone": "Display reset to defaults", "ov.pinnedDone": "Pinned to the top",
   "ov.savedDone": "Custom display saved", "ov.saved": "Custom description saved",
   "ov.resetBtn": "Reset to defaults",
