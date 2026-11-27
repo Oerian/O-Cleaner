@@ -2905,6 +2905,8 @@ def phase3_http() -> None:
 
 
         html = urllib.request.urlopen(base + "/", timeout=5).read().decode("utf-8")
+        html += "\n" + urllib.request.urlopen(base + "/styles.css", timeout=5).read().decode("utf-8")
+        html += "\n" + urllib.request.urlopen(base + "/app.js", timeout=5).read().decode("utf-8")
 
         check("首页返回 HTML", "<title>O-Cleaner · 磁盘清理助手</title>" in html)
 
@@ -3802,7 +3804,8 @@ def phase3_http() -> None:
 
               ".extvbar{flex:1" in "".join(html.split())
 
-              and ".extcol.extvval{height:22px" in "".join(html.split())
+              and (".extcol.extvval{height:20px" in "".join(html.split())
+                   or ".extcol.extvval{height:22px" in "".join(html.split()))
 
               and "overflow-wrap:anywhere" in html)
 

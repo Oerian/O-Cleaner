@@ -7763,7 +7763,7 @@ function setLang(l) {
    "renderGuide", "drawDiskTrend", "renderDrives",
    "renderConvToggle", "renderSchedule", "renderHistory", "renderOverview",
    "renderAI", "renderCustomLibs", "renderSchSummary", "renderBfRows",
-   "renderTrendBanner", "checkOrphanBanner"].forEach(fn => {
+   "renderFsGroups", "renderTrendBanner", "checkOrphanBanner"].forEach(fn => {
     try { if (typeof window[fn] === "function") window[fn](); } catch (e) {}
   });
   // 后端返回的长文本（释义/建议）随请求的 lang 走：缓存已清，这里重拉，
