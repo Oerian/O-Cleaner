@@ -465,7 +465,7 @@ def main() -> int:
     c_src = Path(app.BASE_DIR) / "ocleaner" / "mft_fast.c"
     dll_obj = _eng._load_mft_fast()
     check("MFT 原生加速：mft_fast.c 就位且缺失 DLL 时安全回退 Python",
-          c_src.is_file() and (dll_obj is None or dll_obj.mft_fast_version() == 2),
+          c_src.is_file() and (dll_obj is None or dll_obj.mft_fast_version() == 3),
           f"c_src={c_src.is_file()} dll={dll_obj}")
 
     # ---------- 社区规则一键上传（无令牌 Issue 模式） ----------

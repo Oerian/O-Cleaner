@@ -633,7 +633,7 @@ def _load_mft_fast():
         try:
             lib = ctypes.CDLL(dll_path)
             lib.mft_fast_version.restype = ctypes.c_int
-            if lib.mft_fast_version() != 2:
+            if lib.mft_fast_version() != 3:
                 continue
             lib.mft_scan_chunk.argtypes = [
                 ctypes.c_void_p,                    # buf
@@ -652,6 +652,18 @@ def _load_mft_fast():
                 ctypes.POINTER(_ExtSlot),           # out_ext_tbl
             ]
             lib.mft_scan_chunk.restype = ctypes.c_int32
+            lib.mft_agg_tree.argtypes = [
+                ctypes.c_int32,                     # n_recs
+                ctypes.POINTER(ctypes.c_int64),     # parent
+                ctypes.POINTER(ctypes.c_int64),     # size
+                ctypes.POINTER(ctypes.c_uint8),     # flags
+                ctypes.c_uint64,                    # floor_bytes
+                ctypes.POINTER(ctypes.c_int64),     # out_dir_total
+                ctypes.POINTER(ctypes.c_uint8),     # out_in_tree
+                ctypes.POINTER(ctypes.c_int32),     # out_want_frns
+                ctypes.c_int32,                     # max_want
+            ]
+            lib.mft_agg_tree.restype = ctypes.c_int32
             _MFT_FAST_CACHE = lib
             return lib
         except OSError:
@@ -1072,8 +1084,59 @@ def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str,
     「体积 ≥ floor、一层目录、以及 need_frns（达标文件的父目录）的祖先
     链」拼路径；floor=0 时全部可达目录都拼（等价旧行为，测试用）。
     """
-    direct: dict[int, int] = {}
     n_recs = len(arr_size)
+    fast_dll = _load_mft_fast()
+    if (fast_dll is not None and n_recs > 5
+            and hasattr(arr_parent, "buffer_info")
+            and hasattr(arr_size, "buffer_info")
+            and hasattr(arr_flags, "buffer_info")):
+        c_parent = (ctypes.c_int64 * n_recs).from_buffer(arr_parent)
+        c_size = (ctypes.c_int64 * n_recs).from_buffer(arr_size)
+        c_flags = (ctypes.c_uint8 * n_recs).from_buffer(arr_flags)
+        c_dir_total = (ctypes.c_int64 * n_recs)()
+        c_in_tree = (ctypes.c_uint8 * n_recs)()
+        c_want = (ctypes.c_int32 * n_recs)()
+        want_n = fast_dll.mft_agg_tree(
+            n_recs, c_parent, c_size, c_flags, int(floor),
+            c_dir_total, c_in_tree, c_want, n_recs)
+        if want_n > 0:
+            want = {int(c_want[i]) for i in range(want_n)}
+            for frn in (need_frns or ()):
+                if 0 <= frn < n_recs and c_in_tree[frn]:
+                    want.add(frn)
+            dir_total: dict[int, int] = {5: int(c_dir_total[5])}
+            for frn in want:
+                dir_total[frn] = int(c_dir_total[frn])
+            dir_path: dict[int, str] = {5: root.lower()}
+            for frn in want:
+                chain = []
+                cur = frn
+                seen = set()
+                while cur not in dir_path:
+                    if not 0 < cur < n_recs or cur in seen:
+                        chain = []
+                        break
+                    chain.append(cur)
+                    seen.add(cur)
+                    cur = arr_parent[cur]
+                if not chain:
+                    continue
+                base = dir_path[cur]
+                for f in reversed(chain):
+                    nm = dir_names.get(f)
+                    if not nm:
+                        base = None
+                        break
+                    base = (base if base.endswith("\\") else base + "\\") \
+                        + _mft_name_decode(nm)
+                    dir_path[f] = base
+                    dir_total[f] = int(c_dir_total[f])
+                if base is None:
+                    for f in chain:
+                        dir_path.pop(f, None)
+            return dir_total, dir_path
+
+    direct: dict[int, int] = {}
     for idx in range(n_recs):
         sz = arr_size[idx]
         if not sz or (arr_flags[idx] & 1):

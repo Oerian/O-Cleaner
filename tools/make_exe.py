@@ -52,6 +52,11 @@ EMBEDDED_BAT = (
     "@echo off\r\n"
     "rem O-Cleaner embedded launcher - no system Python needed.\r\n"
     "rem The embedded runtime lives in the python folder next to this file.\r\n"
+    "cd /d \"%~dp0\"\r\n"
+    "if exist \"%~dp0O-Cleaner.exe\" (\r\n"
+    "  start \"\" \"%~dp0O-Cleaner.exe\" %*\r\n"
+    "  goto :eof\r\n"
+    ")\r\n"
     "start \"\" \"%~dp0python\\pythonw.exe\" \"%~dp0app.py\" --app %*\r\n"
 )
 

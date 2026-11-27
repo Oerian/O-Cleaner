@@ -15,10 +15,12 @@ core 在自身初始化早期 import 本模块，本模块在**调用期**才访
 from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import json
 import os
+import re
 import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 import ocleaner.core as _core
@@ -154,3 +156,203 @@ def _atomic_write(path: Path, data) -> None:
             pass
         except SystemExit:
             pass
+
+
+_UNIT_MULT = {"b": 1, "kb": 1024, "mb": 1024 ** 2,
+              "gb": 1024 ** 3, "tb": 1024 ** 4}
+
+
+def _bundle_unit_bytes(u: dict) -> int | None:
+    """导入单位时算出字节数：接受 bytes_per_unit 或 size:{value,unit}。"""
+    bpu = u.get("bytes_per_unit")
+    if bpu is not None:
+        try:
+            bpu = float(bpu)
+        except (TypeError, ValueError):
+            return None
+        if bpu > 0 and bpu != float("inf"):
+            return int(bpu)
+        return None
+    size = u.get("size")
+    if isinstance(size, dict):
+        try:
+            val = float(size.get("value"))
+            mult = _UNIT_MULT.get(str(size.get("unit") or "").lower())
+        except (TypeError, ValueError):
+            return None
+        if val > 0 and mult:
+            return int(val * mult)
+    return None
+
+
+def _export_bundle() -> dict:
+    """把本机可迁移的自定义项汇成一个 JSON（bundle/import 的逆操作）。"""
+    cfg = _core.load_convert()
+    units = [{
+        "id": u.get("id"), "label": u.get("label"),
+        "plural": u.get("plural") or u.get("label"),
+        "bytes_per_unit": u.get("bytes_per_unit"),
+        "note": u.get("note", ""), "category": u.get("category", "自定义"),
+    } for u in cfg.get("units", []) if isinstance(u, dict)]
+    return {
+        "kind": "ocleaner-custom",
+        "version": 1,
+        "exported": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "units": units,
+        "overrides": _core.load_overrides().get("targets", {}),
+        "rules": _core.load_custom_rules(),
+        "fs_groups": _core.load_fs_groups(),
+    }
+
+
+def _import_bundle(body: dict) -> dict:
+    """自定义数据包导入的落盘逻辑（供路由与云同步共用）：逐项校验并合并进本地文件。"""
+    if str((body or {}).get("kind") or "") != "ocleaner-custom":
+        raise ValueError("这不是 O-Cleaner 自定义数据包"
+                         "（kind 应为 ocleaner-custom）")
+    rep = {"units_added": 0, "units_updated": 0, "units_skipped": [],
+           "overrides_applied": 0, "overrides_skipped": [],
+           "rules_added": 0, "rules_updated": 0, "rules_skipped": [],
+           "groups_added": 0, "groups_updated": 0}
+
+    cfg = _core.load_convert()
+    units = list(cfg.get("units", []))
+    by_id = {str(u.get("id") or ""): u for u in units}
+    by_label = {str(u.get("label") or ""): u for u in units}
+    for i, u in enumerate(body.get("units") or []):
+        if not isinstance(u, dict):
+            continue
+        label = str(u.get("label") or "").strip()
+        nbytes = _bundle_unit_bytes(u)
+        if not label:
+            rep["units_skipped"].append(f"units[{i}] 缺名称")
+            continue
+        if nbytes is None:
+            rep["units_skipped"].append(
+                f"「{label}」缺有效大小（bytes_per_unit 或 size.value/unit）")
+            continue
+        uid = str(u.get("id") or "").strip()
+        entry = {"label": label,
+                 "plural": str(u.get("plural") or label).strip() or label,
+                 "bytes_per_unit": nbytes,
+                 "note": str(u.get("note") or "").strip(),
+                 "category": str(u.get("category") or "自定义").strip()}
+        if uid and uid in by_id:
+            by_id[uid].update(entry)
+            rep["units_updated"] += 1
+        elif label in by_label:
+            rep["units_skipped"].append(f"「{label}」已有同名单位")
+        else:
+            uid = uid or f"u{int(time.time() * 1000) % 10 ** 10}{i}"
+            entry["id"] = uid
+            units.append(entry)
+            by_id[uid] = entry
+            by_label[label] = entry
+            rep["units_added"] += 1
+    cfg["units"] = units
+    _atomic_write(_core.CONVERT_PATH, cfg)
+    _cache.pop(str(_core.CONVERT_PATH), None)
+
+    data = _core.load_overrides()
+    for k, v in (body.get("overrides") or {}).items():
+        k = str(k).strip()
+        _is_path_key = bool(re.match(r"^[a-zA-Z]:\\", k)) and len(k) <= 500
+        if (not k or len(k) > (500 if _is_path_key else 200)
+                or "/" in k or ("\\" in k and not _is_path_key)):
+            rep["overrides_skipped"].append(f"「{k[:60]}」键不合法")
+            continue
+        entry = None
+        if isinstance(v, dict):
+            entry = {}
+            for f in ("what", "rebuild", "impact", "keep_if"):
+                t = v.get(f)
+                if isinstance(t, str) and t.strip():
+                    if len(t) > 2000:
+                        entry = None
+                        break
+                    entry[f] = t.strip()
+            for f in ("label", "note"):
+                t = v.get(f)
+                if isinstance(t, str) and t.strip() and len(t) <= 200:
+                    entry[f] = t.strip()
+            if isinstance(v.get("cleanable"), bool):
+                entry["cleanable"] = v["cleanable"]
+            if isinstance(v.get("pin"), bool):
+                entry["pin"] = v["pin"]
+            if v.get("label_kind") in ("clean", "unk", "keep"):
+                entry["label_kind"] = v["label_kind"]
+            if isinstance(v.get("color"), str) and re.fullmatch(r"#[0-9a-fA-F]{6}", v["color"]):
+                entry["color"] = v["color"].lower()
+            if not entry:
+                entry = None
+        if entry is None:
+            rep["overrides_skipped"].append(f"「{k}」没有可用的字段")
+            continue
+        data["targets"][k] = entry
+        rep["overrides_applied"] += 1
+    _core.save_overrides(data)
+
+    rules = _core.load_custom_rules()
+    valid_cache: dict = {}
+    for i, r0 in enumerate(body.get("rules") or []):
+        if not isinstance(r0, dict):
+            continue
+        name = str(r0.get("name") or "").strip()
+        ids = [str(x).strip() for x in (r0.get("ids") or []) if str(x).strip()]
+        drive = (str(r0.get("drive") or "C")).rstrip(":").upper() or "C"
+        if not name:
+            rep["rules_skipped"].append(f"rules[{i}] 缺规则名")
+            continue
+        if not ids:
+            rep["rules_skipped"].append(f"「{name}」没有勾选任何清理项")
+            continue
+        if drive not in valid_cache:
+            valid_cache[drive] = {t["id"]
+                                  for t in _core.build_targets(drive, None)}
+        bad = [x for x in ids if x not in valid_cache[drive]]
+        if bad:
+            rep["rules_skipped"].append(
+                f"「{name}」含 {len(bad)} 个当前不存在的清理项"
+                f"（如 {bad[0]}）")
+            continue
+        existing = next((r for r in rules if r["name"] == name), None)
+        if existing:
+            existing["ids"] = ids
+            existing["drive"] = drive
+            existing["auto"] = bool(r0.get("auto"))
+            rep["rules_updated"] += 1
+        else:
+            rules.append({
+                "id": f"rule-{int(time.time() * 1000) % 10 ** 10}{i}",
+                "name": name, "ids": ids, "drive": drive,
+                "auto": bool(r0.get("auto")),
+                "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+            rep["rules_added"] += 1
+    _core.save_custom_rules(rules)
+
+    if isinstance(body.get("fs_groups"), list):
+        groups = _core.load_fs_groups()
+        by_gname = {str(g.get("name") or ""): g for g in groups if isinstance(g, dict)}
+        for g0 in body.get("fs_groups") or []:
+            if not isinstance(g0, dict):
+                continue
+            gname = str(g0.get("name") or "").strip()[:60]
+            gpaths = [os.path.normpath(str(x).strip()).lower()
+                      for x in (g0.get("paths") or []) if str(x).strip()]
+            if not gname or not gpaths:
+                continue
+            if gname in by_gname:
+                merged = list(dict.fromkeys((by_gname[gname].get("paths") or []) + gpaths))
+                by_gname[gname]["paths"] = merged[:200]
+                rep["groups_updated"] += 1
+            else:
+                groups.append({
+                    "id": str(g0.get("id") or f"grp-{int(time.time() * 1000) % 10 ** 10}"),
+                    "name": gname,
+                    "drive": str(g0.get("drive") or "").rstrip(":").upper(),
+                    "paths": list(dict.fromkeys(gpaths))[:200],
+                })
+                rep["groups_added"] += 1
+        _core.save_fs_groups(groups)
+    return rep

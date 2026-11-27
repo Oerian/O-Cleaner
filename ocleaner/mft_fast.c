@@ -3,6 +3,7 @@
  * or MinGW (`gcc -O2 -shared -static mft_fast.c -o mft_fast.dll`).
  */
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
@@ -35,7 +36,7 @@ static inline uint64_t rd_u64(const uint8_t *p) {
 }
 
 OC_EXPORT int mft_fast_version(void) {
-    return 2;
+    return 3;
 }
 
 /* Try to aggregate UTF-16LE extension into fixed ExtSlot[4096] hash table.
@@ -240,4 +241,94 @@ OC_EXPORT int32_t mft_scan_chunk(
         }
     }
     return kept;
+}
+
+/* Aggregate directory sizes & BFS reachability in C (O(n_recs), zero Python loops).
+ * Returns count of want FRNs written to out_want_frns, or -1 on error/oom.
+ */
+OC_EXPORT int32_t mft_agg_tree(
+    int32_t n_recs,
+    const int64_t *parent,
+    const int64_t *size,
+    const uint8_t *flags,
+    uint64_t floor_bytes,
+    int64_t *out_dir_total,
+    uint8_t *out_in_tree,
+    int32_t *out_want_frns,
+    int32_t max_want
+) {
+    if (n_recs <= 5 || !parent || !size || !flags ||
+        !out_dir_total || !out_in_tree || !out_want_frns || max_want <= 0) {
+        return -1;
+    }
+    memset(out_dir_total, 0, (size_t)n_recs * sizeof(int64_t));
+    memset(out_in_tree, 0, (size_t)n_recs * sizeof(uint8_t));
+
+    int32_t *head = (int32_t *)malloc((size_t)n_recs * sizeof(int32_t));
+    int32_t *next_sib = (int32_t *)malloc((size_t)n_recs * sizeof(int32_t));
+    int32_t *queue = (int32_t *)malloc((size_t)n_recs * sizeof(int32_t));
+    if (!head || !next_sib || !queue) {
+        free(head);
+        free(next_sib);
+        free(queue);
+        return -1;
+    }
+    for (int32_t i = 0; i < n_recs; i++) {
+        head[i] = -1;
+        next_sib[i] = -1;
+    }
+
+    for (int32_t i = 0; i < n_recs; i++) {
+        int64_t p64 = parent[i];
+        if (p64 <= 0 || p64 >= n_recs) continue;
+        int32_t p = (int32_t)p64;
+        if (flags[i] & 1) {
+            if (i != 5 && p != i) {
+                next_sib[i] = head[p];
+                head[p] = i;
+            }
+        } else {
+            int64_t sz = size[i];
+            if (sz > 0) {
+                out_dir_total[p] += sz;
+            }
+        }
+    }
+
+    int32_t q_head = 0, q_tail = 0;
+    out_in_tree[5] = 1;
+    queue[q_tail++] = 5;
+    while (q_head < q_tail) {
+        int32_t cur = queue[q_head++];
+        for (int32_t c = head[cur]; c >= 0; c = next_sib[c]) {
+            if (!out_in_tree[c]) {
+                out_in_tree[c] = 1;
+                queue[q_tail++] = c;
+            }
+        }
+    }
+
+    for (int32_t k = q_tail - 1; k >= 1; k--) {
+        int32_t d = queue[k];
+        int32_t p = (int32_t)parent[d];
+        if (p > 0 && p < n_recs && out_in_tree[p]) {
+            out_dir_total[p] += out_dir_total[d];
+        }
+    }
+
+    int32_t want_n = 0;
+    out_want_frns[want_n++] = 5;
+    for (int32_t k = 1; k < q_tail; k++) {
+        int32_t d = queue[k];
+        if ((uint64_t)out_dir_total[d] >= floor_bytes || parent[d] == 5) {
+            if (want_n < max_want) {
+                out_want_frns[want_n++] = d;
+            }
+        }
+    }
+
+    free(head);
+    free(next_sib);
+    free(queue);
+    return want_n;
 }
