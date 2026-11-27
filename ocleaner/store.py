@@ -342,7 +342,7 @@ def _import_bundle(body: dict) -> dict:
             if not isinstance(g0, dict):
                 continue
             gname = str(g0.get("name") or "").strip()[:60]
-            gpaths = [os.path.normpath(str(x).strip()).lower()
+            gpaths = [str(x).replace("/", "\\").rstrip("\\").strip().lower()
                       for x in (g0.get("paths") or []) if str(x).strip()]
             if not gname or not gpaths:
                 continue

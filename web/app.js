@@ -1210,6 +1210,52 @@ function ruleFreed(rule) {
   return sum;
 }
 
+function renderFsGroups() {
+  const box = $("fsGroupList");
+  if (!box) return;
+  const groups = STATE.fs_groups || [];
+  if (!groups.length) { box.innerHTML = ""; return; }
+  box.innerHTML =
+    `<div style="font-size:12px;font-weight:600;color:var(--dim);margin:8px 0 6px">` +
+      `${esc(t("grp.listHead", "自定义归档分组"))} (${groups.length})</div>` +
+    groups.map(g => {
+      const ps = g.paths || [];
+      return `<div class="rule" data-gid="${esc(g.id)}">
+        <div class="rh"><span class="rn">${esc(g.name)}</span>
+          <span class="badge b-mid">${esc(t("grp.pathCount", "{n} 个路径").replace("{n}", ps.length))}</span></div>
+        <div class="chips">${ps.slice(0, 4).map(p => `<span class="chip" title="${esc(p)}">${esc(p)}</span>`).join("")}${
+          ps.length > 4 ? `<span class="chip">${esc(t("rule.andMore", "…另 {n} 项").replace("{n}", ps.length - 4))}</span>` : ""}</div>
+        <div class="racts">
+          <button class="tiny ghost" data-grename="${esc(g.id)}">${esc(t("grp.rename", "改名"))}</button>
+          <button class="tiny ghost" data-gdel="${esc(g.id)}">${esc(t("unit.del", "删"))}</button>
+        </div>
+      </div>`;
+    }).join("");
+  box.querySelectorAll("[data-grename]").forEach(b => b.addEventListener("click", async () => {
+    const g = groups.find(x => x.id === b.dataset.grename);
+    if (!g) return;
+    const nn = prompt(t("grp.renamePrompt", "输入新的分组名称："), g.name);
+    if (!nn || !nn.trim() || nn.trim() === g.name) return;
+    try {
+      await fsGroupOp("rename", { id: g.id, name: nn.trim() });
+      renderFsGroups();
+      if (FS && view === "full") renderChart();
+      toast(t("grp.renamed", "聚合组已重命名"));
+    } catch (e) { toast(t("grp.fail", "操作失败：") + esc(e.message)); }
+  }));
+  box.querySelectorAll("[data-gdel]").forEach(b => b.addEventListener("click", async () => {
+    const g = groups.find(x => x.id === b.dataset.gdel);
+    if (!g) return;
+    if (!confirm(t("grp.delConfirm", "确定删除聚合组「{n}」？（仅解散分组，不删除磁盘文件）").replace("{n}", g.name))) return;
+    try {
+      await fsGroupOp("delete", { id: g.id });
+      renderFsGroups();
+      if (FS && view === "full") renderChart();
+      toast(t("grp.deleted", "已删除聚合组"));
+    } catch (e) { toast(t("grp.fail", "操作失败：") + esc(e.message)); }
+  }));
+}
+
 function renderRules() {
   const rules = STATE.custom_rules || [];
   $("ruleSelInfo").textContent = selected.size
@@ -1219,6 +1265,7 @@ function renderRules() {
   if (!rules.length) {
     $("ruleList").innerHTML =
       `<div class="empty" style="margin:0">${t("rule.none","还没有规则。勾选上面的清理项，起个名字保存即可。")}</div>`;
+    renderFsGroups();
     return;
   }
   $("ruleList").innerHTML = rules.map(r => {
@@ -1290,6 +1337,7 @@ function renderRules() {
     });
     STATE.custom_rules = res.rules; renderRules(); toast(t("toast.ruleDeleted","已删除规则"));
   }));
+  renderFsGroups();
 }
 
 async function saveRule() {
@@ -2197,13 +2245,13 @@ function openGroupDialog(node) {
   $("modal").querySelectorAll("[data-in]").forEach(b => b.addEventListener("click", async () => {
     try {
       await fsGroupOp("add", { id: b.dataset.in, paths: [node.path] });
-      b.closest("li").remove(); renderChart();
+      renderFsGroups(); renderChart(); openGroupDialog(node);
     } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   }));
   $("modal").querySelectorAll("[data-out]").forEach(b => b.addEventListener("click", async () => {
     try {
       await fsGroupOp("remove", { id: b.dataset.out, paths: [node.path] });
-      b.closest("li").remove(); renderChart();
+      renderFsGroups(); renderChart(); openGroupDialog(node);
     } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   }));
   $("grpNewGo").addEventListener("click", async () => {
@@ -2211,7 +2259,7 @@ function openGroupDialog(node) {
     if (!name) return;
     try {
       await fsGroupOp("add", { name, paths: [node.path] });
-      closeModal(); renderChart();
+      renderFsGroups(); closeModal(); renderChart();
     } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   });
 }
@@ -2237,19 +2285,26 @@ function openGroupMgrDialog(node) {
   $("grpRenameGo").addEventListener("click", async () => {
     const name = $("grpRename").value.trim();
     if (!name) return;
-    try { await fsGroupOp("rename", { id: node.gid, name }); renderChart(); }
+    try {
+      await fsGroupOp("rename", { id: node.gid, name });
+      const h3 = $("modal").querySelector("h3");
+      if (h3) h3.textContent = t("grp.mgrTitle","管理聚合组「{v}」").replace("{v}", name);
+      renderFsGroups(); renderChart();
+      toast(t("grp.renamed", "聚合组已重命名"));
+    }
     catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   });
   $("modal").querySelectorAll("[data-out]").forEach(b => b.addEventListener("click", async () => {
     try {
       await fsGroupOp("remove", { id: node.gid, paths: [b.dataset.out] });
-      closeModal(); renderChart();
+      renderFsGroups(); closeModal(); renderChart();
     } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   }));
   $("grpDel").addEventListener("click", async () => {
     try {
       await fsGroupOp("delete", { id: node.gid });
-      closeModal(); renderChart();
+      renderFsGroups(); closeModal(); renderChart();
+      toast(t("grp.deleted", "已删除聚合组"));
     } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
   });
 }
@@ -6231,7 +6286,9 @@ ${itemLines}`
       msg.innerHTML = `<span class="res-ok">${esc(summary)}</span>` +
         (skipped.length ? ` <span style="color:var(--warn)">(${esc(skipped.slice(0, 3).join("; "))})</span>` : "");
       toast(summary);
+      FS_CACHE.clear();
       await loadState();
+      renderFsGroups();
       if (typeof FS !== "undefined" && FS && view === "full") {
         renderOverview();
         renderChart();
@@ -7511,6 +7568,12 @@ const I18N_EN = {
   "mig.moved": "Migrated {n} file(s) to {d}. Restart O-Cleaner to take effect.",
   "mig.resetOk": "Reset to program folder. Restart O-Cleaner to take effect.",
   "mig.restored": "Restored {n} file(s) successfully.",
+  "grp.listHead": "Custom Archive Groups",
+  "grp.pathCount": "{n} path(s)",
+  "grp.renamePrompt": "Enter new group name:",
+  "grp.renamed": "Group renamed",
+  "grp.delConfirm": "Delete group \"{n}\"? (Only dissolves the group; files on disk are untouched)",
+  "grp.deleted": "Group deleted",
   "pane.history": "Recent Cleanups",
   "pane.help": "Guide",
   "unit.clearAll": "Clear all",
