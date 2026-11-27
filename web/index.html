@@ -450,12 +450,14 @@
             也可以把自己的包丢进来，或用 AI 按本机情况生成一份。
           </div>
           <div id="packsList"></div>
-          <div class="field" style="margin-top:11px">
+          <div class="field" style="margin-top:11px;gap:6px;flex-wrap:wrap">
             <button id="btnPackImport" class="tiny primary" data-i18n="packs.import">导入本地资源包</button>
             <button id="btnPackUpdate" class="tiny" data-i18n="packs.update">从 GitHub 检查更新</button>
+            <button id="btnPackCatalog" class="tiny ghost" data-i18n="packs.catalog">社区推荐包</button>
           </div>
           <input type="file" id="packFile" accept=".json,application/json" style="display:none">
           <div id="packMsg" style="color:var(--dim2);font-size:11.5px;margin-top:9px"></div>
+          <div id="packsCatalog" style="margin-top:9px"></div>
           <details style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px" id="commBox">
             <summary style="cursor:pointer;color:var(--dim);font-size:12.5px"
                      data-i18n="comm.head">社区贡献 · 一键上传规则到 GitHub</summary>

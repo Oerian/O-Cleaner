@@ -633,7 +633,7 @@ def _load_mft_fast():
         try:
             lib = ctypes.CDLL(dll_path)
             lib.mft_fast_version.restype = ctypes.c_int
-            if lib.mft_fast_version() != 3:
+            if lib.mft_fast_version() != 4:
                 continue
             lib.mft_scan_chunk.argtypes = [
                 ctypes.c_void_p,                    # buf
@@ -664,6 +664,20 @@ def _load_mft_fast():
                 ctypes.c_int32,                     # max_want
             ]
             lib.mft_agg_tree.restype = ctypes.c_int32
+            lib.mft_reader_open.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32,
+                ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_int64),
+                ctypes.c_int32,
+            ]
+            lib.mft_reader_open.restype = ctypes.c_void_p
+            lib.mft_reader_next.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_uint64),
+                ctypes.POINTER(ctypes.c_uint32),
+            ]
+            lib.mft_reader_next.restype = ctypes.c_int32
+            lib.mft_reader_close.argtypes = [ctypes.c_void_p]
+            lib.mft_reader_close.restype = None
             _MFT_FAST_CACHE = lib
             return lib
         except OSError:
@@ -825,47 +839,78 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
             if ext_stats:
                 c_ext_tbl = (_ExtSlot * 4096)()
 
-        for chunk, usable in read_chunks():
+        def _consume_c(c_ptr, usable_n, mv_chunk):
+            nonlocal records
+            n_recs = usable_n // frs_size
+            if n_recs > c_buf_cap:
+                return False
+            kept = fast_dll.mft_scan_chunk(
+                c_ptr, usable_n, frs_size, f_floor,
+                1 if ext_stats else 0, 1 if with_mtime else 0,
+                c_parent, c_size, c_flags, c_mtime,
+                c_nidx, c_noff, c_nlen, c_ext_tbl,
+            )
+            if kept < 0:
+                return False
+            base_idx = records
+            records += n_recs
+            arr_parent.frombytes(memoryview(c_parent)[:n_recs])
+            arr_size.frombytes(memoryview(c_size)[:n_recs])
+            arr_flags.extend(memoryview(c_flags)[:n_recs])
+            for k in range(kept):
+                li = c_nidx[k]
+                idx = base_idx + li
+                noff = c_noff[k]
+                raw_len = c_nlen[k]
+                nlen = raw_len & 0x7FFF
+                name_raw = bytes(mv_chunk[noff:noff + nlen])
+                if c_flags[li]:
+                    if idx != 5:
+                        dir_names[idx] = name_raw
+                else:
+                    if ext_stats and not (raw_len & 0x8000):
+                        ext_bump(exts, name_raw, c_size[li])
+                    p = c_parent[li]
+                    sz = c_size[li]
+                    if sz >= f_floor or p == 5:
+                        file_keep[idx] = (_mft_name_decode(name_raw), sz, p)
+                        if with_mtime and c_mtime[li]:
+                            file_mtime[idx] = c_mtime[li]
+            if on_progress:
+                try:
+                    on_progress(min(1.0, records / est_records))
+                except Exception:
+                    pass
+            return True
+
+        used_c_reader = False
+        if fast_dll is not None and runs:
+            ch_bytes = max(frs_size * 1024, 32 * 1024 * 1024)
+            ch_bytes -= ch_bytes % frs_size
+            n_runs = len(runs)
+            c_rlcn = (ctypes.c_int64 * n_runs)(*[r0[0] for r0 in runs])
+            c_rlen = (ctypes.c_int64 * n_runs)(*[r0[1] for r0 in runs])
+            rd_ctx = fast_dll.mft_reader_open(
+                h, bpc, frs_size, ch_bytes, c_rlcn, c_rlen, n_runs)
+            if rd_ctx:
+                used_c_reader = True
+                out_ptr = ctypes.c_uint64(0)
+                out_use = ctypes.c_uint32(0)
+                try:
+                    while fast_dll.mft_reader_next(
+                            rd_ctx, ctypes.byref(out_ptr), ctypes.byref(out_use)) == 1:
+                        pv = out_ptr.value
+                        uv = out_use.value
+                        mv = memoryview((ctypes.c_uint8 * uv).from_address(pv))
+                        _consume_c(ctypes.c_void_p(pv), uv, mv)
+                finally:
+                    fast_dll.mft_reader_close(rd_ctx)
+
+        for chunk, usable in (() if used_c_reader else read_chunks()):
             n_recs = usable // frs_size
             if fast_dll is not None and n_recs <= c_buf_cap:
                 c_raw = (ctypes.c_uint8 * usable).from_buffer(chunk)
-                kept = fast_dll.mft_scan_chunk(
-                    c_raw, usable, frs_size, f_floor,
-                    1 if ext_stats else 0, 1 if with_mtime else 0,
-                    c_parent, c_size, c_flags, c_mtime,
-                    c_nidx, c_noff, c_nlen, c_ext_tbl,
-                )
-                if kept >= 0:
-                    base_idx = records
-                    records += n_recs
-                    arr_parent.frombytes(memoryview(c_parent)[:n_recs])
-                    arr_size.frombytes(memoryview(c_size)[:n_recs])
-                    arr_flags.extend(memoryview(c_flags)[:n_recs])
-                    mv_chunk = memoryview(chunk)
-                    for k in range(kept):
-                        li = c_nidx[k]
-                        idx = base_idx + li
-                        noff = c_noff[k]
-                        raw_len = c_nlen[k]
-                        nlen = raw_len & 0x7FFF
-                        name_raw = bytes(mv_chunk[noff:noff + nlen])
-                        if c_flags[li]:
-                            if idx != 5:
-                                dir_names[idx] = name_raw
-                        else:
-                            if ext_stats and not (raw_len & 0x8000):
-                                ext_bump(exts, name_raw, c_size[li])
-                            p = c_parent[li]
-                            sz = c_size[li]
-                            if sz >= f_floor or p == 5:
-                                file_keep[idx] = (_mft_name_decode(name_raw), sz, p)
-                                if with_mtime and c_mtime[li]:
-                                    file_mtime[idx] = c_mtime[li]
-                    if on_progress:
-                        try:
-                            on_progress(min(1.0, records / est_records))
-                        except Exception:
-                            pass
+                if _consume_c(c_raw, usable, memoryview(chunk)):
                     continue
             for roff in range(0, usable, frs_size):
                 idx = records

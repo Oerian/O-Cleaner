@@ -75,6 +75,11 @@ jobs:
       - name: 规则 linter（--strict，警告也算失败）
         run: python -X utf8 tools/lint_rules.py --strict
 
+      - name: 单元测试与跨模块引用检查
+        run: |
+          python -X utf8 tools/unit_test.py
+          python -X utf8 tools/check_undefined.py
+
       # 防止 linter 自身退化成空转：注入已知缺陷，验证它真的抓得到
       - name: 验证 linter 有检出能力
         run: python -X utf8 tools/_lint_selftest.py

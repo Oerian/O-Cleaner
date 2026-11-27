@@ -7,6 +7,8 @@
 #include <string.h>
 
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #define OC_EXPORT __declspec(dllexport)
 #else
 #define OC_EXPORT
@@ -36,7 +38,7 @@ static inline uint64_t rd_u64(const uint8_t *p) {
 }
 
 OC_EXPORT int mft_fast_version(void) {
-    return 3;
+    return 4;
 }
 
 /* Try to aggregate UTF-16LE extension into fixed ExtSlot[4096] hash table.
@@ -332,3 +334,157 @@ OC_EXPORT int32_t mft_agg_tree(
     free(queue);
     return want_n;
 }
+
+#ifdef _WIN32
+typedef struct {
+    HANDLE h_vol;
+    uint32_t bpc;
+    uint32_t frs_size;
+    uint32_t chunk_bytes;
+    int64_t *runs_lcn;
+    int64_t *runs_len;
+    int32_t n_runs;
+    uint8_t *buf[2];
+    uint32_t usable[2];
+    uint8_t tail_buf[4096];
+    uint32_t tail_len;
+    HANDLE ev_filled[2];
+    HANDLE ev_free[2];
+    HANDLE th;
+    volatile LONG stop;
+    int32_t cur_slot;
+    int has_prev;
+} MftReader;
+
+static DWORD WINAPI mft_reader_proc(LPVOID arg) {
+    MftReader *rd = (MftReader *)arg;
+    int32_t slot = 0;
+    uint32_t held = 0;
+    for (int32_t r = 0; r < rd->n_runs && !rd->stop; r++) {
+        int64_t lcn = rd->runs_lcn[r];
+        int64_t clen = rd->runs_len[r];
+        if (lcn <= 0 || clen <= 0) continue;
+        int64_t pos = lcn * (int64_t)rd->bpc;
+        int64_t left = clen * (int64_t)rd->bpc;
+        while (left > 0 && !rd->stop) {
+            WaitForSingleObject(rd->ev_free[slot], INFINITE);
+            if (rd->stop) break;
+            if (held > 0) {
+                memcpy(rd->buf[slot], rd->tail_buf, held);
+            }
+            DWORD want = (DWORD)((left < (int64_t)rd->chunk_bytes) ? left : (int64_t)rd->chunk_bytes);
+            LARGE_INTEGER li;
+            li.QuadPart = pos;
+            if (!SetFilePointerEx(rd->h_vol, li, NULL, FILE_BEGIN)) {
+                SetEvent(rd->ev_free[slot]);
+                break;
+            }
+            DWORD got = 0;
+            if (!ReadFile(rd->h_vol, rd->buf[slot] + held, want, &got, NULL) || got == 0) {
+                SetEvent(rd->ev_free[slot]);
+                break;
+            }
+            uint32_t total = held + (uint32_t)got;
+            uint32_t use = total - (total % rd->frs_size);
+            held = total - use;
+            if (held > 0 && held <= sizeof(rd->tail_buf)) {
+                memcpy(rd->tail_buf, rd->buf[slot] + use, held);
+            } else {
+                held = 0;
+            }
+            pos += (int64_t)got;
+            left -= (int64_t)got;
+            if (use > 0) {
+                rd->usable[slot] = use;
+                SetEvent(rd->ev_filled[slot]);
+                slot ^= 1;
+            } else {
+                SetEvent(rd->ev_free[slot]);
+            }
+        }
+    }
+    WaitForSingleObject(rd->ev_free[slot], INFINITE);
+    rd->usable[slot] = 0;
+    SetEvent(rd->ev_filled[slot]);
+    return 0;
+}
+
+OC_EXPORT void *mft_reader_open(
+    void *h_vol,
+    uint32_t bpc,
+    uint32_t frs_size,
+    uint32_t chunk_bytes,
+    const int64_t *runs_lcn,
+    const int64_t *runs_len,
+    int32_t n_runs
+) {
+    if (!h_vol || frs_size < 0x40 || frs_size > 4096 || !runs_lcn || !runs_len || n_runs <= 0) {
+        return NULL;
+    }
+    MftReader *rd = (MftReader *)calloc(1, sizeof(MftReader));
+    if (!rd) return NULL;
+    rd->h_vol = (HANDLE)h_vol;
+    rd->bpc = bpc;
+    rd->frs_size = frs_size;
+    rd->chunk_bytes = chunk_bytes;
+    rd->n_runs = n_runs;
+    rd->runs_lcn = (int64_t *)malloc((size_t)n_runs * sizeof(int64_t));
+    rd->runs_len = (int64_t *)malloc((size_t)n_runs * sizeof(int64_t));
+    rd->buf[0] = (uint8_t *)malloc((size_t)chunk_bytes + frs_size);
+    rd->buf[1] = (uint8_t *)malloc((size_t)chunk_bytes + frs_size);
+    if (!rd->runs_lcn || !rd->runs_len || !rd->buf[0] || !rd->buf[1]) {
+        free(rd->runs_lcn); free(rd->runs_len);
+        free(rd->buf[0]); free(rd->buf[1]); free(rd);
+        return NULL;
+    }
+    memcpy(rd->runs_lcn, runs_lcn, (size_t)n_runs * sizeof(int64_t));
+    memcpy(rd->runs_len, runs_len, (size_t)n_runs * sizeof(int64_t));
+    for (int i = 0; i < 2; i++) {
+        rd->ev_filled[i] = CreateEventW(NULL, FALSE, FALSE, NULL);
+        rd->ev_free[i] = CreateEventW(NULL, FALSE, TRUE, NULL);
+    }
+    rd->th = CreateThread(NULL, 0, mft_reader_proc, rd, 0, NULL);
+    if (!rd->th) {
+        for (int i = 0; i < 2; i++) { CloseHandle(rd->ev_filled[i]); CloseHandle(rd->ev_free[i]); }
+        free(rd->runs_lcn); free(rd->runs_len);
+        free(rd->buf[0]); free(rd->buf[1]); free(rd);
+        return NULL;
+    }
+    return rd;
+}
+
+OC_EXPORT int32_t mft_reader_next(void *ctx, uint64_t *out_ptr, uint32_t *out_usable) {
+    MftReader *rd = (MftReader *)ctx;
+    if (!rd || !out_ptr || !out_usable) return -1;
+    if (rd->has_prev) {
+        SetEvent(rd->ev_free[rd->cur_slot ^ 1]);
+        rd->has_prev = 0;
+    }
+    WaitForSingleObject(rd->ev_filled[rd->cur_slot], INFINITE);
+    uint32_t use = rd->usable[rd->cur_slot];
+    if (use == 0) return 0;
+    *out_ptr = (uint64_t)(uintptr_t)rd->buf[rd->cur_slot];
+    *out_usable = use;
+    rd->has_prev = 1;
+    rd->cur_slot ^= 1;
+    return 1;
+}
+
+OC_EXPORT void mft_reader_close(void *ctx) {
+    MftReader *rd = (MftReader *)ctx;
+    if (!rd) return;
+    InterlockedExchange(&rd->stop, 1);
+    SetEvent(rd->ev_free[0]);
+    SetEvent(rd->ev_free[1]);
+    WaitForSingleObject(rd->th, INFINITE);
+    CloseHandle(rd->th);
+    for (int i = 0; i < 2; i++) {
+        CloseHandle(rd->ev_filled[i]);
+        CloseHandle(rd->ev_free[i]);
+        free(rd->buf[i]);
+    }
+    free(rd->runs_lcn);
+    free(rd->runs_len);
+    free(rd);
+}
+#endif

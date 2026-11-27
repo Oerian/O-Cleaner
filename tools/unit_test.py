@@ -465,7 +465,7 @@ def main() -> int:
     c_src = Path(app.BASE_DIR) / "ocleaner" / "mft_fast.c"
     dll_obj = _eng._load_mft_fast()
     check("MFT 原生加速：mft_fast.c 就位且缺失 DLL 时安全回退 Python",
-          c_src.is_file() and (dll_obj is None or dll_obj.mft_fast_version() == 3),
+          c_src.is_file() and (dll_obj is None or dll_obj.mft_fast_version() == 4),
           f"c_src={c_src.is_file()} dll={dll_obj}")
 
     # ---------- 社区规则一键上传（无令牌 Issue 模式） ----------
@@ -536,6 +536,13 @@ def main() -> int:
                       f"{imp}")
     finally:
         app.DATA_DIR = orig_data_dir
+
+    # ---------- 社区资源包目录与本机环境匹配 ----------
+    cat = _integ.packs_catalog()
+    check("社区资源包目录：返回有效结构与本机推荐标签",
+          cat.get("ok") and isinstance(cat.get("items"), list) and len(cat["items"]) >= 1
+          and any(x.get("recommended") for x in cat["items"]),
+          f"{cat.get('env')} count={len(cat.get('items') or [])}")
 
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"

@@ -333,6 +333,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"packs": _core.load_packs(use_cache=False)["packs"],
                                "remote": _core.load_packs_state().get("remote") or "",
                                "user_dir": str(_core.USER_PACKS_DIR)})
+        if route == "/__oc__/packs/catalog":
+            return self._json(_integ.packs_catalog())
         if route == "/__oc__/ext-cache":
             letter = str(q.get("drive") or "C").rstrip(":/\\").upper()
             if not re.fullmatch(r"[A-Z]", letter):
@@ -1600,5 +1602,7 @@ class Handler(BaseHTTPRequestHandler):
         # ---- 检查应用更新（只读 GitHub Releases，不自动下载） ----
         if route == "/__oc__/app/update_check":
             return self._json(_core.app_update_check())
+        if route == "/__oc__/app/self_update":
+            return self._json(_integ.app_self_update())
 
         return self._json({"error": "not found"}, 404)

@@ -6557,6 +6557,43 @@ $("btnPackUpdate").addEventListener("click", async () => {
   msg.innerHTML = `<span class="spin"></span>${t("io.downloading","正在从远端清单下载…")}`;
   await packOp("update", {});
 });
+if ($("btnPackCatalog")) $("btnPackCatalog").addEventListener("click", async () => {
+  const box = $("packsCatalog"), btn = $("btnPackCatalog");
+  btn.disabled = true;
+  box.innerHTML = `<span class="spin"></span>${esc(t("packs.catLoading","正在匹配本机环境与社区包…"))}`;
+  try {
+    const r = await apiJSON(`${API}/__oc__/packs/catalog`);
+    const items = (r && r.items) || [];
+    const envTxt = (r && r.env || []).join(" · ");
+    box.innerHTML = `<div style="font-size:11.5px;color:var(--dim2);margin-bottom:6px">${esc(t("packs.envTag","已识别本机环境：") + (envTxt || "Windows"))}</div>` +
+      items.map(it => `<div class="rule" style="margin-bottom:6px">
+        <div class="rh"><span class="rn">${esc(it.id)}</span>
+          ${it.recommended ? `<span class="badge b-cat">${esc(t("packs.recBadge","本机推荐"))}</span>` : ""}
+          ${it.version ? `<span class="badge b-mid">v${esc(it.version)}</span>` : ""}
+        </div>
+        ${it.reason ? `<div class="rd">${esc(it.reason)}</div>` : ""}
+        <div class="racts">
+          ${it.installed && it.enabled
+            ? `<span style="font-size:11.5px;color:var(--ok-fg)">${esc(t("packs.enabledOk","已启用"))}</span>`
+            : it.installed
+            ? `<button class="tiny primary" data-cat-en="${esc(it.id)}">${esc(t("packs.enableBtn","立即启用"))}</button>`
+            : `<button class="tiny primary" data-cat-dl="1">${esc(t("packs.dlBtn","拉取并启用"))}</button>`}
+        </div>
+      </div>`).join("");
+    box.querySelectorAll("[data-cat-en]").forEach(b => b.addEventListener("click", async () => {
+      await packOp("toggle", { id: b.dataset.catEn, enabled: true });
+      $("btnPackCatalog").click();
+    }));
+    box.querySelectorAll("[data-cat-dl]").forEach(b => b.addEventListener("click", async () => {
+      await packOp("update", {});
+      $("btnPackCatalog").click();
+    }));
+  } catch (e) {
+    box.innerHTML = `<span class="res-err">${esc(e && e.message || String(e))}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
+});
 $("btnCommUpload").addEventListener("click", async () => {
   const msg = $("commMsg");
   const btn = $("btnCommUpload");
@@ -6606,7 +6643,28 @@ $("btnUpCheck").addEventListener("click", async () => {
     } else if (r.newer) {
       const tag = "v" + (r.latest || "?") + (r.published ? " · " + r.published : "");
       msg.innerHTML = `<a href="${esc(r.url || r.download)}" target="_blank" rel="noopener"
-        style="color:var(--ok)">${esc(tag)} — ${esc(t("up.newer", "有新版本，点击前往下载页"))}</a>`;
+        style="color:var(--ok)">${esc(tag)} — ${esc(t("up.newer", "有新版本，点击前往下载页"))}</a> ` +
+        `<button type="button" class="tiny primary" id="btnSelfUpdate" style="margin-left:6px">${esc(t("up.autoBtn","一键校验升级"))}</button>`;
+      const su = $("btnSelfUpdate");
+      if (su) su.addEventListener("click", async () => {
+        su.disabled = true;
+        su.textContent = t("up.updating", "下载校验中…");
+        try {
+          const ur = await apiJSON(`${API}/__oc__/app/self_update`, { method: "POST" });
+          if (!ur.ok) {
+            toast(ur.error || t("up.fail", "升级失败"));
+            su.disabled = false;
+            su.textContent = t("up.autoBtn", "一键校验升级");
+            return;
+          }
+          msg.innerHTML = `<span class="res-ok">${esc(t("up.done", "已更新 {n} 个文件至 v{v}，请重启 O-Cleaner 生效。").replace("{n}", ur.updated_files || 0).replace("{v}", ur.version || ""))}</span>`;
+          toast(t("up.doneToast", "升级包校验并应用成功，请重启 O-Cleaner"));
+        } catch (ex) {
+          toast(ex && ex.message || String(ex));
+          su.disabled = false;
+          su.textContent = t("up.autoBtn", "一键校验升级");
+        }
+      });
     } else {
       msg.textContent = t("up.uptodate", "已是最新") + (r.parse_note ? " · " + r.parse_note : "");
     }
@@ -7530,6 +7588,17 @@ const I18N_EN = {
   "eb.chkPurge": "Permanently purge these {n} trashed item(s) now (checked = confirmed, irreversible)",
   "eb.chkDefault": "Check this by default next time",
   "eb.donePurge": "Done & Purge",
+  "packs.catalog": "Recommended Packs",
+  "packs.catLoading": "Matching local environment with community packs…",
+  "packs.envTag": "Detected environment: ",
+  "packs.recBadge": "Recommended",
+  "packs.enabledOk": "Enabled",
+  "packs.enableBtn": "Enable",
+  "packs.dlBtn": "Fetch & Enable",
+  "up.autoBtn": "1-Click Verified Update",
+  "up.updating": "Downloading & verifying…",
+  "up.done": "Updated {n} file(s) to v{v}. Restart O-Cleaner to take effect.",
+  "up.doneToast": "Verified update applied — restart O-Cleaner",
   "ov.resetDone": "Display reset to defaults", "ov.pinnedDone": "Pinned to the top",
   "ov.savedDone": "Custom display saved", "ov.saved": "Custom description saved",
   "ov.resetBtn": "Reset to defaults",
