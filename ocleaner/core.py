@@ -343,7 +343,7 @@ def elevate_relaunch() -> dict:
     target = Path(sys.executable).with_name("pythonw.exe")
     exe = str(target) if target.is_file() else sys.executable
     rc = ctypes.windll.shell32.ShellExecuteW(
-        None, "runas", exe, f'"{script}"{port_arg}', None, 0)  # 0 = SW_HIDE
+        None, "runas", exe, f'"{script}"{port_arg}', str(BASE_DIR), 0)  # 0 = SW_HIDE
     if rc <= 32:
         return {"ok": False,
                 "error": f"提权未完成（UAC 被取消或失败，代码 {rc}）"}

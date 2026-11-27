@@ -152,9 +152,9 @@
      坑三：grid 的隐式行是 auto，会被内容撑高而溢出容器；必须用
      grid-template-rows:minmax(0,1fr) 把唯一一行钉死在容器高度上，
      子项才能成为真正的滚动容器。 */
-  html,body{height:100%}
+  html,body{height:100%;overflow-x:hidden;max-width:100%}
   body{display:flex;flex-direction:column;height:100vh;overflow:hidden}
-  header{flex:none}
+  header{flex:none;max-width:100%;overflow-x:hidden}
   /* 用 grid-template-areas 显式命名每个格子，左列自上而下是
      工具栏 → 自定义目录栏 → 磁盘概览 → 当前视图；右列 sidebar 跨满整列。 */
   main{display:grid;gap:0 18px;
@@ -166,7 +166,7 @@
        padding:16px 20px;max-width:1560px;margin:0 auto;width:100%}
   /* 左列整体一个滚动容器（2026-10-14 起）：工具栏、磁盘概览、当前视图
      全部在里面随滚动走，磁盘概览不再钉在滚动区外。 */
-  #leftcol{grid-area:left;min-width:0;min-height:0;overflow-y:auto;
+  #leftcol{grid-area:left;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;
            display:flex;flex-direction:column;gap:12px;
            padding-right:4px;padding-bottom:4px}
   main > section{min-width:0;min-height:0}
@@ -450,12 +450,13 @@
   /* 扩展名分布（类型分布）竖向柱状图：每列一类型，柱高∝体积。
      2026-11-03 起从扫描概览的收起/展开器迁移为磁盘卡组件页签；
      列结构保留（三段定高，共享基线）。 */
-  .extv{display:flex;align-items:flex-end;gap:6px;height:130px;margin-top:3px;
-    border-bottom:1px solid var(--line);padding:0 2px 3px}
+  .extv{display:flex;align-items:flex-end;gap:8px;height:132px;margin-top:3px;
+    border-bottom:1px solid var(--line);padding:4px 4px 3px;
+    max-width:100%;box-sizing:border-box;overflow-x:auto;flex-wrap:nowrap}
   /* 2026-11-03 对齐修复：列改三段固定区（数值 2 行高 / 弹性柱区 / 标签
      2 行高）—— 旧版标签换行会把柱子顶得高低不一（设计约束「换行导致
      柱状图错位」）；现在所有柱共享同一条基线，长标签在各自固定区内换行。 */
-  .extcol{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;
+  .extcol{flex:1 0 56px;min-width:56px;height:100%;display:flex;flex-direction:column;
     align-items:stretch;cursor:default}
   .extcol i{display:block;width:62%;max-width:30px;min-height:4px;
     border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--accent),var(--accent2))}
@@ -2163,19 +2164,33 @@ async function _dwRenderExt(body) {
       "对 {d}: 盘做一次全盘扫描后，这里显示文件类型分布").replace("{d}", esc(drv || "?")))}</div>`;
     return;
   }
-  const maxv = Math.max(1, ...list.map(e => e.size || 0));
-  body.innerHTML = `${stale ? `<div class="hint" style="margin-bottom:6px">${esc(t("dw.extStale",
-    "显示的是上次全盘扫描的分布（重启后仍可查看）；重新全盘扫描即更新"))}</div>` : ""}
-    <div class="extv">${list.map(e => {
-    const h = Math.max(3, Math.round((e.size || 0) / maxv * 100));
-    const label = e.ext === "__other__" ? t("fs.extOther","其他类型")
-      : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
-    const tipc = `${label} · ${fmt(e.size || 0)} · ${Number(e.count || 0).toLocaleString()} ${t("fs.extFilesShort","个")}`;
-    return `<div class="extcol" title="${tipc}">
-      <span class="extvval">${fmt(e.size || 0)}</span>
-      <span class="extvbar"><i style="height:${h}%"></i></span>
-      <span class="extvlab">${label}</span></div>`;
-  }).join("")}</div>`;
+  const sorted = [...list].sort((a, b) => (b.size || 0) - (a.size || 0));
+  const TOP_N = 12;
+  let showAllExt = false;
+  const paintExt = () => {
+    const viewList = showAllExt ? sorted : sorted.slice(0, TOP_N);
+    const maxv = Math.max(1, ...viewList.map(e => e.size || 0));
+    body.innerHTML = `${stale ? `<div class="hint" style="margin-bottom:6px">${esc(t("dw.extStale",
+      "显示的是上次全盘扫描的分布（重启后仍可查看）；重新全盘扫描即更新"))}</div>` : ""}
+      <div class="extv">${viewList.map(e => {
+      const h = Math.max(4, Math.round((e.size || 0) / maxv * 100));
+      const label = e.ext === "__other__" ? t("fs.extOther","其他类型")
+        : e.ext === "" ? t("fs.extNone","无扩展名") : "." + esc(e.ext);
+      const tipc = `${label} · ${fmt(e.size || 0)} · ${Number(e.count || 0).toLocaleString()} ${t("fs.extFilesShort","个")}`;
+      return `<div class="extcol" title="${tipc}">
+        <span class="extvval">${fmt(e.size || 0)}</span>
+        <span class="extvbar"><i style="height:${h}%"></i></span>
+        <span class="extvlab">${label}</span></div>`;
+    }).join("")}</div>` +
+    (sorted.length > TOP_N
+      ? `<div style="display:flex;justify-content:flex-end;margin-top:4px"><button type="button" class="tiny ghost" id="btnExtMore">${esc(showAllExt
+          ? t("dw.extTop", "只看前 12 类")
+          : t("dw.extAll", "展开全部 {n} 类（可横向滚动）").replace("{n}", sorted.length))}</button></div>`
+      : "");
+    const btn = $("btnExtMore");
+    if (btn) btn.addEventListener("click", () => { showAllExt = !showAllExt; paintExt(); });
+  };
+  paintExt();
 }
 
 // 窗口尺寸变化（拖小浏览器窗口、分屏、收起侧栏）时重绘趋势画布：
@@ -7002,8 +7017,11 @@ $("btnElevate").addEventListener("click", async () => {
   const deadline = Date.now() + 180000;
   const tick = async () => {
     try {
-      const st = await apiJSON(`${API}/__oc__/state?drive=C`);
-      if (st && st.is_admin) { location.reload(); return; }
+      const resp = await fetch(`${API}/__oc__/state?drive=C`);
+      if (resp.ok) {
+        const st = await resp.json();
+        if (st && st.is_admin) { _apiDownSince = 0; location.reload(); return; }
+      }
     } catch (_) {}
     if (Date.now() < deadline) setTimeout(tick, 1000);
     else {
@@ -8721,6 +8739,8 @@ const I18N_EN = {
   "hub.rules": "My Rules",
   "hub.presets": "AI Presets",
   "hub.packs": "Packs",
+  "dw.extTop": "Top 12 only",
+  "dw.extAll": "Show all {n} types (scrollable)",
   "pane.history": "Recent Cleanups",
   "pane.help": "Guide",
   "unit.clearAll": "Clear all",
@@ -8839,14 +8859,16 @@ function _startReconnect() {
   _apiDownSince = Date.now();
   const t0 = setInterval(async () => {
     try {
-      const rr = await fetch(`${API}/__oc__/state`, { method: "POST" });
+      const rr = await fetch(`${API}/__oc__/state?drive=C`);
       if (rr.ok) {
         clearInterval(t0);
+        _apiDownSince = 0;
         location.reload();
       }
     } catch (_) { /* 服务还没起来，继续等 */ }
     if (Date.now() - _apiDownSince > 120000) {
       clearInterval(t0);
+      _apiDownSince = 0;
       toast(t("api.dead", "服务未恢复——请手动重新运行 O-Cleaner 并刷新本页"));
     }
   }, 2000);
