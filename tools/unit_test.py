@@ -544,6 +544,21 @@ def main() -> int:
           and any(x.get("recommended") for x in cat["items"]),
           f"{cat.get('env')} count={len(cat.get('items') or [])}")
 
+    # ---------- Windows 官方组件安全瘦身 ----------
+    ss_st = app.sys_slim_status()
+    check("官方组件瘦身：只读状态查询返回合法结构",
+          isinstance(ss_st, dict) and "hiber_on" in ss_st and "winsxs_exists" in ss_st,
+          f"{ss_st}")
+    bad_act = app.sys_slim_run("arbitrary_cmd")
+    check("官方组件瘦身：拒绝非白名单操作", not bad_act.get("ok"), f"{bad_act}")
+    orig_adm2 = app.is_admin
+    try:
+        app.is_admin = lambda: False
+        no_adm = app.sys_slim_run("dism_cleanup")
+        check("官方组件瘦身：非管理员拒绝执行", not no_adm.get("ok"), f"{no_adm}")
+    finally:
+        app.is_admin = orig_adm2
+
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"
           f"失败 {len(failed)} 项 ====")

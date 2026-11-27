@@ -5034,6 +5034,7 @@ const AN_TOOLS = [
   ["snap", () => t("btn.snapDiff", "磁盘快照"), openSnapDiff],
   ["dl", () => t("btn.dlAdvice", "下载整理"), openDownloadsAdvice],
   ["jm", () => t("btn.jm", "磁盘迁移"), openJunctionMove],
+  ["slim", () => t("btn.sysSlim", "系统瘦身"), openSysSlim],
 ];
 let _anObserverBound = false;
 function openAnalysis(tool) {
@@ -5062,6 +5063,80 @@ function openAnalysis(tool) {
     x.addEventListener("click", () => openAnalysis(x.dataset.an)));
   const t0 = AN_TOOLS.find(x => x[0] === tool);
   if (t0) t0[2]();
+}
+
+/* Windows 官方组件安全瘦身：调用 DISM / powercfg / 传递优化官方命令 */
+async function openSysSlim() {
+  const anSeq = ++_anSeq;
+  $("modal").innerHTML = `<h2>${esc(t("slim.title", "Windows 官方组件安全瘦身"))}</h2>
+    <div class="mbody"><div class="empty"><span class="spin"></span>${esc(t("slim.loading", "正在检测系统组件状态…"))}</div></div>`;
+  $("mask").classList.add("on");
+  let st;
+  try {
+    st = await apiJSON(`${API}/__oc__/sys-slim`);
+  } catch (e) { st = { error: String(e) }; }
+  if (anSeq !== _anSeq) return;
+  if (st.error || !st.supported) {
+    $("modal").innerHTML = `<h2>${esc(t("slim.title", "Windows 官方组件安全瘦身"))}</h2>
+      <div class="mbody"><div class="empty">${esc(st.error || t("slim.unsupported", "当前环境不支持此功能"))}</div></div>`;
+    return;
+  }
+  const adm = !!st.is_admin;
+  $("modal").innerHTML = `<h2>${esc(t("slim.title", "Windows 官方组件安全瘦身"))}</h2>
+    <div class="mbody">
+      <div style="color:var(--dim);font-size:12.5px;margin-bottom:12px;line-height:1.6">
+        ${esc(t("slim.intro", "以下操作均调用 Windows 官方内置维护命令执行，绝不直接强删系统保护文件；执行前需具备管理员权限。"))}
+      </div>
+      ${!adm ? `<div class="warnpane warm" style="margin-bottom:12px;font-size:12.5px">
+        ${esc(t("slim.needAdm", "当前为普通权限，请先点击顶部「一键提权重启」后再执行瘦身操作。"))}</div>` : ""}
+      <div class="rule" style="margin-bottom:10px">
+        <div class="rh"><span class="rn">${esc(t("slim.dismTitle", "WinSxS 组件存储清理（DISM）"))}</span>
+          <span class="badge b-cat">StartComponentCleanup</span></div>
+        <div class="rd">${esc(t("slim.dismDesc", "调用 Dism.exe 安全清理已被新版本取代的旧系统更新备份，保留当前系统完整性（耗时约 1~3 分钟）。"))}</div>
+        <div class="racts"><button class="tiny primary" data-slim="dism_cleanup" ${adm ? "" : "disabled"}>${esc(t("slim.runBtn", "执行清理"))}</button></div>
+      </div>
+      <div class="rule" style="margin-bottom:10px">
+        <div class="rh"><span class="rn">${esc(t("slim.hiberTitle", "休眠文件管理（hiberfil.sys）"))}</span>
+          <span class="badge ${st.hiber_on ? "b-mid" : "b-cat"}">${st.hiber_on ? esc(t("slim.hiberOn", "已开启 · 占用 {v}").replace("{v}", st.hiber_h)) : esc(t("slim.hiberOff", "已关闭 · 0 B"))}</span></div>
+        <div class="rd">${esc(t("slim.hiberDesc", "调用 powercfg 关闭休眠可立即释放数 GB 系统盘空间；关闭后将无法使用「休眠」与「快速启动」（可随时在此重新开启）。"))}</div>
+        <div class="racts">${st.hiber_on
+          ? `<button class="tiny go" data-slim="hiber_off" ${adm ? "" : "disabled"}>${esc(t("slim.hiberOffBtn", "关闭休眠并释放"))}</button>`
+          : `<button class="tiny ghost" data-slim="hiber_on" ${adm ? "" : "disabled"}>${esc(t("slim.hiberOnBtn", "重新开启休眠"))}</button>`}</div>
+      </div>
+      <div class="rule">
+        <div class="rh"><span class="rn">${esc(t("slim.doTitle", "传递优化下载缓存"))}</span>
+          <span class="badge b-cat">DeliveryOptimization</span></div>
+        <div class="rd">${esc(t("slim.doDesc", "清理 Windows Update / 应用商店的 P2P 下载缓存文件。"))}</div>
+        <div class="racts"><button class="tiny primary" data-slim="do_cache" ${adm ? "" : "disabled"}>${esc(t("slim.runBtn", "执行清理"))}</button></div>
+      </div>
+      <div id="slimMsg" style="margin-top:10px;font-size:12px;color:var(--dim2);line-height:1.6"></div>
+    </div>`;
+  $("modal").querySelectorAll("[data-slim]").forEach(b => b.addEventListener("click", async () => {
+    const act = b.dataset.slim;
+    const msg = $("slimMsg");
+    if (!confirm(t("slim.confirm", "确认执行该 Windows 官方维护操作？"))) return;
+    b.disabled = true;
+    msg.innerHTML = `<span class="spin"></span>${esc(t("slim.running", "正在执行官方命令，请勿关闭窗口…"))}`;
+    try {
+      const r = await apiJSON(`${API}/__oc__/sys-slim`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: act }),
+      });
+      if (!r.ok) {
+        msg.innerHTML = `<span class="res-err">${esc(r.error || "执行失败")}</span>`;
+        b.disabled = false;
+        return;
+      }
+      const note = r.freed_h
+        ? t("slim.doneFreed", "执行完成，已释放 {v}。").replace("{v}", r.freed_h)
+        : t("slim.done", "执行完成。");
+      toast(note);
+      openSysSlim();
+    } catch (e) {
+      msg.innerHTML = `<span class="res-err">${esc(e && e.message || String(e))}</span>`;
+      b.disabled = false;
+    }
+  }));
 }
 
 /* 毒瘤软件完整清除：两段式 —— 先跑官方卸载程序，再由用户点「清扫残留」
@@ -7599,6 +7674,27 @@ const I18N_EN = {
   "up.updating": "Downloading & verifying…",
   "up.done": "Updated {n} file(s) to v{v}. Restart O-Cleaner to take effect.",
   "up.doneToast": "Verified update applied — restart O-Cleaner",
+  "btn.sysSlim": "System Slim",
+  "slim.title": "Windows Official Component Slimming",
+  "slim.loading": "Checking system component status…",
+  "slim.unsupported": "Not supported on this environment",
+  "slim.intro": "All actions run built-in Windows maintenance commands rather than deleting protected folders directly; administrator rights required.",
+  "slim.needAdm": "Currently running without administrator rights — click Elevate & restart above first.",
+  "slim.dismTitle": "WinSxS Component Store Cleanup (DISM)",
+  "slim.dismDesc": "Runs Dism.exe /StartComponentCleanup to safely remove superseded update backups while preserving OS integrity (takes 1–3 mins).",
+  "slim.hiberTitle": "Hibernation File (hiberfil.sys)",
+  "slim.hiberOn": "Enabled · Using {v}",
+  "slim.hiberOff": "Disabled · 0 B",
+  "slim.hiberDesc": "Runs powercfg /h off to immediately reclaim gigabytes on the system drive; disables Hibernate and Fast Startup (can be re-enabled here anytime).",
+  "slim.hiberOffBtn": "Disable & Reclaim",
+  "slim.hiberOnBtn": "Re-enable Hibernate",
+  "slim.doTitle": "Delivery Optimization Cache",
+  "slim.doDesc": "Clears Windows Update / Store P2P download cache via PowerShell.",
+  "slim.runBtn": "Run Cleanup",
+  "slim.confirm": "Run this official Windows maintenance command?",
+  "slim.running": "Running official maintenance command…",
+  "slim.doneFreed": "Completed, freed {v}.",
+  "slim.done": "Completed.",
   "ov.resetDone": "Display reset to defaults", "ov.pinnedDone": "Pinned to the top",
   "ov.savedDone": "Custom display saved", "ov.saved": "Custom description saved",
   "ov.resetBtn": "Reset to defaults",

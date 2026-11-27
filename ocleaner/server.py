@@ -319,6 +319,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_core.prog_snapshot())
         if route == "/__oc__/autostart":
             return self._json(_core.autostart_status())
+        if route == "/__oc__/sys-slim":
+            return self._json(_core.sys_slim_status())
         if route == "/__oc__/backup/export":
             raw = _core.export_full_backup()
             fn = f"O-Cleaner-backup-{_core.datetime.now().strftime('%Y-%m-%d')}.zip"
@@ -1604,5 +1606,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_core.app_update_check())
         if route == "/__oc__/app/self_update":
             return self._json(_integ.app_self_update())
+        if route == "/__oc__/sys-slim":
+            return self._json(_core.sys_slim_run(str((body or {}).get("action") or "")))
 
         return self._json({"error": "not found"}, 404)

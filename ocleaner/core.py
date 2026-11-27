@@ -420,6 +420,76 @@ def autostart_set(enabled: bool) -> dict:
         return {"ok": False, "error": f"写入注册表失败：{exc}", "enabled": False}
 
 
+def sys_slim_status() -> dict:
+    """探测 Windows 官方组件瘦身项状态（只读）：hiberfil.sys、WinSxS、传递优化。"""
+    if not IS_WINDOWS:
+        return {"supported": False, "is_admin": False}
+    sys_drv = (os.environ.get("SystemDrive") or "C:").rstrip("\\/")
+    hiber_p = Path(sys_drv + "\\hiberfil.sys")
+    hiber_sz = 0
+    try:
+        if hiber_p.exists():
+            hiber_sz = hiber_p.stat().st_size
+    except OSError:
+        hiber_sz = 0
+    return {
+        "supported": True,
+        "is_admin": is_admin(),
+        "sys_drive": sys_drv,
+        "hiber_on": hiber_sz > 0,
+        "hiber_bytes": hiber_sz,
+        "hiber_h": human(hiber_sz) if hiber_sz else "0 B",
+        "winsxs_exists": Path(sys_drv + "\\Windows\\WinSxS").is_dir(),
+    }
+
+
+def sys_slim_run(action: str) -> dict:
+    """执行白名单内的 Windows 官方组件维护命令（绝不直接硬删系统目录）。"""
+    act = str(action or "").strip()
+    cmds = {
+        "dism_cleanup": (["Dism.exe", "/Online", "/Cleanup-Image", "/StartComponentCleanup"], 300),
+        "hiber_off": (["powercfg.exe", "/h", "off"], 30),
+        "hiber_on": (["powercfg.exe", "/h", "on"], 30),
+        "do_cache": (["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                      "Delete-DeliveryOptimizationCache -Force"], 60),
+    }
+    if act not in cmds:
+        return {"ok": False, "error": f"不支持的操作：{act}"}
+    if not IS_WINDOWS:
+        return {"ok": False, "error": "仅支持 Windows"}
+    if not is_admin():
+        return {"ok": False, "error": "需要管理员权限，请先点击顶部「一键提权重启」"}
+
+    sys_drv = (os.environ.get("SystemDrive") or "C:").rstrip("\\/")
+    hiber_p = Path(sys_drv + "\\hiberfil.sys")
+    before_sz = 0
+    if act == "hiber_off":
+        try:
+            if hiber_p.exists():
+                before_sz = hiber_p.stat().st_size
+        except OSError:
+            pass
+
+    cmd, tmo = cmds[act]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=tmo,
+                           creationflags=CREATE_NO_WINDOW)
+        out = ((r.stdout or b"") + b"\n" + (r.stderr or b"")).decode("utf-8", "replace").strip()
+        if r.returncode != 0:
+            return {"ok": False, "action": act,
+                    "error": out[:300] or f"命令退出码 {r.returncode}"}
+        freed = 0
+        if act == "hiber_off" and before_sz > 0 and not hiber_p.exists():
+            freed = before_sz
+        return {"ok": True, "action": act, "freed": freed,
+                "freed_h": human(freed) if freed else "",
+                "output": out[:400]}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "action": act, "error": f"执行超时（>{tmo} 秒）"}
+    except OSError as exc:
+        return {"ok": False, "action": act, "error": str(exc)}
+
+
 def data_dir_writable() -> bool:
     """实测数据存档目录的可写性（自检面板据此判断历史/配置能否落盘）。
     只查目录存在不够 —— 目录存在但只读（如被放进 Program Files、
