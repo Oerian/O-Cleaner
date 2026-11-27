@@ -453,7 +453,14 @@ def packs_catalog() -> dict:
     }
     items = []
     for entry in (idx_data or {}).get("packs") or []:
-        fname = str(entry.get("file") or "").strip()
+        if isinstance(entry, str):
+            fname = entry.strip()
+            ver = ""
+        elif isinstance(entry, dict):
+            fname = str(entry.get("file") or "").strip()
+            ver = str(entry.get("version") or "")
+        else:
+            continue
         if not fname:
             continue
         pid = fname[:-5] if fname.endswith(".json") else fname
@@ -463,7 +470,7 @@ def packs_catalog() -> dict:
         items.append({
             "id": pid,
             "file": fname,
-            "version": str(entry.get("version") or ""),
+            "version": ver,
             "installed": cur is not None,
             "enabled": bool(cur and cur.get("enabled")),
             "recommended": rec,

@@ -544,6 +544,22 @@ def main() -> int:
           and any(x.get("recommended") for x in cat["items"]),
           f"{cat.get('env')} count={len(cat.get('items') or [])}")
 
+    # 兼容 v1 字符串数组 index.json（远程 packs 仓库格式）
+    import io as _io
+    orig_uopen = app._urlopen
+    try:
+        class _FakeResp:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self): return b'{"packs":["windows-system.json","apps-common.json"]}'
+        app._urlopen = lambda *a, **kw: _FakeResp()
+        cat_str = _integ.packs_catalog()
+        check("社区资源包目录：兼容纯字符串数组 index.json",
+              cat_str.get("ok") and len(cat_str.get("items") or []) == 2,
+              f"{cat_str}")
+    finally:
+        app._urlopen = orig_uopen
+
     # ---------- Windows 官方组件安全瘦身 ----------
     ss_st = app.sys_slim_status()
     check("官方组件瘦身：只读状态查询返回合法结构",
