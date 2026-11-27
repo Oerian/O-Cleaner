@@ -1,6 +1,7 @@
 # O-Cleaner
 
 [![CI](https://github.com/Oerian/O-Cleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/Oerian/O-Cleaner/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Oerian/O-Cleaner)](https://github.com/Oerian/O-Cleaner/releases/latest)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4)
 ![Dependencies](https://img.shields.io/badge/dependencies-zero-22c55e)
 ![License](https://img.shields.io/badge/license-MIT-64748b)
@@ -13,20 +14,27 @@ Windows 磁盘空间分析与安全清理工具。基于本地 Web 界面交互�
 - **默认不自动删除**：所有清理项均需手动勾选并经确认弹窗二次核对；核心系统目录与个人数据受内置保护机制严格拦截，即便外部规则文件受损也不会越界。
 - **隐私与凭据隔离**：无任何后台遥测；仅在用户主动触发检查更新、更新资源包、调用自配 AI 或 GitHub 同步时发起网络请求；AI 密钥与 GitHub 令牌均经 Windows DPAPI 绑定当前用户加密存储。
 
-## 快速开始
+## 环境要求
 
-1. **获取与解压**：推荐下载「免安装版（`win64-embed.zip`）」，解压至任意可写目录（如 `D:\O-Cleaner`，不建议放在 `Program Files` 等受保护目录）。
+- 操作系统：Windows 10 / Windows 11（64 位推荐）。
+- 运行环境：免安装版已内嵌官方 Python 运行时，无需额外安装；源码版需本机已安装 Python 3.8 及以上版本。
+
+## 下载与快速开始
+
+1. **获取程序**：前往 [GitHub Releases](https://github.com/Oerian/O-Cleaner/releases/latest) 下载最新版本：
+   - **免安装版（`O-Cleaner-v*-win64-embed.zip`，推荐）**：内嵌 Python 运行时及原生启动器，解压至任意可写目录（如 `D:\O-Cleaner`，不建议放在 `Program Files` 等受保护目录）即可使用。
+   - **源码版（`O-Cleaner-v*.zip`）**：体积小巧，适合本机已安装 Python 3 的环境。
 2. **启动应用**：双击 **`启动 O-Cleaner.lnk`** 或 **`O-Cleaner.exe`** 即可静默启动（源码版可双击 `启动 O-Cleaner.bat`）。首次运行如遇 Windows SmartScreen 提示，选择「更多信息 → 仍要运行」即可。
 3. **扫描与提权**：浏览器会自动打开界面（默认 `http://127.0.0.1:8770/`）。如需清理系统目录或启用内置 MFT 极速直读引擎，点击顶部提示条的「一键提权重启」即可。
 
 ## 主要功能
 
 - **空间占用分析**：全盘按体积排行，支持点击逐层下钻与行内就地展开；快速扫描（默认 1 层）定位占用大户，深层目录按需现场扫描；系统默认隐藏项自动合并汇总并支持展开明细；磁盘概览提供占比环与「可清理 / 建议保留 / 未识别」比例条，右侧图表坞支持「剩余空间趋势（按盘每日柱状图）」「清理记录」「类型分布（Top 12 与完整展开）」三页签切换。
-- **三引擎扫描加速**：工具栏支持切换扫描引擎（默认自动择快，跨设备后自动校准）：
+- **多引擎扫描加速**：工具栏支持切换扫描引擎（默认自动择快，跨设备后自动校准）：
   - **内置 MFT 直读引擎**：管理员权限下基于 C 原生动态库直接解析 NTFS 主文件表（`$MFT`），兼具扩展名统计与目录树聚合加速，不依赖外部工具且不产生临时文件；
   - **WizTree 引擎**：无需管理员权限时可借本机或界面一键校验下载的 WizTree 便携版读取 MFT；
   - **递归扫描兜底**：标准库 / PowerShell 递归扫描，保证任何环境下均可正常使用。
-- **分析中心（七大专项工具）**：
+- **分析中心**：
   - **大文件排行**：按近期修改时间（7 / 30 / 90 天）筛选全盘大型单文件；
   - **重复大文件**：基于扫描缓存按体积分组、首尾采样预筛并经 SHA-256 精确校验，跨目录副本自动标注保护；
   - **应用专清**：针对微信、开发者缓存等场景进行结构化拆解，区分 `cache`（可清理）与 `data / core`（受保护）；
@@ -68,6 +76,7 @@ Windows 磁盘空间分析与安全清理工具。基于本地 Web 界面交互�
 ## 延伸阅读与仓库结构
 
 - 详细操作指南：[docs/USAGE.md](docs/USAGE.md)（English: [docs/USAGE-en.md](docs/USAGE-en.md)）
+- 版本更新日志：[CHANGELOG.md](CHANGELOG.md)
 - 自定义规则与格式说明：[docs/CUSTOMIZE.md](docs/CUSTOMIZE.md)
 - 安全边界与信任模型：[docs/SECURITY.md](docs/SECURITY.md)
 - 参与贡献：[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
@@ -80,8 +89,15 @@ Windows 磁盘空间分析与安全清理工具。基于本地 Web 界面交互�
 - **自定义规则与社区共享规范**：通过「AI 预设」导入或向 GitHub 社区上传规则时，须遵循 `ocleaner-custom` 标准格式；请勿在规则描述或路径中夹带个人隐私路径或敏感凭据（社区上传已自动剔除本机密钥与主机名）。资源包仅允许补充释义或重分类未识别项，不可绕过内置安全保护列表。
 - **SmartScreen 提示说明**：由于可执行文件未购买商业代码签名，首次在 Windows 上运行 `O-Cleaner.exe` 时若出现「Windows 已保护你的电脑」提示，点击「更多信息 → 仍要运行」即可。
 
+## 免责声明
+
+本工具涉及磁盘文件删除、进程终止及系统映射操作，部分清理动作不经过回收站且不可恢复。请在执行删除或搬家前仔细核对确认清单，重要个人数据请提前做好备份。作者不对因误操作、规则误配或外部环境异常导致的数据丢失承担责任。
+
 ## 开源协议
 
 本项目采用 **[MIT License](LICENSE)** 开源（`Copyright (c) 2026 oeriano`），允许自由使用、修改、复制与分发，需保留原版权与许可声明。
 
-> **免责提示**（补充说明，不属于 MIT 条款）：本工具涉及磁盘文件删除操作，部分清理动作不经过回收站且不可恢复；请在执行删除前仔细核对确认清单，重要个人数据请提前做好备份。作者不对因误操作或外部环境异常导致的数据丢失承担责任。
+## 致谢
+
+- 感谢 [WizTree](https://diskanalyzer.com/) 提供高效的外部 MFT 查表加速能力支持（可选集成）。
+- 感谢所有提交 Issue、规则包与改进建议的社区贡献者。

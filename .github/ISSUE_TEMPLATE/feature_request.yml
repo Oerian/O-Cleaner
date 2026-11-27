@@ -1,0 +1,17 @@
+name: 功能建议
+description: 提出新功能、规则或交互优化建议
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: 建议内容
+      placeholder: 描述希望新增或改进的功能
+    validations:
+      required: true
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      placeholder: 说明该功能解决什么具体问题

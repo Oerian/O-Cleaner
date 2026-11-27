@@ -1,0 +1,31 @@
+name: Bug 反馈
+description: 报告扫描、清理或界面异常问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: O-Cleaner 版本
+      placeholder: 例如 v2.18（免安装版 / 源码版）
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: 系统环境
+      placeholder: 例如 Windows 11 23H2
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述与复现步骤
+      placeholder: 请描述具体操作步骤、涉及的路径或盘符、以及实际表现
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 报错信息或截图
+      description: 如有控制台报错或界面截图，请贴在下方

@@ -1,0 +1,19 @@
+name: 社区规则贡献
+description: 提交自定义的目录释义、聚合分组或清理规则（可由界面一键生成）
+title: "[规则贡献] "
+labels: ["rule-contribution"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 规则说明
+      placeholder: 说明适用的软件、游戏或目录场景
+    validations:
+      required: true
+  - type: textarea
+    id: payload
+    attributes:
+      label: 规则数据包（ocleaner-custom JSON）
+      placeholder: 请粘贴由 O-Cleaner 导出或 AI 生成的 JSON 内容
+    validations:
+      required: true
