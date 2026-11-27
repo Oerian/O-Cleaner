@@ -79,3 +79,4 @@ CHRONICLE.md
 # 本机编译产出的原生二进制（可由 tools/make_exe.py 自动编译）
 O-Cleaner.exe
 ocleaner/mft_fast.dll
+*.lnk

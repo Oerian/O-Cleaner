@@ -43,7 +43,7 @@ from make_package import (  # noqa: E402 —— 复用分发清单与预检，�
 EMBED_VERSION = "3.13.7"
 EMBED_URL = (f"https://www.python.org/ftp/python/{EMBED_VERSION}/"
              f"python-{EMBED_VERSION}-embed-amd64.zip")
-BUILD_DIR = ROOT / "build"
+BUILD_DIR = ROOT / "dist" / ".cache"
 EMBED_CACHE = BUILD_DIR / Path(EMBED_URL).name
 PY_PREFIX = "O-Cleaner/python/"
 
