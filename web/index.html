@@ -859,9 +859,9 @@
     <div class="drives" id="drives"></div>
   </div>
   <div id="adminwarn" class="warnbar" style="display:none">
-    <span data-i18n="adminwarn.a">当前以普通权限运行，系统目录的项目会提示「需要管理员权限」。以管理员身份重新启动</span>
-    <code>启动 O-Cleaner.bat</code>
-    <span data-i18n="adminwarn.b">可清理它们。</span>
+    <span data-i18n="adminwarn.a">当前以普通权限运行，系统目录的项目会提示「需要管理员权限」。点击右侧提权，或以管理员身份运行</span>
+    <code>O-Cleaner.exe</code>
+    <span data-i18n="adminwarn.b">即可完整清理。</span>
     <button id="btnElevate" class="tiny" data-i18n="adminwarn.elevate">一键提权重启</button>
   </div>
   <div id="orphanwarn" class="warnbar" style="display:none">
@@ -1601,7 +1601,7 @@ function renderGuide() {
   const rows = [
     { ok: admin, t: t("gd.admin","管理员权限"),
       d: admin ? t("gd.adminOk","已具备，可统计回收站与 Windows\\Temp")
-               : t("gd.adminNo","未具备。回收站、Windows\\Temp 会显示「需要管理员权限」，右键 启动 O-Cleaner.bat → 以管理员身份运行可获得完整统计") },
+               : t("gd.adminNo","未具备。回收站、Windows\\Temp 会显示「需要管理员权限」，可点顶部「一键提权重启」或右键 O-Cleaner.exe → 以管理员身份运行") },
     { ok: !!STATE.data_dir, t: t("gd.dataDir","数据存档目录"), d: (STATE.data_dir || t("gd.unknown","（未知）"))
         + (STATE.data_dir_redirected
            ? t("gd.redirected","（已重定向到这里）")
@@ -8267,7 +8267,7 @@ const I18N_EN = {
   "drv.free": "{v} free",
   "gd.admin": "Administrator rights",
   "gd.adminOk": "Present — Recycle Bin and Windows\\Temp can be tallied",
-  "gd.adminNo": "Missing. Recycle Bin and Windows\\Temp will show \"needs administrator\"; right-click 启动 O-Cleaner.bat → Run as administrator for full stats",
+  "gd.adminNo": "Missing. Recycle Bin and Windows\\Temp will show \"needs administrator\"; click Elevate & restart above or right-click O-Cleaner.exe → Run as administrator",
   "gd.dataDir": "Data folder", "gd.unknown": "(unknown)",
   "gd.redirected": "(redirected here)",
   "gd.dataDirNote": "(next to the program by default: history and configs live inside, copy the whole folder to migrate, USB sticks included)",
