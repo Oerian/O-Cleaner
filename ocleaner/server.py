@@ -319,6 +319,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_core.prog_snapshot())
         if route == "/__oc__/autostart":
             return self._json(_core.autostart_status())
+        if route == "/__oc__/backup/export":
+            raw = _core.export_full_backup()
+            fn = f"O-Cleaner-backup-{_core.datetime.now().strftime('%Y-%m-%d')}.zip"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{fn}"')
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if route == "/__oc__/packs":
             return self._json({"packs": _core.load_packs(use_cache=False)["packs"],
                                "remote": _core.load_packs_state().get("remote") or "",
@@ -1560,6 +1570,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_core.schedule_delete_on_reboot(paths))
         if route == "/__oc__/autostart":
             return self._json(_core.autostart_set(bool((body or {}).get("enabled"))))
+        if route == "/__oc__/backup/import":
+            import base64
+            b64 = str((body or {}).get("data_b64") or "").strip()
+            if not b64:
+                return self._json({"error": "缺少备份文件内容"}, 400)
+            try:
+                raw = base64.b64decode(b64, validate=True)
+                return self._json(_core.import_full_backup(raw))
+            except Exception as exc:
+                return self._json({"error": str(exc)}, 400)
+        if route == "/__oc__/data-dir/migrate":
+            try:
+                res = _core.migrate_data_dir(
+                    str((body or {}).get("target") or ""),
+                    reset=bool((body or {}).get("reset")))
+                return self._json(res)
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 400)
         if route == "/__oc__/ai/models":
             return self._json(_core.ai_list_models())
         if route == "/__oc__/ai/explain":

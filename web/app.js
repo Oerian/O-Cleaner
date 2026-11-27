@@ -6345,6 +6345,74 @@ $("btnSchSave").addEventListener("click", async () => {
   });
 })();
 
+/* ---- 「说明与数据迁移」图形化目录迁移与整机备份 ---- */
+(() => {
+  const msg = $("migMsg");
+  if ($("btnMigDir")) $("btnMigDir").addEventListener("click", async () => {
+    const target = $("migDir").value.trim();
+    if (!target) { toast(t("mig.needDir", "请先输入目标目录路径")); $("migDir").focus(); return; }
+    msg.textContent = t("mig.working", "正在迁移数据…");
+    try {
+      const r = await apiJSON(`${API}/__oc__/data-dir/migrate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target, reset: false }),
+      });
+      if (r.error) { msg.innerHTML = `<span class="res-err">${esc(r.error)}</span>`; return; }
+      const txt = t("mig.moved", "已迁移 {n} 个文件到 {d}，重启 O-Cleaner 后生效。")
+        .replace("{n}", r.copied || 0).replace("{d}", r.data_dir || target);
+      msg.innerHTML = `<span class="res-ok">${esc(txt)}</span>`;
+      toast(txt);
+    } catch (e) {
+      msg.innerHTML = `<span class="res-err">${esc(e && e.message || String(e))}</span>`;
+    }
+  });
+  if ($("btnMigReset")) $("btnMigReset").addEventListener("click", async () => {
+    try {
+      const r = await apiJSON(`${API}/__oc__/data-dir/migrate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reset: true }),
+      });
+      if (r.error) { msg.innerHTML = `<span class="res-err">${esc(r.error)}</span>`; return; }
+      const txt = t("mig.resetOk", "已恢复为程序同目录存放，重启 O-Cleaner 后生效。");
+      msg.innerHTML = `<span class="res-ok">${esc(txt)}</span>`;
+      toast(txt);
+    } catch (e) {
+      msg.innerHTML = `<span class="res-err">${esc(e && e.message || String(e))}</span>`;
+    }
+  });
+  if ($("btnBakExport")) $("btnBakExport").addEventListener("click", () => {
+    const a = document.createElement("a");
+    a.href = `${API}/__oc__/backup/export`;
+    a.download = `O-Cleaner-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+    a.click();
+  });
+  if ($("btnBakImport")) $("btnBakImport").addEventListener("click", () => $("bakFile").click());
+  if ($("bakFile")) $("bakFile").addEventListener("change", async e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    msg.textContent = t("mig.working", "正在迁移数据…");
+    try {
+      const buf = new Uint8Array(await f.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < buf.length; i += 8192) {
+        bin += String.fromCharCode(...buf.subarray(i, i + 8192));
+      }
+      const r = await apiJSON(`${API}/__oc__/backup/import`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data_b64: btoa(bin) }),
+      });
+      if (r.error) { msg.innerHTML = `<span class="res-err">${esc(r.error)}</span>`; return; }
+      const txt = t("mig.restored", "已成功还原 {n} 个备份文件。").replace("{n}", r.files || 0);
+      msg.innerHTML = `<span class="res-ok">${esc(txt)}</span>`;
+      toast(txt);
+      await loadState();
+    } catch (ex) {
+      msg.innerHTML = `<span class="res-err">${esc(ex && ex.message || String(ex))}</span>`;
+    }
+  });
+})();
+
 /* ==================== 资源包 / AI 面板的事件 ==================== */
 $("btnPackImport").addEventListener("click", () => $("packFile").click());
 $("packFile").addEventListener("change", async e => {
@@ -7431,6 +7499,18 @@ const I18N_EN = {
   "lk.rebootConfirm": "Schedule {n} locked file(s) for deletion on next Windows reboot? (Requires Administrator)",
   "lk.rebootDone": "Scheduled {s} file(s) for reboot deletion ({k} skipped)",
   "lk.rebootFail": "Failed to schedule reboot deletion: ",
+  "mig.head": "Data Migration & Full Backup",
+  "mig.intro": "Move history, disk trends, and custom rules to another folder, or export a portable zip backup for a new PC — no command line needed.",
+  "mig.dirPh": "New data folder, e.g. D:\\O-Cleaner-Data",
+  "mig.moveBtn": "Move Folder",
+  "mig.resetBtn": "Reset Default",
+  "mig.expBtn": "Export Full Backup (.zip)",
+  "mig.impBtn": "Restore Backup",
+  "mig.needDir": "Enter a target folder path first",
+  "mig.working": "Migrating data…",
+  "mig.moved": "Migrated {n} file(s) to {d}. Restart O-Cleaner to take effect.",
+  "mig.resetOk": "Reset to program folder. Restart O-Cleaner to take effect.",
+  "mig.restored": "Restored {n} file(s) successfully.",
   "pane.history": "Recent Cleanups",
   "pane.help": "Guide",
   "unit.clearAll": "Clear all",

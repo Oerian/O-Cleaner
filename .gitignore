@@ -80,3 +80,4 @@ CHRONICLE.md
 O-Cleaner.exe
 ocleaner/mft_fast.dll
 *.lnk
+.ocleaner-data-dir

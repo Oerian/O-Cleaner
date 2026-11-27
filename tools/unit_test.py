@@ -512,6 +512,31 @@ def main() -> int:
     as_st = app.autostart_status()
     check("开机自启：状态查询返回合法结构", isinstance(as_st, dict) and "enabled" in as_st, f"{as_st}")
 
+    # ---------- 整机备份导出/还原 & 目录迁移 ----------
+    orig_data_dir = app.DATA_DIR
+    try:
+        with tempfile.TemporaryDirectory() as td_bak:
+            bak_dir = Path(td_bak)
+            (bak_dir / "config").mkdir(parents=True, exist_ok=True)
+            (bak_dir / "data").mkdir(parents=True, exist_ok=True)
+            (bak_dir / "config" / "custom-rules.json").write_text('[{"name":"r1"}]', encoding="utf-8")
+            (bak_dir / "data" / "history.json").write_text('[{"ok":true}]', encoding="utf-8")
+            (bak_dir / "config" / "ai.json").write_text('{"api_key":"secret"}', encoding="utf-8")
+            app.DATA_DIR = bak_dir
+            zbytes = app.export_full_backup()
+            check("整机备份：导出包含规则历史且排除敏感密钥",
+                  len(zbytes) > 0 and b"custom-rules.json" in zbytes and b"ai.json" not in zbytes)
+
+            with tempfile.TemporaryDirectory() as td_dst:
+                app.DATA_DIR = Path(td_dst)
+                imp = app.import_full_backup(zbytes)
+                check("整机备份：导入还原文件完整落地",
+                      imp.get("ok") and imp.get("files") == 2
+                      and (Path(td_dst) / "data" / "history.json").is_file(),
+                      f"{imp}")
+    finally:
+        app.DATA_DIR = orig_data_dir
+
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"
           f"失败 {len(failed)} 项 ====")

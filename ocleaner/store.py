@@ -13,12 +13,16 @@ core 在自身初始化早期 import 本模块，本模块在**调用期**才访
 """
 
 from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
+import base64
+import io
 import json
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
+import zipfile
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -356,3 +360,116 @@ def _import_bundle(body: dict) -> dict:
                 rep["groups_added"] += 1
         _core.save_fs_groups(groups)
     return rep
+
+
+_BACKUP_CFG_FILES = (
+    "custom-rules.json", "custom-overrides.json", "fs-groups.json",
+    "convert.json", "game-libs.json", "packs-state.json",
+)
+
+
+def _iter_portable_files(data_dir: Path):
+    """列举可安全跨机迁移的 (相对路径, 绝对路径)，跳过敏感凭据与锁文件。"""
+    cfg_dir = data_dir / "config"
+    for name in _BACKUP_CFG_FILES:
+        fp = cfg_dir / name
+        if fp.is_file():
+            yield f"config/{name}", fp
+    upacks = cfg_dir / "packs-user"
+    if upacks.is_dir():
+        for fp in upacks.rglob("*"):
+            if fp.is_file():
+                rel = fp.relative_to(data_dir).as_posix()
+                yield rel, fp
+    rt_dir = data_dir / "data"
+    if rt_dir.is_dir():
+        for fp in rt_dir.rglob("*"):
+            if not fp.is_file():
+                continue
+            if fp.name.startswith(".oc-") and fp.name.endswith(".lock"):
+                continue
+            rel = fp.relative_to(data_dir).as_posix()
+            yield rel, fp
+
+
+def export_full_backup() -> bytes:
+    """把本机配置与历史/趋势/快照打包成便携 zip（不含本机 DPAPI 密钥）。"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for rel, fp in _iter_portable_files(_core.DATA_DIR):
+            try:
+                z.write(fp, rel)
+            except OSError:
+                continue
+    return buf.getvalue()
+
+
+def import_full_backup(raw_bytes: bytes) -> dict:
+    """从备份 zip 还原配置与运行数据到当前 DATA_DIR（拒绝路径穿越与密钥覆盖）。"""
+    if not raw_bytes:
+        raise ValueError("备份文件为空")
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw_bytes), "r")
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"不是合法的 ZIP 备份文件：{exc}") from exc
+    copied = 0
+    with zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            rel = info.filename.replace("\\", "/").lstrip("/")
+            if ".." in rel.split("/") or ":" in rel:
+                continue
+            if not (rel.startswith("config/") or rel.startswith("data/")):
+                continue
+            if rel in ("config/ai.json", "config/sync.json"):
+                continue
+            if info.file_size > 32 * 1024 * 1024:
+                continue
+            dst = (_core.DATA_DIR / rel).resolve()
+            if not str(dst).startswith(str(_core.DATA_DIR.resolve())):
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info, "r") as src_f:
+                dst.write_bytes(src_f.read())
+            copied += 1
+    _cache.clear()
+    return {"ok": True, "files": copied}
+
+
+def migrate_data_dir(target_dir: str, reset: bool = False) -> dict:
+    """图形化迁移或恢复数据目录（无需 --data-dir 命令行参数）。"""
+    ptr = _core.BASE_DIR / ".ocleaner-data-dir"
+    if reset:
+        try:
+            if ptr.exists():
+                ptr.unlink()
+        except OSError as exc:
+            raise ValueError(f"无法恢复默认目录：{exc}") from exc
+        return {"ok": True, "data_dir": str(_core.BASE_DIR),
+                "copied": 0, "need_restart": True}
+
+    raw = str(target_dir or "").strip()
+    if not raw or not os.path.isabs(raw):
+        raise ValueError("请输入完整的绝对目录路径（例如 D:\\O-Cleaner-Data）")
+    dst = Path(raw).resolve()
+    if len(dst.parts) <= 1:
+        raise ValueError("不能直接使用盘符根目录，请指定子目录（例如 D:\\O-Cleaner-Data）")
+    try:
+        dst.mkdir(parents=True, exist_ok=True)
+        probe = dst / f".oc_probe_{os.getpid()}"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        raise ValueError(f"目标目录不可写：{exc}") from exc
+
+    copied = 0
+    if dst != _core.DATA_DIR.resolve():
+        for rel, fp in _iter_portable_files(_core.DATA_DIR):
+            out = dst / rel
+            out.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(fp, out)
+            copied += 1
+    ptr.write_text(str(dst), encoding="utf-8")
+    return {"ok": True, "data_dir": str(dst),
+            "copied": copied, "need_restart": True}

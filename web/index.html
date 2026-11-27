@@ -517,17 +517,33 @@
     </div>
 
     <div class="panel acc" data-acc="about">
-      <h3 data-i18n="pane.help">说明</h3>
+      <h3 data-i18n="pane.help">说明与数据迁移</h3>
       <div class="ab">
-        <div style="color:var(--dim);font-size:12.5px" data-i18n="help.body1">
-          每张卡片右侧的「?」展开该类型的完整说明：是什么、能否自动重建、删除影响、什么情况建议保留。
+        <div style="color:var(--dim);font-size:12.5px;line-height:1.65" data-i18n="help.body1">
+          每个清理项右侧的「?」都会用大白话说明它是什么、删掉有什么影响、能不能自动重建。不确定时先保留，确认后再勾选清理。
         </div>
         <div style="margin-top:11px;padding-top:11px;border-top:1px solid var(--line);
-                    color:var(--dim);font-size:12.5px" data-i18n-html="help.body2">
-          <b style="color:var(--fg)">不会触碰</b><br>
-          用户文档 / 图片 / 桌面、已安装程序本体、已下载的 AI 模型、
-          <code>Windows\Installer</code>、<code>WinSxS</code> 组件存储。<br>
-          删除目标受内置保护名单拦截，即使配置文件被改坏也不会越界。
+                    color:var(--dim);font-size:12.5px;line-height:1.65" data-i18n-html="help.body2">
+          <b style="color:var(--fg)">绝对不会误删</b><br>
+          个人文档、照片、桌面文件、已装软件本体、AI 大模型权重以及 Windows 核心系统目录都会被内置保护名单拦截，删前也会二次确认。
+        </div>
+        <div style="margin-top:11px;padding-top:11px;border-top:1px solid var(--line)">
+          <div style="font-weight:600;font-size:12.5px;margin-bottom:6px" data-i18n="mig.head">数据迁移与整机备份</div>
+          <div style="color:var(--dim2);font-size:11.5px;line-height:1.6;margin-bottom:8px" data-i18n="mig.intro">
+            想把历史记录、磁盘趋势与自定义规则换到别的盘存放，或打包带到新电脑？无需任何命令行，点下方按钮即可完成。
+          </div>
+          <div class="field" style="gap:6px">
+            <input type="text" id="migDir" data-i18n-ph="mig.dirPh"
+                   placeholder="输入新数据目录，如 D:\O-Cleaner-Data" style="flex:1">
+            <button id="btnMigDir" class="tiny primary" data-i18n="mig.moveBtn">迁移目录</button>
+            <button id="btnMigReset" class="tiny ghost" data-i18n="mig.resetBtn">恢复默认</button>
+          </div>
+          <div class="field" style="gap:8px">
+            <button id="btnBakExport" class="tiny ghost" style="flex:1" data-i18n="mig.expBtn">导出整机备份 (.zip)</button>
+            <button id="btnBakImport" class="tiny ghost" style="flex:1" data-i18n="mig.impBtn">导入还原备份</button>
+          </div>
+          <input type="file" id="bakFile" accept=".zip,application/zip" style="display:none">
+          <div id="migMsg" style="color:var(--dim2);font-size:11.5px;margin-top:6px;line-height:1.6"></div>
         </div>
         <div style="margin-top:11px;padding-top:11px;border-top:1px solid var(--line);
                     display:flex;align-items:center;gap:8px;flex-wrap:wrap">

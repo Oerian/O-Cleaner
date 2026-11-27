@@ -108,11 +108,22 @@ def _argv_data_dir() -> str:  # noqa: F401 re-export
     return ""  # noqa: F401 re-export
   # noqa: F401 re-export
   # noqa: F401 re-export
-# 数据存档目录：config/ 与 history.json、schedule.json、disk-trend.json 等  # noqa: F401 re-export
-# 全部运行数据都落在这里。默认跟程序同目录（绿色便携：整个文件夹拷走 =  # noqa: F401 re-export
-# 数据一起迁移，U 盘携带即插即用）；程序目录只读或想把数据单独存放时，  # noqa: F401 re-export
-# 用 --data-dir <路径> 或环境变量 OC_DATA_DIR 重定向到任意可写位置。  # noqa: F401 re-export
-DATA_DIR = Path(os.environ.get("OC_DATA_DIR") or _argv_data_dir() or BASE_DIR)  # noqa: F401 re-export
+def _read_saved_data_dir() -> str:
+    ptr = BASE_DIR / ".ocleaner-data-dir"
+    try:
+        if ptr.is_file():
+            p = ptr.read_text(encoding="utf-8").strip()
+            if p and os.path.isabs(p):
+                return p
+    except OSError:
+        pass
+    return ""
+
+
+# 数据存档目录：config/ 与 history.json、schedule.json、disk-trend.json 等
+# 全部运行数据都落在这里。默认跟程序同目录（绿色便携：整个文件夹拷走 =
+# 数据一起迁移）；也可在界面内一键迁移到其他目录（无需命令行参数）。
+DATA_DIR = Path(os.environ.get("OC_DATA_DIR") or _argv_data_dir() or _read_saved_data_dir() or BASE_DIR)
 # 数据目录可写性的进程内缓存（None = 尚未探测），见 data_dir_writable()  # noqa: F401 re-export
 _DATA_DIR_WRITABLE: bool | None = None
 CONFIG_DIR = DATA_DIR / "config"
@@ -2217,6 +2228,7 @@ def save_overrides(data: dict) -> None:
 
 from ocleaner.store import (
     _export_bundle, _import_bundle, _bundle_unit_bytes, _UNIT_MULT,
+    export_full_backup, import_full_backup, migrate_data_dir,
 )
 
 
