@@ -80,6 +80,8 @@ INCLUDE = [
     "packs/apps-common.json",
     "packs/explanations.json",
     "web/index.html",
+    "web/styles.css",
+    "web/app.js",
     "web/icon.ico",
     "tools/selftest.py",
     "tools/lint_rules.py",

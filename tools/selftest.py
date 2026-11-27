@@ -4970,9 +4970,9 @@ def phase4_repo() -> None:
 
     for f, why in (("LICENSE", "没有许可证别人无法合法使用"),
 
-                   ("CONTRIBUTING.md", "贡献者需要知道安全门槛"),
+                   ("docs/CONTRIBUTING.md", "贡献者需要知道安全门槛"),
 
-                   ("SECURITY.md", "规则投毒是本项目特有攻击面")):
+                   ("docs/SECURITY.md", "规则投毒是本项目特有攻击面")):
 
         check(f"包含 {f}", (HERE / f).exists(), why)
 
@@ -5372,19 +5372,21 @@ def phase4_repo() -> None:
 
     html = idx.read_text(encoding="utf-8") if idx.exists() else ""
 
+    css_f = HERE / "web" / "styles.css"
+
+    js_f = HERE / "web" / "app.js"
+
     m_st = _re.search(r"<style>(.*?)</style>", html, _re.DOTALL)
 
     m_sc = _re.search(r"<script>(.*?)</script>", html, _re.DOTALL)
 
-    # 先确认两块都抽到了：否则下面数括号会退化成 0 == 0 的假通过
+    st = css_f.read_text(encoding="utf-8") if css_f.exists() else (m_st.group(1) if m_st else "")
+
+    sc = js_f.read_text(encoding="utf-8") if js_f.exists() else (m_sc.group(1) if m_sc else "")
 
     check("index.html 的 <style> 与 <script> 块都能抽出来",
 
-          bool(m_st and m_sc), "正则没匹配到，后面的括号检查会失去意义")
-
-    st = m_st.group(1) if m_st else ""
-
-    sc = m_sc.group(1) if m_sc else ""
+          bool(st and sc), "样式或脚本为空，后面的括号检查会失去意义")
 
     # 改 CSS 最容易留下半截规则，JS 同理 —— 括号配平是最便宜的回归网
 

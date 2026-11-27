@@ -256,3 +256,45 @@ def recover_pending_deletes() -> list[dict]:
     except Exception:
         pass
     return out
+
+
+def schedule_delete_on_reboot(paths: list[str]) -> dict:
+    """用 MoveFileExW(MOVEFILE_DELAY_UNTIL_REBOOT) 把顽固占用文件登记为下次重启时删除。
+
+    仅支持 Windows 且需要管理员权限（写 HKLM Session Manager\\PendingFileRenameOperations）；
+    每个路径均先经过 check_deletable(allow_user_data=True) 完整护栏。
+    """
+    if not _core.IS_WINDOWS:
+        return {"ok": False, "error": "重启删除仅支持 Windows",
+                "scheduled": [], "skipped": [], "failed": []}
+    if not _core.is_admin():
+        return {"ok": False, "error": "标记重启删除需要管理员权限，请先一键提权重启",
+                "scheduled": [], "skipped": [], "failed": []}
+    MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
+    move_ex = ctypes.windll.kernel32.MoveFileExW
+    move_ex.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
+    move_ex.restype = wintypes.BOOL
+
+    scheduled: list[str] = []
+    skipped: list[dict] = []
+    failed: list[dict] = []
+    seen: set[str] = set()
+    for raw in list(paths or [])[:50]:
+        p = str(raw or "").strip()
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        ok, reason = _core.check_deletable(p, allow_user_data=True)
+        if not ok:
+            skipped.append({"path": p, "reason": reason})
+            continue
+        if _is_reparse_dir(p) or not os.path.isfile(p):
+            skipped.append({"path": p, "reason": "仅支持普通文件"})
+            continue
+        if move_ex(p, None, MOVEFILE_DELAY_UNTIL_REBOOT):
+            scheduled.append(p)
+        else:
+            err_code = ctypes.GetLastError()
+            failed.append({"path": p, "error": f"WinError {err_code}"})
+    return {"ok": True, "scheduled": scheduled,
+            "skipped": skipped, "failed": failed}

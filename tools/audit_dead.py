@@ -6,6 +6,11 @@ import re, collections
 h = open("web/index.html", encoding="utf-8").read()
 styles = re.findall(r"<style[^>]*>(.*?)</style>", h, re.S)
 scripts = re.findall(r"<script[^>]*>(.*?)</script>", h, re.S)
+import os
+if os.path.isfile("web/styles.css"):
+    styles.append(open("web/styles.css", encoding="utf-8").read())
+if os.path.isfile("web/app.js"):
+    scripts.append(open("web/app.js", encoding="utf-8").read())
 st = "\n".join(styles)
 sc = "\n".join(scripts)
 rest = h

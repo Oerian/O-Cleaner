@@ -71,7 +71,8 @@ from ocleaner.store import (_cache, _lock, _cross_process_lock,  # noqa: F401 re
 from ocleaner.deleter import (rm, rm_tree_strict, _journal_stage,  # noqa: F401 re-export
                               _journal_done, recover_pending_deletes,  # noqa: F401 re-export
                               rm_trash, _precheck_locked_files,  # noqa: F401 re-export
-                              _is_reparse_dir, _long_path)  # noqa: F401 re-export
+                              _is_reparse_dir, _long_path,  # noqa: F401 re-export
+                              schedule_delete_on_reboot)  # noqa: F401 re-export
 from ocleaner.games import (discover_steam, _parse_vdf, steam_common_dirs,  # noqa: F401 re-export
                            game_install_dirs, platform_install_roots,  # noqa: F401 re-export
                            _epic_game_from_manifest, _gog_game_from_values,  # noqa: F401 re-export
@@ -358,6 +359,54 @@ def elevate_relaunch() -> dict:
 
     threading.Timer(1.2, _bye).start()
     return {"ok": True}
+
+
+_AUTOSTART_REG = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_AUTOSTART_VAL = "O-Cleaner"
+
+
+def _autostart_cmd() -> str:
+    exe = BASE_DIR / "O-Cleaner.exe"
+    if exe.is_file():
+        return f'"{exe}" --tray'
+    import sys
+    pyw = Path(sys.executable).with_name("pythonw.exe")
+    interp = str(pyw) if pyw.is_file() else sys.executable
+    script = str((BASE_DIR / "app.py").resolve())
+    return f'"{interp}" "{script}" --tray'
+
+
+def autostart_status() -> dict:
+    """查询当前是否已登记 Windows 登录自启（托盘常驻模式）。"""
+    if not IS_WINDOWS:
+        return {"supported": False, "enabled": False, "cmd": ""}
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_REG, 0, winreg.KEY_READ) as k:
+            val, _ = winreg.QueryValueEx(k, _AUTOSTART_VAL)
+            return {"supported": True, "enabled": bool(str(val).strip()), "cmd": str(val)}
+    except OSError:
+        return {"supported": True, "enabled": False, "cmd": ""}
+
+
+def autostart_set(enabled: bool) -> dict:
+    """设置或取消当前用户的 Windows 开机自启（--tray 托盘常驻）。"""
+    if not IS_WINDOWS:
+        return {"ok": False, "error": "仅 Windows 支持开机自启", "enabled": False}
+    import winreg
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, _AUTOSTART_REG, 0, winreg.KEY_SET_VALUE) as k:
+            if enabled:
+                cmd = _autostart_cmd()
+                winreg.SetValueEx(k, _AUTOSTART_VAL, 0, winreg.REG_SZ, cmd)
+                return {"ok": True, "enabled": True, "cmd": cmd}
+            try:
+                winreg.DeleteValue(k, _AUTOSTART_VAL)
+            except FileNotFoundError:
+                pass
+            return {"ok": True, "enabled": False, "cmd": ""}
+    except OSError as exc:
+        return {"ok": False, "error": f"写入注册表失败：{exc}", "enabled": False}
 
 
 def data_dir_writable() -> bool:

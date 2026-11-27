@@ -496,6 +496,22 @@ def main() -> int:
         app._export_bundle = orig_export
         _integ._sync_cfg = orig_sync_cfg
 
+    # ---------- 顽固占用重启删除护栏 & 开机自启查询 ----------
+    orig_is_admin = app.is_admin
+    try:
+        app.is_admin = lambda: False
+        rb_noadm = app.schedule_delete_on_reboot(["C:\\Windows\\System32\\ntdll.dll"])
+        check("重启删除：非管理员明确拒绝", not rb_noadm.get("ok"))
+        app.is_admin = lambda: True
+        rb_sys = app.schedule_delete_on_reboot(["C:\\Windows\\System32\\ntdll.dll"])
+        check("重启删除：系统保护路径被护栏拦截跳过",
+              rb_sys.get("ok") and len(rb_sys.get("skipped") or []) == 1 and not rb_sys.get("scheduled"),
+              f"{rb_sys}")
+    finally:
+        app.is_admin = orig_is_admin
+    as_st = app.autostart_status()
+    check("开机自启：状态查询返回合法结构", isinstance(as_st, dict) and "enabled" in as_st, f"{as_st}")
+
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"
           f"失败 {len(failed)} 项 ====")

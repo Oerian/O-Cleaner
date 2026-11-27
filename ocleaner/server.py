@@ -296,6 +296,14 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 html = "<h1>web/index.html 缺失</h1>".encode("utf-8")
             return self._send(200, html, "text/html; charset=utf-8")
+        if route in ("/styles.css", "/app.js"):
+            fname = route.lstrip("/")
+            ctype = "text/css; charset=utf-8" if fname.endswith(".css") else "application/javascript; charset=utf-8"
+            try:
+                data = (_core.WEB_DIR / fname).read_bytes()
+                return self._send(200, data, ctype)
+            except OSError:
+                return self._send(404, b"", ctype)
         if route in ("/favicon.ico", "/icon.ico"):
             try:
                 ico = (_core.WEB_DIR / "icon.ico").read_bytes()
@@ -309,6 +317,8 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/progress":
             # 前端在全盘扫描期间每 0.5 秒轮询一次，用来画真实进度条
             return self._json(_core.prog_snapshot())
+        if route == "/__oc__/autostart":
+            return self._json(_core.autostart_status())
         if route == "/__oc__/packs":
             return self._json({"packs": _core.load_packs(use_cache=False)["packs"],
                                "remote": _core.load_packs_state().get("remote") or "",
@@ -1543,6 +1553,13 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(pids, list) or not pids:
                 return self._json({"error": "pids 不能为空"}, 400)
             return self._json(_core.stop_lock_processes(pids))
+        if route == "/__oc__/delete-on-reboot":
+            paths = (body or {}).get("paths")
+            if not isinstance(paths, list) or not paths:
+                return self._json({"error": "paths 不能为空"}, 400)
+            return self._json(_core.schedule_delete_on_reboot(paths))
+        if route == "/__oc__/autostart":
+            return self._json(_core.autostart_set(bool((body or {}).get("enabled"))))
         if route == "/__oc__/ai/models":
             return self._json(_core.ai_list_models())
         if route == "/__oc__/ai/explain":
