@@ -3,8 +3,6 @@
 # 仓库根的 app.py 只保留 re-export shim + __main__ 入口；
 # selftest / doctor / guard_matrix / unit_test 以
 # `import ocleaner.core as app` 取得同一模块对象，monkeypatch 语义不变。
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 O-Cleaner —— 磁盘清理助手（本地 WebUI，Python 标准库实现，零第三方依赖）
 
@@ -96,52 +94,16 @@ from ocleaner.integrations import (_sync_cfg, _sync_save_cfg,  # noqa: F401 re-e
                               community_upload, app_self_update,  # noqa: F401 re-export
                               _dpapi_migrate_plaintext,  # noqa: F401 re-export
                               _AI_DEFAULTS)  # ai/config 路由过滤用  # noqa: F401 re-export
-  # noqa: F401 re-export
-BASE_DIR = Path(__file__).resolve().parent.parent
+from ocleaner.runtime import (  # noqa: F401 re-export
+    APP_UA, APP_VERSION, BASE_DIR, CONFIG_DIR, CREATE_NO_WINDOW,
+    DATA_DIR, IS_WINDOWS, RUNTIME_DIR, WEB_DIR, _CLEAN_LOCK,
+    _argv_data_dir, _cfg_or_bundled, _read_saved_data_dir,
+    _realpath_strict, try_op_lock,
+)
+
 WIZTREE_PORTABLE_DIR = BASE_DIR / "portable" / "WizTree"  # noqa: F401 re-export
-  # noqa: F401 re-export
-  # noqa: F401 re-export
-def _argv_data_dir() -> str:  # noqa: F401 re-export
-    """启动参数里找 --data-dir（须在模块常量定值前生效，故在 import 期预扫）。"""  # noqa: F401 re-export
-    for i, v in enumerate(sys.argv):  # noqa: F401 re-export
-        if v == "--data-dir" and i + 1 < len(sys.argv):  # noqa: F401 re-export
-            return sys.argv[i + 1]  # noqa: F401 re-export
-        if v.startswith("--data-dir="):  # noqa: F401 re-export
-            return v.split("=", 1)[1]  # noqa: F401 re-export
-    return ""  # noqa: F401 re-export
-  # noqa: F401 re-export
-  # noqa: F401 re-export
-def _read_saved_data_dir() -> str:
-    ptr = BASE_DIR / ".ocleaner-data-dir"
-    try:
-        if ptr.is_file():
-            p = ptr.read_text(encoding="utf-8").strip()
-            if p and os.path.isabs(p):
-                return p
-    except OSError:
-        pass
-    return ""
-
-
-# 数据存档目录：config/ 与 history.json、schedule.json、disk-trend.json 等
-# 全部运行数据都落在这里。默认跟程序同目录（绿色便携：整个文件夹拷走 =
-# 数据一起迁移）；也可在界面内一键迁移到其他目录（无需命令行参数）。
-DATA_DIR = Path(os.environ.get("OC_DATA_DIR") or _argv_data_dir() or _read_saved_data_dir() or BASE_DIR)
 # 数据目录可写性的进程内缓存（None = 尚未探测），见 data_dir_writable()  # noqa: F401 re-export
 _DATA_DIR_WRITABLE: bool | None = None
-CONFIG_DIR = DATA_DIR / "config"
-WEB_DIR = BASE_DIR / "web"
-_CLEAN_LOCK = threading.Lock()
-
-
-def _cfg_or_bundled(name: str) -> Path:
-    """优先读 DATA_DIR/config/<name>，迁移后缺失则回退仓库内置 config/<name>。"""
-    p = CONFIG_DIR / name
-    return p if p.exists() else (BASE_DIR / "config" / name)
-
-
-APP_VERSION = "2.18"
-APP_UA = f"O-Cleaner/{APP_VERSION}"
 
 TARGETS_PATH = _cfg_or_bundled("targets.json")
 DRIVES_PATH = _cfg_or_bundled("drives.json")
@@ -162,7 +124,6 @@ _SYNC_CFG_PATH = CONFIG_DIR / "sync.json"
 # 全部收进 data/ 子目录，程序根目录不再散落一堆 json。旧版把这类文件直接
 # 放在数据目录根下 —— 启动时 _migrate_runtime_files() 会把它们搬进来，
 # 老用户无感升级。gitignore 整个 data/，运行数据永不进版本库。
-RUNTIME_DIR = DATA_DIR / "data"
 HISTORY_PATH = RUNTIME_DIR / "history.json"
 # 各盘用量快照（磁盘趋势曲线的数据源）：每天每盘最多记一条，保留 90 天。
 # 运行数据，不进版本库、不进分发包。
@@ -238,6 +199,22 @@ from ocleaner.scheduler import (DEFAULT_SCHEDULE, schedule_state,  # noqa: F401 
 from ocleaner.receipts import (load_history, append_history,  # noqa: F401 re-export
                                _write_receipt, list_receipts,  # noqa: F401 re-export
                                read_receipt)  # noqa: F401 re-export
+from ocleaner.recycle import (  # noqa: F401 re-export
+    _parse_i_file, _purge_recycle_bin, _recycle_capacity_bytes,
+    _recycle_entries, _size_of, _size_of_dir, purge_recycle_paths,
+    recycle_restore,
+)
+from ocleaner.locks import (  # noqa: F401 re-export
+    LOCK_CANDIDATE_LIMIT, LOCK_PROBE_LIMIT, LOCK_RAW_ROW_LIMIT,
+    _LOCK_API, _LOCK_ERR_ACCESS_DENIED, _LOCK_ERR_LOCK_VIOLATION,
+    _LOCK_ERR_SHARING_VIOLATION, _LOCK_FLAG_BACKUP_SEMANTICS,
+    _LOCK_GENERIC_READ, _LOCK_GENERIC_WRITE, _LOCK_LIST_DIRECTORY,
+    _LOCK_OPEN_EXISTING, _PROTECTED_PROCESS_NAMES, _lock_api,
+    _pid_process_name, find_lock_holders, probe_locked, stop_lock_processes,
+)
+from ocleaner.tray import (  # noqa: F401 re-export
+    _calc_app_window_rect, _open_app_window, _tray_worker, pick_port,
+)
 
 
 def _image_mime(data: bytes) -> str:
@@ -299,8 +276,7 @@ _migrate_runtime_files()          # 模块导入即迁移：老布局一次性�
 
 
 
-CREATE_NO_WINDOW = 0x08000000
-IS_WINDOWS = os.name == "nt"
+# CREATE_NO_WINDOW / IS_WINDOWS 来自 ocleaner.runtime
 
 
 # ======================================================================
@@ -492,8 +468,10 @@ def sys_slim_run(action: str) -> dict:
                 pass
 
         cmd, tmo = cmds[act]
+        # 剔除继承的 PowerShell 7 PSModulePath，避免 PS 5.1 DeliveryOptimization 模块加载失败
+        clean_env = {k: v for k, v in os.environ.items() if k.lower() != "psmodulepath"}
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             creationflags=CREATE_NO_WINDOW)
+                             env=clean_env, creationflags=CREATE_NO_WINDOW)
         try:
             raw_out, raw_err = p.communicate(timeout=tmo)
         except subprocess.TimeoutExpired:
@@ -625,7 +603,8 @@ def run_ps(script: str, timeout: int = 300,
     """
     cmd = ["powershell.exe", "-NoProfile", "-NonInteractive",
            "-ExecutionPolicy", "Bypass", "-Command", PS_UTF8_PREAMBLE + script]
-    env = dict(os.environ)
+    # 剔除 PowerShell 7 继承的 PSModulePath，避免破坏 Windows PowerShell 5.1 内置模块加载
+    env = {k: v for k, v in os.environ.items() if k.lower() != "psmodulepath"}
     # 固定子进程输出编码，不依赖父控制台的 chcp，否则报错信息会乱码
     env["PYTHONIOENCODING"] = "utf-8"
     if extra_env:
@@ -2097,7 +2076,8 @@ def load_drives_cfg() -> dict:
 
 
 def load_convert() -> dict:
-    return _load_json(CONVERT_PATH, {"display": {}, "units": []})
+    p = CONVERT_PATH if CONVERT_PATH.exists() else (BASE_DIR / "config" / "convert.json")
+    return _load_json(p, {"display": {}, "units": []})
 
 
 def load_filetypes() -> dict:
@@ -2921,178 +2901,7 @@ _FOF_NOCONFIRMATION = 0x10
 _FOF_SILENT = 0x4
 _FOF_NOERRORUI = 0x400
 
-
-def _recycle_capacity_bytes(drive_root: str) -> int:
-    """该盘回收站的剩余可用容量（字节）。NukeOnDelete=1 或非固定盘返回 0。"""
-    import winreg
-    import ctypes
-    try:
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        root = drive_root if drive_root.endswith("\\") else drive_root + "\\"
-        # 仅固定本地磁盘（DRIVE_FIXED == 3）有完整回收站语义；U 盘/网络盘会静默永久删除
-        if k32.GetDriveTypeW(ctypes.c_wchar_p(root)) != 3:
-            return 0
-        guid_buf = ctypes.create_unicode_buffer(100)
-        if k32.GetVolumeNameForVolumeMountPointW(
-                ctypes.c_wchar_p(root), guid_buf, 100):
-            vol_raw = guid_buf.value.rstrip("\\")
-            m_guid = re.search(r"(\{[0-9a-fA-F-]+\})", vol_raw)
-            vol_guid = m_guid.group(1) if m_guid else vol_raw
-            key = (r"Software\Microsoft\Windows\CurrentVersion\Explorer"
-                   r"\BitBucket\Volume") + "\\" + vol_guid
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
-                try:
-                    nuke, _ = winreg.QueryValueEx(k, "NukeOnDelete")
-                    if int(nuke) != 0:
-                        return 0
-                except OSError:
-                    pass
-                mb, _ = winreg.QueryValueEx(k, "MaxCapacity")
-                if isinstance(mb, int) and mb > 0:
-                    cap = mb * 1024 * 1024
-                    try:
-                        class _SHQUERYRBINFO(ctypes.Structure):
-                            _fields_ = [("cbSize", ctypes.c_uint32),
-                                        ("i64Size", ctypes.c_int64),
-                                        ("i64NumItems", ctypes.c_int64)]
-                        s32 = ctypes.WinDLL("shell32", use_last_error=True)
-                        info = _SHQUERYRBINFO(cbSize=ctypes.sizeof(_SHQUERYRBINFO))
-                        if s32.SHQueryRecycleBinW(ctypes.c_wchar_p(root), ctypes.byref(info)) == 0:
-                            return max(0, cap - max(0, info.i64Size))
-                    except Exception:
-                        pass
-                    return cap
-    except OSError:
-        pass
-    try:
-        import shutil
-        return int(shutil.disk_usage(drive_root).total * 0.05)
-    except OSError:
-        return 2 * 1024 * 1024 * 1024   # 兜底 2 GB
-
-
-
-
-# ---- 按原始路径精确清除回收站条目（2026-10-13）----
-# 需求：清理完成后「只清空所选项的回收站」，而不是清空整盘回收站——
-# 用户自己删的其它文件必须原样保留。Windows 的回收站条目是一对文件：
-#   $I<随机>.ext  元数据（内含**原始完整路径**、字节数、删除时间）
-#   $R<随机>.ext  实际数据
-# SHFileOperation 不回报目标名，所以要找回「我们刚删的那几项」，只能
-# 反着来：解析盘上现存 $I 的原始路径，与本次清理的目标路径精确匹配。
-# $I 格式（版本 2，Win10+）：8B 版本号 + 8B 字节数 + 8B 删除时间(FILETIME)
-#   + 4B 名称长度(字符) + UTF-16LE 名称；版本 1 为 24B 定长名称字段。
-
-def _parse_i_file(ipath: str):
-    """解析一个 $I 元数据文件 → (原始路径, 字节数, 配对的 $R 路径)。
-    解析不了（损坏/未知版本）返回 None，调用方跳过。"""
-    try:
-        with open(ipath, "rb") as f:
-            data = f.read(2048)
-    except OSError:
-        return None
-    if len(data) < 24:
-        return None
-    try:
-        ver = struct.unpack_from("<q", data, 0)[0]
-        size = struct.unpack_from("<q", data, 8)[0]
-    except struct.error:
-        return None
-    if ver == 2:
-        # v2 布局：ver(8) + size(8) + 删除时间 FILETIME(8) + 名称长度(4) + 名称
-        if len(data) < 28:
-            return None
-        try:
-            (nlen,) = struct.unpack_from("<i", data, 24)
-        except struct.error:
-            return None
-        if nlen <= 0 or nlen > 2048:
-            return None
-        name = data[28:28 + nlen * 2].decode("utf-16le", "ignore").rstrip("\x00")
-    elif ver == 1:
-        name = data[24:24 + 520].decode("utf-16le", "ignore").split("\x00")[0]
-    else:
-        return None
-    if not name:
-        return None
-    rpath = os.path.join(os.path.dirname(ipath), "$R" + os.path.basename(ipath)[2:])
-    return name, max(0, size), rpath
-
-
-def _recycle_entries(letter: str) -> list:
-    """枚举某盘回收站里全部条目（所有 SID 目录），解析 $I 元数据。"""
-    root = os.path.join(f"{letter.upper()}:\\", "$Recycle.Bin")
-    out = []
-    if not os.path.isdir(root):
-        return out
-    for sid in os.listdir(root):
-        siddir = os.path.join(root, sid)
-        if not os.path.isdir(siddir):
-            continue
-        try:
-            names = os.listdir(siddir)
-        except OSError:
-            continue
-        for name in names:
-            if not name.upper().startswith("$I"):
-                continue
-            ipath = os.path.join(siddir, name)
-            info = _parse_i_file(ipath)
-            if info:
-                orig, size, rpath = info
-                out.append({"i": ipath, "r": rpath,
-                            "orig": os.path.normpath(orig).lower(), "size": size})
-    return out
-
-
-
-def recycle_restore(paths: list) -> dict:
-    """回收站一键原位还原（v2.12「可逆与精算版」核心项）。
-
-    解析 $Recycle.Bin 的 $I 元数据按原始路径精确匹配，把 $R 数据原子
-    移回原位并删除 $I 元数据。原位被占用/已存在时明确报错（不覆盖）。
-    """
-    results = []
-    by_drive: dict[str, list[str]] = {}
-    for p0 in paths or []:
-        p = os.path.normpath(os.path.expandvars(str(p0)))
-        letter = os.path.splitdrive(p)[0].rstrip(":").upper()
-        if letter:
-            by_drive.setdefault(letter, []).append(p)
-    for letter, plist in by_drive.items():
-        entries = _recycle_entries(letter)
-        idx: dict[str, list] = {}
-        for e in entries:
-            idx.setdefault(e["orig"], []).append(e)
-        for p in plist:
-            key = os.path.normcase(os.path.normpath(p))
-            cand = idx.get(key)
-            if not cand:
-                results.append({"path": p, "ok": False,
-                                "error": "回收站里没有这个原始路径的条目"})
-                continue
-            e = cand.pop(0)          # 同路径多次删除：逐个还原
-            parent = os.path.dirname(p)
-            try:
-                os.makedirs(parent, exist_ok=True)
-                if os.path.exists(p):
-                    results.append({"path": p, "ok": False,
-                                    "error": "原位置已被占用，未还原"})
-                    continue
-                shutil.move(e["r"], p)
-                try:
-                    os.remove(e["i"])
-                except OSError:
-                    pass
-                results.append({"path": p, "ok": True,
-                                "size": e["size"]})
-            except OSError as exc:
-                results.append({"path": p, "ok": False,
-                                "error": f"{type(exc).__name__}: {exc}"})
-    done = sum(1 for r in results if r["ok"])
-    return {"ok": done == len(results) and bool(results), "done": done,
-            "total": len(results), "results": results}
-
+# 回收站容量/还原/$I 解析已迁至 ocleaner/recycle.py（经顶部 import 再绑定）
 
 SNAPSHOTS_DIR = RUNTIME_DIR / "snapshots"
 
@@ -3101,69 +2910,7 @@ SNAPSHOTS_DIR = RUNTIME_DIR / "snapshots"
 # （经顶部 import 再绑定保持裸名兼容）；SNAPSHOTS_DIR 依赖 RUNTIME_DIR
 # （--data-dir 重定向），留在本模块，迁出侧经 `_core.` 惰性引用。
 
-def purge_recycle_paths(paths: list) -> dict:
-    """把给定原始路径从回收站里精确移除（只动配对的 $I/$R，不动其它条目）。
-    返回逐项结果与合计释放量。真实的删除永远只发生在 $Recycle.Bin 内部——
-    请求里的路径只用于匹配，绝不会被直接删除。"""
-    wanted = []
-    for p in paths or []:
-        if not isinstance(p, str) or not os.path.isabs(p):
-            continue
-        wanted.append(os.path.normpath(p).lower())
-    wanted = list(dict.fromkeys(wanted))[:200]
-    results, freed_total, matched_total = [], 0, 0
-    by_letter: dict[str, list[dict]] = {}
-    for w in wanted:
-        letter = w[:1].upper()
-        if letter not in by_letter:
-            by_letter[letter] = _recycle_entries(letter)
-        entries = by_letter[letter]
-        hits = [e for e in entries if e["orig"] == w]
-        freed = 0
-        for e in hits:
-            sz = e["size"] or _size_of(e["r"])
-            ok_r = True
-            if os.path.lexists(e["r"]):
-                ok_r = rm(e["r"])
-            ok_i = rm(e["i"]) if ok_r else False
-            if ok_i and ok_r:
-                freed += sz
-                matched_total += 1
-            # 失败项不计量、如实跳过：$R 必须先删掉，否则先删 $I 会遗留不可见孤儿文件
-        if not hits:
-            results.append({"path": w, "matched": 0,
-                            "note": "回收站里没有这个路径的条目（可能已被清空）"})
-        else:
-            freed_total += freed
-            results.append({"path": w, "matched": len(hits), "freed": freed})
-    return {"results": results, "freed": freed_total,
-            "matched": matched_total,
-            "freed_h": human(freed_total)}
-
-
-def _size_of(path: str) -> int:
-    try:
-        if os.path.isfile(path) and not os.path.islink(path):
-            return os.path.getsize(path)
-        if os.path.isdir(path):
-            return _size_of_dir(path)
-    except OSError:
-        pass
-    return 0
-
-
-def _size_of_dir(path: str) -> int:
-    total = 0
-    for root, _dirs, files in os.walk(path, onerror=lambda e: None):
-        for f in files:
-            try:
-                fp = os.path.join(root, f)
-                if not os.path.islink(fp):
-                    total += os.path.getsize(fp)
-            except OSError:
-                continue
-    return total
-
+# purge_recycle_paths / _size_of / _size_of_dir 已迁至 ocleaner/recycle.py
 
 def _size_of_dir_budgeted(path: str, max_entries: int = 20000) -> tuple[int, bool]:
     """带条目预算的目录体积。返回 (字节数, 是否因超预算被截断)。
@@ -3315,71 +3062,7 @@ def dedup_nested_targets(selected: list[dict]) -> tuple[list[dict], list[dict]]:
     return kept, merged
 
 
-def _purge_recycle_bin(letter: str) -> dict:
-    """直接删 {letter}:\\$Recycle.Bin 下各 SID 目录里的 $I/$R 文件。
-
-    为什么不用 Clear-RecycleBin：它对非系统盘有「静默无效」的已知缺陷 ——
-    本机实测（2026-10-15，D 盘）：命令成功返回、进度条照走，12 个文件
-    原样全在；C 盘（系统盘）却正常。用户看到的「E 盘回收站清不掉」就是它。
-    直接删文件与 recycle-purge 两段式同一把尺：普通权限能删当前用户 SID
-    的内容，其他 SID 会 PermissionError（管理员运行时可一并清掉）。
-    desktop.ini 等结构文件不动。
-    返回 deleted/failed/freed/fail_notes。"""
-    root = os.path.join(f"{letter.upper()}:\\", "$Recycle.Bin")
-    out = {"deleted": 0, "failed": 0, "freed": 0, "fail_notes": []}
-    if not os.path.isdir(root):
-        return out
-
-    def _rm_any(p: str) -> None:
-        """删一个 $I/$R 条目（可能是文件也可能是目录），失败抛 OSError。"""
-        if os.path.islink(p) or _is_reparse_dir(p):
-            os.rmdir(p) if os.path.isdir(p) else os.remove(p)
-        elif os.path.isdir(p):
-            def _onerr(func, fp, _exc):
-                if not os.path.islink(fp) and not _is_reparse_dir(fp):
-                    os.chmod(fp, stat.S_IWRITE)
-                func(fp)
-            if sys.version_info >= (3, 12):
-                shutil.rmtree(p, onexc=_onerr)
-            else:
-                shutil.rmtree(p, onerror=_onerr)
-        else:
-            os.chmod(p, stat.S_IWRITE)
-            os.remove(p)
-
-    for sid in os.listdir(root):
-        sid_dir = os.path.join(root, sid)
-        if not os.path.isdir(sid_dir):
-            continue
-        try:
-            names = os.listdir(sid_dir)
-        except OSError:
-            out["fail_notes"].append(f"{sid}\\（无法读取，权限不足）")
-            continue
-        for n in names:
-            if n[:2].upper() not in ("$I", "$R"):
-                continue
-            p = os.path.join(sid_dir, n)
-            try:
-                sz = _size_of(p)
-                _rm_any(p)
-                out["deleted"] += 1
-                out["freed"] += sz
-            except OSError as exc:
-                # $R 条目常带隐藏/系统属性或只读位，先清属性再试一次
-                try:
-                    ctypes.windll.kernel32.SetFileAttributesW(p, 0x80)  # NORMAL
-                    sz2 = _size_of(p)
-                    _rm_any(p)
-                    out["deleted"] += 1
-                    out["freed"] += sz2
-                    continue
-                except OSError:
-                    pass
-                out["failed"] += 1
-                if len(out["fail_notes"]) < 4:
-                    out["fail_notes"].append(f"{sid}\\{n}（{exc.winerror or '拒绝访问'}）")
-    return out
+# _purge_recycle_bin 已迁至 ocleaner/recycle.py（经顶部 import 再绑定）
 
 
 def clean_target(t: dict, only_paths: list | None = None,
@@ -3655,203 +3338,7 @@ def clean_target(t: dict, only_paths: list | None = None,
 #     进程（要 Sysinternals handle.exe，或管理员权限下的 openfiles，二者都不是
 #     本工具能依赖的东西）。所以下面返回的是**候选**、按可能性排序，
 #     交给使用者自己判断。工具**绝不代关进程** —— 关错了可能是别人没保存的文档。
-LOCK_PROBE_LIMIT = 80       # 一次最多探这么多条路径（前端传来的通常远少于它）
-LOCK_CANDIDATE_LIMIT = 15   # 去重后展示的候选上限：太长反而让人无从下手
-# 脚本按「(目标 × 进程)」成行返回，同一进程命中多个目标就会重复。
-# 所以脚本侧先卡一个宽松上限，去重后再按 LOCK_CANDIDATE_LIMIT 裁。
-LOCK_RAW_ROW_LIMIT = 120
-
-# CreateFileW 的参数常量
-_LOCK_GENERIC_WRITE = 0x40000000
-_LOCK_GENERIC_READ = 0x80000000
-_LOCK_LIST_DIRECTORY = 0x00000001
-_LOCK_OPEN_EXISTING = 3
-_LOCK_FLAG_BACKUP_SEMANTICS = 0x02000000
-_LOCK_ERR_ACCESS_DENIED = 5
-_LOCK_ERR_SHARING_VIOLATION = 32
-_LOCK_ERR_LOCK_VIOLATION = 33
-
-_LOCK_API = None
-
-
-def _lock_api():
-    """惰性初始化 kernel32.CreateFileW 的原型（进程内只做一次）。"""
-    global _LOCK_API
-    if _LOCK_API is None:
-        import ctypes
-        from ctypes import wintypes
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.CreateFileW.restype = wintypes.HANDLE
-        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
-                                    wintypes.DWORD, ctypes.c_void_p,
-                                    wintypes.DWORD, wintypes.DWORD,
-                                    wintypes.HANDLE]
-        k32.CloseHandle.argtypes = [wintypes.HANDLE]
-        k32.CloseHandle.restype = wintypes.BOOL
-        _LOCK_API = (ctypes, k32)
-    return _LOCK_API
-
-
-def probe_locked(path: str) -> dict:
-    """探测一个路径当前是否被别的进程占用。
-
-    文件：请求「读写 + 不共享」句柄，共享冲突 = 被占用（可靠）。
-    目录：只能请求「列目录 + 不共享」，被占用时同样返回共享冲突，
-          但资源管理器正打开着也会如此，所以只作参考。
-    权限不足时如实返回「无法判定」，**不要猜成「没被占用」** ——
-    那会让使用者以为文件已经可以删了。
-    """
-    out = {"path": path, "exists": os.path.exists(path), "kind": "file",
-           "locked": None, "why": ""}
-    if not out["exists"]:
-        out["why"] = "路径不存在（可能已经删掉了）"
-        return out
-    if not IS_WINDOWS:
-        out["why"] = "占用探测仅支持 Windows"
-        return out
-    is_dir = os.path.isdir(path)
-    out["kind"] = "dir" if is_dir else "file"
-    ctypes, k32 = _lock_api()
-    access = _LOCK_LIST_DIRECTORY if is_dir else (_LOCK_GENERIC_READ | _LOCK_GENERIC_WRITE)
-    flags = _LOCK_FLAG_BACKUP_SEMANTICS if is_dir else 0
-    h = k32.CreateFileW(path, access, 0, None, _LOCK_OPEN_EXISTING, flags, None)
-    if (not h) or h == ctypes.c_void_p(-1).value:
-        err = ctypes.get_last_error()
-        if err in (_LOCK_ERR_SHARING_VIOLATION, _LOCK_ERR_LOCK_VIOLATION):
-            out["locked"] = True
-            out["why"] = ("有进程正打开着这个目录" if is_dir
-                          else "有进程正打开着这个文件")
-        elif err == _LOCK_ERR_ACCESS_DENIED:
-            out["why"] = "无法判定：拒绝访问（以管理员身份运行能读到更多）"
-        else:
-            out["why"] = "无法判定：系统返回错误码 %d" % err
-        return out
-    k32.CloseHandle(h)
-    out["locked"] = False
-    out["why"] = "当前没有被占用"
-    return out
-
-def find_lock_holders(paths: list) -> dict:
-    """探测这些路径的占用状态，并给出「可能是谁占用」的候选清单。
-
-    返回值里的 candidates 是**启发式推断**，不是确证：先按「程序本体在该目录下」
-    或「命令行里出现了完整路径」这类强信号排序，其余同名匹配排在后面并标记为非强信号。
-    """
-    clean: list[str] = []
-    for p in (paths or []):
-        if isinstance(p, str) and p.strip():
-            clean.append(p.strip())
-    truncated = len(clean) > LOCK_PROBE_LIMIT
-    clean = clean[:LOCK_PROBE_LIMIT]
-
-    results = [probe_locked(p) for p in clean]
-    candidates: list[dict] = []
-    ps_error = None
-    if clean and IS_WINDOWS:
-        script = PS_LOCK_HOLDERS.replace("__LIMIT__", str(LOCK_RAW_ROW_LIMIT))
-        r = run_ps(script, timeout=60,
-                   extra_env={"OC_TARGETS_JSON": json.dumps(clean, ensure_ascii=False)})
-        if isinstance(r, dict) and "error" in r:
-            ps_error = str(r["error"])
-        else:
-            raw = [c for c in _as_list(r) if isinstance(c, dict)]
-            # 同一个进程可能命中多个目标 —— 按 PID 合并成一条，并记下命中数。
-            # 不合并的话，15 行的上限会被同一个进程的重复行刷满。
-            merged: dict = {}
-            for c in raw:
-                key = c.get("pid")
-                if key is None:
-                    key = ("?", c.get("name"), c.get("exe"))
-                cur = merged.get(key)
-                if cur is None:
-                    n = dict(c)
-                    n["hits"] = 1
-                    merged[key] = n
-                else:
-                    cur["hits"] = int(cur.get("hits") or 1) + 1
-                    if c.get("strong") and not cur.get("strong"):
-                        cur["strong"] = True
-                        cur["why"] = c.get("why")
-                        cur["target"] = c.get("target")
-            candidates = list(merged.values())
-            candidates.sort(key=lambda c: (not c.get("strong"),
-                                           str(c.get("name") or "").lower()))
-            candidates = candidates[:LOCK_CANDIDATE_LIMIT]
-    return {"results": results, "candidates": candidates,
-            "truncated": truncated, "ps_error": ps_error}
-
-
-_PROTECTED_PROCESS_NAMES = {
-    "system", "idle", "system idle process", "smss.exe", "csrss.exe",
-    "wininit.exe", "winlogon.exe", "services.exe", "lsass.exe",
-    "svchost.exe", "dwm.exe", "explorer.exe", "conhost.exe",
-    "audiodg.exe", "fontdrvhost.exe", "sihost.exe", "taskmgr.exe",
-    "runtimebroker.exe", "searchindexer.exe",
-}
-
-
-def _pid_process_name(pid: int) -> str:
-    """用 tasklist 读取指定 PID 的进程映像名（失败回空串）。"""
-    if not IS_WINDOWS or pid <= 4:
-        return ""
-    try:
-        r = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, timeout=5,
-            creationflags=CREATE_NO_WINDOW,
-        )
-        for line in (r.stdout or "").splitlines():
-            line = line.strip()
-            if line.startswith('"'):
-                return line.split('"', 2)[1].strip()
-    except Exception:
-        pass
-    return ""
-
-
-def stop_lock_processes(pids: list) -> dict:
-    """按用户明确勾选的 PID 列表安全停止非系统关键进程。"""
-    if not IS_WINDOWS:
-        return {"ok": False, "error": "进程停止仅支持 Windows",
-                "stopped": [], "skipped": [], "failed": []}
-    self_pid = os.getpid()
-    parent_pid = os.getppid()
-    stopped: list[dict] = []
-    skipped: list[dict] = []
-    failed: list[dict] = []
-    seen: set[int] = set()
-    for raw in _as_list(pids)[:20]:
-        try:
-            pid = int(raw)
-        except (TypeError, ValueError):
-            continue
-        if pid in seen:
-            continue
-        seen.add(pid)
-        if pid <= 4 or pid == self_pid or pid == parent_pid:
-            skipped.append({"pid": pid, "name": "", "reason": "系统或本工具自身进程禁止结束"})
-            continue
-        pname = _pid_process_name(pid)
-        if not pname:
-            skipped.append({"pid": pid, "name": "", "reason": "无法确认进程名，出于安全拒绝结束"})
-            continue
-        if pname.lower() in _PROTECTED_PROCESS_NAMES:
-            skipped.append({"pid": pid, "name": pname, "reason": "受保护的系统关键进程禁止结束"})
-            continue
-        try:
-            r = subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True, text=True, timeout=10,
-                creationflags=CREATE_NO_WINDOW,
-            )
-            if r.returncode == 0:
-                stopped.append({"pid": pid, "name": pname or str(pid)})
-            else:
-                err = (r.stderr or r.stdout or "").strip() or f"exit {r.returncode}"
-                failed.append({"pid": pid, "name": pname or str(pid), "error": err})
-        except Exception as exc:  # noqa: BLE001
-            failed.append({"pid": pid, "name": pname or str(pid), "error": str(exc)})
-    return {"ok": True, "stopped": stopped, "skipped": skipped, "failed": failed}
+# 文件占用探测与进程安全停止域已迁至 ocleaner/locks.py（经顶部 import 再绑定）
 
 # 自动发现的深度上限 = 2（盘符根的直接子目录，及其子目录）。
 # 这里刻意用下面两段展开的循环实现，而不是递归 + 深度常量：
@@ -4709,22 +4196,130 @@ def _is_unsafe_remote(u: str) -> str:
     return ""
 
 
+_AUTH_SIG_CACHE: dict[tuple[str, int, int], tuple[str, str]] = {}
+
+
 def _authenticode_info(path: str) -> tuple[str, str]:
-    """返回 exe 的 (Authenticode 状态, 签名者 Subject)。"""
+    """返回 exe 的 (Authenticode 状态, 签名者 Subject)，优先走纯 Win32 WinVerifyTrust。"""
+    if not IS_WINDOWS:
+        return "Unknown", ""
     try:
-        res = run_ps(
-            "$sig = Get-AuthenticodeSignature -LiteralPath $env:OC_SIG_PATH;"
-            "[pscustomobject]@{status=($sig.Status.ToString());"
-            "subject=($sig.SignerCertificate.Subject)} | ConvertTo-Json -Compress",
-            timeout=20,
-            extra_env={"OC_SIG_PATH": str(path)},
+        st = os.stat(path)
+        key = (os.path.realpath(path).lower(), int(st.st_size), int(st.st_mtime_ns))
+    except OSError:
+        return "Unknown", ""
+    cached = _AUTH_SIG_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        import ctypes.wintypes as _wt
+
+        class _GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", _wt.DWORD),
+                ("Data2", _wt.WORD),
+                ("Data3", _wt.WORD),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        class _WINTRUST_FILE_INFO(ctypes.Structure):
+            _fields_ = [
+                ("cbStruct", _wt.DWORD),
+                ("pcwszFilePath", _wt.LPCWSTR),
+                ("hFile", _wt.HANDLE),
+                ("pgKnownSubject", ctypes.POINTER(_GUID)),
+            ]
+
+        class _WINTRUST_DATA(ctypes.Structure):
+            _fields_ = [
+                ("cbStruct", _wt.DWORD),
+                ("pPolicyCallbackData", ctypes.c_void_p),
+                ("pSIPClientData", ctypes.c_void_p),
+                ("dwUIChoice", _wt.DWORD),
+                ("fdwRevocationChecks", _wt.DWORD),
+                ("dwUnionChoice", _wt.DWORD),
+                ("pFile", ctypes.POINTER(_WINTRUST_FILE_INFO)),
+                ("dwStateAction", _wt.DWORD),
+                ("hWVTStateData", _wt.HANDLE),
+                ("pwszURLReference", _wt.LPCWSTR),
+                ("dwProvFlags", _wt.DWORD),
+                ("dwUIContext", _wt.DWORD),
+                ("pSignatureSettings", ctypes.c_void_p),
+            ]
+
+        # WINTRUST_ACTION_GENERIC_VERIFY_V2 = {00AAC56B-CD44-11d0-8CC2-00C04FC295EE}
+        action = _GUID(
+            0x00AAC56B, 0xCD44, 0x11D0,
+            (ctypes.c_ubyte * 8)(0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE),
         )
-        if isinstance(res, dict) and not res.get("error"):
-            return (str(res.get("status") or "Unknown"),
-                    str(res.get("subject") or ""))
+        wintrust = ctypes.WinDLL("wintrust", use_last_error=True)
+        wintrust.WinVerifyTrust.argtypes = [
+            _wt.HWND, ctypes.POINTER(_GUID), ctypes.POINTER(_WINTRUST_DATA),
+        ]
+        wintrust.WinVerifyTrust.restype = ctypes.c_long
+
+        full_path = os.path.realpath(path)
+        fi = _WINTRUST_FILE_INFO(ctypes.sizeof(_WINTRUST_FILE_INFO), full_path, None, None)
+        # WTD_UI_NONE=2, WTD_REVOKE_NONE=0, WTD_CHOICE_FILE=1, WTD_STATEACTION_VERIFY=1,
+        # WTD_CACHE_ONLY_URL_RETRIEVAL=0x1000
+        wd = _WINTRUST_DATA(
+            ctypes.sizeof(_WINTRUST_DATA), None, None,
+            2, 0, 1, ctypes.pointer(fi), 1, None, None, 0x1000, 0, None,
+        )
+        rc = wintrust.WinVerifyTrust(None, ctypes.byref(action), ctypes.byref(wd))
+        wd.dwStateAction = 2  # WTD_STATEACTION_CLOSE
+        wintrust.WinVerifyTrust(None, ctypes.byref(action), ctypes.byref(wd))
+
+        names: list[str] = []
+        crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+        crypt32.CryptQueryObject.argtypes = [
+            _wt.DWORD, _wt.LPCWSTR, _wt.DWORD, _wt.DWORD, _wt.DWORD,
+            ctypes.POINTER(_wt.DWORD), ctypes.POINTER(_wt.DWORD),
+            ctypes.POINTER(_wt.DWORD), ctypes.POINTER(_wt.HANDLE),
+            ctypes.c_void_p, ctypes.c_void_p,
+        ]
+        crypt32.CryptQueryObject.restype = _wt.BOOL
+        crypt32.CertEnumCertificatesInStore.argtypes = [_wt.HANDLE, ctypes.c_void_p]
+        crypt32.CertEnumCertificatesInStore.restype = ctypes.c_void_p
+        crypt32.CertGetNameStringW.argtypes = [
+            ctypes.c_void_p, _wt.DWORD, _wt.DWORD, ctypes.c_void_p, _wt.LPWSTR, _wt.DWORD,
+        ]
+        crypt32.CertGetNameStringW.restype = _wt.DWORD
+        crypt32.CertCloseStore.argtypes = [_wt.HANDLE, _wt.DWORD]
+        crypt32.CertCloseStore.restype = _wt.BOOL
+
+        hstore = _wt.HANDLE()
+        # CERT_QUERY_OBJECT_FILE=1, PKCS7_SIGNED_EMBED=1<<10, FORMAT_BINARY=1<<1
+        if crypt32.CryptQueryObject(
+            1, full_path, 1 << 10, 1 << 1, 0,
+            None, None, None, ctypes.byref(hstore), None, None,
+        ) and hstore:
+            try:
+                cert = None
+                while True:
+                    cert = crypt32.CertEnumCertificatesInStore(hstore, cert)
+                    if not cert:
+                        break
+                    buf = ctypes.create_unicode_buffer(256)
+                    if crypt32.CertGetNameStringW(cert, 4, 0, None, buf, 256) and buf.value:
+                        names.append(buf.value)
+            finally:
+                crypt32.CertCloseStore(hstore, 0)
+
+        subject = ", ".join(names)
+        u_rc = rc & 0xFFFFFFFF
+        if u_rc == 0:
+            res = ("Valid", subject)
+        elif u_rc == 0x800B0100:
+            res = ("NotSigned", subject)
+        else:
+            res = (f"Error_0x{u_rc:08X}", subject)
     except Exception:
-        pass
-    return "Unknown", ""
+        res = ("Unknown", "")
+    if len(_AUTH_SIG_CACHE) >= 64:
+        _AUTH_SIG_CACHE.pop(next(iter(_AUTH_SIG_CACHE)), None)
+    _AUTH_SIG_CACHE[key] = res
+    return res
 
 
 def _authenticode_status(path: str) -> str:
@@ -4926,257 +4521,13 @@ def build_scan(drive: str | None = None, custom_path: str | None = None,
 # 兼容；路由内对业务函数经 `_core.` 惰性引用。下方 pick_port / 托盘 /
 # 自动清理 / main() 仍属本模块。
 
-def pick_port(preferred: int) -> int:
-    """找一个真正空闲的端口。探测必须用裸 bind，不能带 SO_REUSEADDR：
-    Windows 上带了它，已被其他进程监听的端口也能 bind 成功，
-    新旧实例会静默双绑定同一端口（请求随机落到旧实例上）。
-    裸 bind 才是「这个端口此刻真的没人用」的判定；代价是刚关闭的端口
-    会进入 TIME_WAIT 而被跳过 —— 顺延到下一个端口正是想要的行为。
-    """
-    for port in range(preferred, preferred + 30):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("127.0.0.1", port))
-            except OSError:
-                continue
-        if port != preferred:
-            print(f"端口 {preferred} 已被占用（可能已有 O-Cleaner 在运行），"
-                  f"改用 {port}")
-        return port
-    raise SystemExit(f"{preferred} 起连续 30 个端口都不可用")
-
-
-def _calc_app_window_rect() -> tuple[int, int, int, int]:
-    """按当前桌面工作区计算居中的横向矩形默认窗口 (x, y, w, h)（逻辑像素）。"""
-    left, top, work_w, work_h = 0, 0, 1440, 900
-    try:
-        from ctypes import wintypes
-        rect = wintypes.RECT()
-        if ctypes.windll.user32.SystemParametersInfoW(48, 0, ctypes.byref(rect), 0):
-            ww = rect.right - rect.left
-            wh = rect.bottom - rect.top
-            if ww >= 640 and wh >= 480:
-                scale = 1.0
-                try:
-                    dpi = ctypes.windll.user32.GetDpiForSystem()
-                    if dpi and dpi > 96:
-                        scale = dpi / 96.0
-                except Exception:
-                    pass
-                left = int(rect.left / scale)
-                top = int(rect.top / scale)
-                work_w = int(ww / scale)
-                work_h = int(wh / scale)
-    except Exception:
-        pass
-    w = max(min(work_w - 40, 1180), min(int(work_w * 0.80), 1480))
-    # 横向矩形（约 16:9.5 比例），避免接近正方形或过高
-    h = min(work_h - 48, max(660, int(w * 0.58)))
-    x = left + max(0, (work_w - w) // 2)
-    y = top + max(0, (work_h - h) // 2)
-    return x, y, w, h
-
-
-def _open_app_window(url: str) -> None:
-    """Edge --app 无边框窗口（v3.0 原生体验方向）：零依赖实现桌面化外观。
-
-    使用独立 app-profile 目录确保 --window-size / --window-position
-    不被已运行的浏览器进程忽略，按横向矩形居中启动；找不到回退默认浏览器。
-    """
-    x, y, w, h = _calc_app_window_rect()
-    prof_dir = str(RUNTIME_DIR / "app-profile")
-    try:
-        os.makedirs(prof_dir, exist_ok=True)
-    except OSError:
-        prof_dir = ""
-    candidates = [
-        os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
-        os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
-        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
-        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
-        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
-    ]
-    for exe in candidates:
-        if os.path.isfile(exe):
-            try:
-                cmd = [exe, "--new-window", f"--app={url}",
-                       f"--window-size={w},{h}", f"--window-position={x},{y}"]
-                if prof_dir:
-                    cmd.append(f"--user-data-dir={prof_dir}")
-                subprocess.Popen(cmd, creationflags=CREATE_NO_WINDOW)
-                return
-            except OSError:
-                continue
-    webbrowser.open(url)   # 兜底：默认浏览器
-
+# pick_port / _calc_app_window_rect / _open_app_window / _tray_worker 已迁至 ocleaner/tray.py
 
 ARCHIVE_LOG_PATH = RUNTIME_DIR / "downloads-archive-log.json"
 
 # ---- 下载目录归档已迁出（v2.17 Task 1） ----
 # downloads_archive / downloads_archive_undo 已迁至 ocleaner/analysis.py；
 # ARCHIVE_LOG_PATH 依赖 RUNTIME_DIR 且被 unit_test monkeypatch，留在本模块。
-
-def _tray_worker(url: str) -> None:
-    """系统托盘常驻（v3.0 方向七后半，纯 ctypes 零依赖）。
-
-    仅 --tray 时启动：左键双击打开界面；右键菜单＝打开界面 /
-    立即安全清理（后台线程跑 run_auto_clean）/ 退出（连服务一起停）。
-    任何步骤失败都静默退出托盘 —— 服务照常运行，只是没有图标。
-    """
-    try:
-        import ctypes
-        from ctypes import wintypes
-        user32 = ctypes.windll.user32
-        shell32 = ctypes.windll.shell32
-        kernel32 = ctypes.windll.kernel32
-        # 64 位句柄/参数必须显式声明 argtypes，否则回调里转发会 OverflowError
-        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT,
-                                          wintypes.WPARAM, wintypes.LPARAM]
-        user32.DefWindowProcW.restype = ctypes.c_longlong
-        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
-        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-        user32.LoadIconW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR]
-        user32.LoadIconW.restype = wintypes.HICON
-        user32.CreatePopupMenu.argtypes = []
-        user32.CreatePopupMenu.restype = wintypes.HMENU
-        user32.AppendMenuW.argtypes = [wintypes.HMENU, wintypes.UINT, ctypes.c_size_t, wintypes.LPCWSTR]
-        user32.AppendMenuW.restype = wintypes.BOOL
-        user32.TrackPopupMenu.argtypes = [
-            wintypes.HMENU, wintypes.UINT, ctypes.c_int, ctypes.c_int,
-            ctypes.c_int, wintypes.HWND, ctypes.c_void_p]
-        user32.TrackPopupMenu.restype = wintypes.BOOL
-        user32.DestroyMenu.argtypes = [wintypes.HMENU]
-        user32.DestroyMenu.restype = wintypes.BOOL
-        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
-        user32.SetForegroundWindow.restype = wintypes.BOOL
-        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-        user32.PostMessageW.restype = wintypes.BOOL
-        user32.CreateWindowExW.argtypes = [
-            wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
-            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-            wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, ctypes.c_void_p]
-        user32.CreateWindowExW.restype = wintypes.HWND
-
-        WM_USER_TRAY = 0x0400 + 1          # 托盘回调消息
-        IDM_OPEN, IDM_CLEAN, IDM_QUIT = 1001, 1002, 1003
-        nid_cb = 0
-
-        class NOTIFYICONDATAW(ctypes.Structure):
-            _fields_ = [("cbSize", wintypes.DWORD),
-                        ("hWnd", wintypes.HWND),
-                        ("uID", wintypes.UINT),
-                        ("uFlags", wintypes.UINT),
-                        ("uCallbackMessage", wintypes.UINT),
-                        ("hIcon", wintypes.HICON),
-                        ("szTip", wintypes.WCHAR * 128),
-                        ("dwState", wintypes.DWORD),
-                        ("dwStateMask", wintypes.DWORD),
-                        ("szInfo", wintypes.WCHAR * 256),
-                        ("uVersion", wintypes.UINT),
-                        ("szInfoTitle", wintypes.WCHAR * 64),
-                        ("dwInfoFlags", wintypes.DWORD),
-                        ("guidItem", ctypes.c_ubyte * 16),
-                        ("hBalloonIcon", wintypes.HICON)]
-
-        WNDPROC = ctypes.WINFUNCTYPE(
-            ctypes.c_longlong, wintypes.HWND, wintypes.UINT,
-            ctypes.c_size_t, ctypes.c_longlong)
-
-        def _wndproc(hwnd, msg, wparam, lparam):
-            if msg == WM_USER_TRAY:
-                if lparam == 0x0203:                       # 左键双击打开（避免单击/双击重复弹多页）
-                    webbrowser.open(url)
-                elif lparam == 0x0205:                     # 右键抬起
-                    user32.SetForegroundWindow(hwnd)
-                    hmenu = user32.CreatePopupMenu()
-                    user32.AppendMenuW(hmenu, 0, IDM_OPEN, "打开界面")
-                    user32.AppendMenuW(hmenu, 0, IDM_CLEAN, "立即安全清理")
-                    user32.AppendMenuW(hmenu, 0x800, 0, None)  # 分隔线
-                    user32.AppendMenuW(hmenu, 0, IDM_QUIT, "退出")
-                    pos = wintypes.POINT()
-                    user32.GetCursorPos(ctypes.byref(pos))
-                    # TPM_RIGHTBUTTON (0x0002) | TPM_NONOTIFY (0x0080) | TPM_RETURNCMD (0x0100)
-                    cmd_id = user32.TrackPopupMenu(
-                        hmenu, 0x0182, pos.x, pos.y, 0, hwnd, None)
-                    user32.PostMessageW(hwnd, 0, 0, 0)
-                    user32.DestroyMenu(hmenu)
-                    if cmd_id == IDM_OPEN:
-                        webbrowser.open(url)
-                    elif cmd_id == IDM_CLEAN:
-                        import threading as _t
-                        sys_drv = (os.environ.get("SystemDrive") or "C:").rstrip(":\\/")
-                        _t.Thread(target=run_auto_clean, args=(sys_drv,),
-                                  daemon=True).start()
-                        nid = NOTIFYICONDATAW(
-                            cbSize=ctypes.sizeof(NOTIFYICONDATAW), hWnd=hwnd,
-                            uID=nid_cb, uFlags=0x10, szInfo="安全清理已在后台开始"
-                            "（只清 safe 预设安全项）",
-                            szInfoTitle="O-Cleaner")
-                        shell32.Shell_NotifyIconW(1, ctypes.byref(nid))
-                    elif cmd_id == IDM_QUIT:
-                        user32.PostQuitMessage(0)
-            elif msg == 0x0111:                            # WM_COMMAND
-                if wparam & 0xFFFF == IDM_OPEN:
-                    webbrowser.open(url)
-                elif wparam & 0xFFFF == IDM_CLEAN:
-                    import threading as _t
-                    _t.Thread(target=run_auto_clean, args=("C",),
-                              daemon=True).start()
-                    nid = NOTIFYICONDATAW(
-                        cbSize=ctypes.sizeof(NOTIFYICONDATAW), hWnd=hwnd,
-                        uID=nid_cb, uFlags=0x10, szInfo="安全清理已在后台开始"
-                        "（只清建议清理项，高风险入回收站）",
-                        szInfoTitle="O-Cleaner")
-                    shell32.Shell_NotifyIconW(1, ctypes.byref(nid))  # NIM_MODIFY
-                elif wparam & 0xFFFF == IDM_QUIT:
-                    user32.PostQuitMessage(0)
-            elif msg == 0x0010:                            # WM_CLOSE
-                user32.PostQuitMessage(0)
-            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
-
-        wndproc = WNDPROC(_wndproc)
-        hinst = kernel32.GetModuleHandleW(None)
-        wc = ctypes.c_void_p()
-        # WNDCLASSW 手工布局：style/cbClsExtra/cbWndExtra/hInstance/hIcon/
-        # hCursor/hbrBackground/lpszMenuName/lpszClassName/hCursor 处的 lpfnWndProc
-        class WNDCLASSW(ctypes.Structure):
-            _fields_ = [("style", wintypes.UINT),
-                        ("lpfnWndProc", WNDPROC),
-                        ("cbClsExtra", ctypes.c_int),
-                        ("cbWndExtra", ctypes.c_int),
-                        ("hInstance", wintypes.HINSTANCE),
-                        ("hIcon", wintypes.HICON),
-                        ("hCursor", wintypes.HANDLE),
-                        ("hbrBackground", wintypes.HBRUSH),
-                        ("lpszMenuName", wintypes.LPCWSTR),
-                        ("lpszClassName", wintypes.LPCWSTR)]
-        wc = WNDCLASSW(style=0, lpfnWndProc=wndproc, hInstance=hinst,
-                       lpszClassName="OCleanerTray")
-        atom = user32.RegisterClassW(ctypes.byref(wc))
-        if not atom:
-            return
-        hwnd = user32.CreateWindowExW(
-            0, "OCleanerTray", "O-Cleaner", 0, 0, 0, 0, 0, None, None,
-            hinst, None)
-        if not hwnd:
-            return
-        hicon = user32.LoadIconW(None, 32512)   # IDI_APPLICATION
-        nid = NOTIFYICONDATAW(cbSize=ctypes.sizeof(NOTIFYICONDATAW),
-                              hWnd=hwnd, uID=1, uFlags=0x01 | 0x02 | 0x04,
-                              uCallbackMessage=WM_USER_TRAY, hIcon=hicon,
-                              szTip="O-Cleaner —— 双击打开 / 右键菜单")
-        nid_cb = 1
-        if not shell32.Shell_NotifyIconW(0, ctypes.byref(nid)):  # NIM_ADD
-            return
-        msg = wintypes.MSG()
-        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageW(ctypes.byref(msg))
-        shell32.Shell_NotifyIconW(2, ctypes.byref(nid))          # NIM_DELETE
-        # 托盘退出＝整个应用退出（托盘是 --tray 模式的唯一生命周期入口）
-        os._exit(0)
-    except Exception:  # noqa: BLE001
-        pass   # 托盘失败不致命：服务照常，用户可用浏览器访问
 
 
 def run_auto_clean(drive: str) -> dict:

@@ -42,21 +42,23 @@ def _dpapi_protect(plain: str) -> str:
 
         raw = plain.encode("utf-8")
         buf = ctypes.create_string_buffer(raw, len(raw))
-        in_blob = _BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
         out_blob = _BLOB()
-        if not c32.CryptProtectData(
-                ctypes.byref(in_blob), None, None, None, None, 0x01,
-                ctypes.byref(out_blob)):
-            return plain
         try:
+            in_blob = _BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+            if not c32.CryptProtectData(
+                    ctypes.byref(in_blob), None, None, None, None, 0x01,
+                    ctypes.byref(out_blob)):
+                raise RuntimeError("Windows DPAPI 加密失败，已拒绝明文保存凭据")
             enc = ctypes.string_at(out_blob.pbData, out_blob.cbData)
             return "dpapi:" + base64.b64encode(enc).decode("ascii")
         finally:
             ctypes.memset(buf, 0, len(raw))
             if out_blob.pbData:
                 k32.LocalFree(out_blob.pbData)
-    except Exception:
-        return plain
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Windows DPAPI 加密失败，已拒绝明文保存凭据") from exc
 
 
 def _dpapi_unprotect(stored: str) -> str:

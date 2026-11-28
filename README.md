@@ -77,11 +77,13 @@ Windows 磁盘空间分析与安全清理工具。基于本地 Web 界面交互�
 ## 延伸阅读与仓库结构
 
 - 详细操作指南：[docs/USAGE.md](docs/USAGE.md)（English: [docs/USAGE-en.md](docs/USAGE-en.md)）
+- 系统架构说明：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- 长期发展规划：[docs/ROADMAP.md](docs/ROADMAP.md)
 - 版本更新日志：[CHANGELOG.md](CHANGELOG.md)
 - 自定义规则与格式说明：[docs/CUSTOMIZE.md](docs/CUSTOMIZE.md)
 - 安全边界与信任模型：[docs/SECURITY.md](docs/SECURITY.md)
-- 参与贡献：[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
-- 核心文件速览：`app.py`（入口）、`ocleaner/`（扫描、MFT 与清理引擎）、`config\targets.json` 与 `config\filetypes.json`（内置规则与文件类型库）、`web\index.html`（配合 `styles.css` 与 `app.js` 构成前端界面）、`tools\selftest.py` 与 `tools\lint_rules.py`（自检与规则一致性门禁）。
+- 参与贡献（规则需先过 linter 与安全闸门）：[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
+- 核心文件速览：`app.py`（入口）、`ocleaner/`（17 模块：无环基础 `runtime.py`、扫描/MFT `engines.py`+`mft_fast.c`、九层护栏 `guard.py` 等）、`config\targets.json` 与 `config\filetypes.json`（内置规则与文件类型库）、`web\index.html`（配合 `styles.css`、`web\js\i18n.js` 与 `app.js` 构成前端界面）、`tools\selftest.py`、`tools\unit_test.py` 与 `tools\lint_rules.py`（自检与规则一致性门禁）。
 
 ## 使用规则与注意事项
 

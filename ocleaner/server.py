@@ -15,6 +15,7 @@ POST / DELETE）、入口守卫（Host/Origin 双检 + CSRF 拒绝）、扩展�
 from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import base64
 import json
+import math
 import os
 import re
 import subprocess
@@ -52,13 +53,13 @@ class Handler(BaseHTTPRequestHandler):
         if not m:
             return False
         bound = int(getattr(_core, "_BOUND_PORT", 0) or 0)
-        if bound and m.group(2) and int(m.group(2)) != bound:
+        if bound and (int(m.group(2)) if m.group(2) else 80) != bound:
             return False
         return True
 
     def _origin_ok(self) -> bool:
         sfs = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
-        if sfs == "cross-site":
+        if sfs and sfs not in ("same-origin", "none"):
             return False
         raw_host = (self.headers.get("Host") or "").strip().lower()
         hm = re.search(r":(\d{1,5})$", raw_host)
@@ -76,9 +77,9 @@ class Handler(BaseHTTPRequestHandler):
                 port = u.port
             except Exception:
                 return False
-            if scheme not in ("http", "https") or host not in ("127.0.0.1", "localhost", "::1"):
+            if scheme != "http" or host not in ("127.0.0.1", "localhost", "::1"):
                 return False
-            if expected_port and port and port != expected_port:
+            if expected_port and (port or 80) != expected_port:
                 return False
         return True
 
@@ -309,6 +310,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, data, ctype)
             except OSError:
                 return self._send(404, b"", ctype)
+        if route.startswith("/js/") and route.endswith(".js"):
+            name = route[len("/js/"):]
+            ctype = "application/javascript; charset=utf-8"
+            if not re.fullmatch(r"[a-z0-9_-]+\.js", name):
+                return self._send(404, b"", ctype)
+            js_dir = (Path(_core.WEB_DIR) / "js").resolve()
+            fp = (js_dir / name).resolve()
+            if fp.parent != js_dir:
+                return self._send(404, b"", ctype)
+            try:
+                return self._send(200, fp.read_bytes(), ctype)
+            except OSError:
+                return self._send(404, b"", ctype)
         if route in ("/favicon.ico", "/icon.ico"):
             try:
                 ico = (_core.WEB_DIR / "icon.ico").read_bytes()
@@ -329,13 +343,10 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/backup/export":
             raw = _core.export_full_backup()
             fn = f"O-Cleaner-backup-{_core.datetime.now().strftime('%Y-%m-%d')}.zip"
-            self.send_response(200)
-            self.send_header("Content-Type", "application/zip")
-            self.send_header("Content-Disposition", f'attachment; filename="{fn}"')
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-            return
+            return self._send(
+                200, raw, "application/zip",
+                {"Content-Disposition": f'attachment; filename="{fn}"'},
+            )
         if route == "/__oc__/packs":
             return self._json({"packs": _core.load_packs(use_cache=False)["packs"],
                                "remote": _core.load_packs_state().get("remote") or "",
@@ -488,9 +499,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "depth 必须是整数"}, 400)
             try:
                 r = _core.scan_disk_overview(letter, max(1, min(depth, 6)))
-            except BaseException as e:
-                # 线程级兜底：扫描线程里的异常（含 Exception 之外的类型）
-                # 若直接放行，客户端只会拿到一条空响应，无从排查。
+            except Exception as e:
                 print(f"[overview] 扫描线程异常退出：{type(e).__name__}: {e}",
                       file=sys.stderr)
                 return self._json({"error": f"扫描线程异常退出"
@@ -747,10 +756,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "没有选择任何清理项",
                                    "skipped_paths": skipped_paths,
                                    "merged": merged}, 400)
-            if getattr(self.server, "busy", False):
-                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
-            self.server.busy = True
-            try:
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
                 entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                          "drive": drive,
                          "trigger": f"手动清理（{drive}:）",
@@ -773,8 +781,6 @@ class Handler(BaseHTTPRequestHandler):
                      "stats": _core.history_stats(),
                      "skipped_paths": skipped_paths,
                      "merged": merged}, self._query().get("lang")))
-            finally:
-                self.server.busy = False
 
         # ---- 被占用文件：一键查「可能是谁占着」----
         if route == "/__oc__/locks":
@@ -817,13 +823,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "paths 必须是非空路径数组"}, 400)
             if len(paths) > 200:
                 return self._json({"error": "一次最多 200 个路径"}, 400)
-            if getattr(self.server, "busy", False):
-                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
-            self.server.busy = True
-            try:
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
                 out = _core.purge_recycle_paths(paths)
-            finally:
-                self.server.busy = False
             # 释放量如实入账：与常规清理同一统计通道。
             # 回收站条目可能跨盘：从各结果路径提取盘符集合，逗号连接。
             drives = ",".join(sorted({
@@ -882,10 +885,9 @@ class Handler(BaseHTTPRequestHandler):
                              "（只允许删除 Steam / Epic / GOG 的游戏安装目录）"}, 400)
             if not os.path.isdir(norm):
                 return self._json({"error": "目录不存在（可能已删除）"}, 400)
-            if getattr(self.server, "busy", False):
-                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
-            self.server.busy = True
-            try:
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
                 t0 = time.time()
                 name = os.path.basename(norm)
                 disp, _zh = _core.game_display_name(None, name)
@@ -895,14 +897,14 @@ class Handler(BaseHTTPRequestHandler):
                 # 锁住 .exe/.dll 时会把几十 GB 资源删空只留锁死的二进制，
                 # 游戏既无法运行也无法走官方卸载。先预检（命中即整体中止）
                 # 再走三态删除（改名暂存 + 严格删除 + 断电恢复）。
-                locked = _core._precheck_locked_files(norm)
-                if locked:
+                locked_files = _core._precheck_locked_files(norm)
+                if locked_files:
                     shown = "；".join(os.path.basename(p)
-                                      for p in locked[:_core._LOCK_PRECHECK_REPORT_MAX])
+                                      for p in locked_files[:_core._LOCK_PRECHECK_REPORT_MAX])
                     return self._json({"error": (
-                        f"目标内有 {len(locked)} 个文件正被其他程序占用，"
+                        f"目标内有 {len(locked_files)} 个文件正被其他程序占用，"
                         f"已整体中止、未删除任何内容（请先关闭相关程序）：{shown}"
-                        f"{'…' if len(locked) > _core._LOCK_PRECHECK_REPORT_MAX else ''}")}, 409)
+                        f"{'…' if len(locked_files) > _core._LOCK_PRECHECK_REPORT_MAX else ''}")}, 409)
                 full, partial, note = _core.rm_tree_strict(norm)
                 after = _core._size_of_dir(norm) if os.path.isdir(norm) else 0
                 freed = max(0, before - after)
@@ -937,42 +939,49 @@ class Handler(BaseHTTPRequestHandler):
                     "disk": _core.get_disk_info(letter),
                     "error": err,
                 })
-            finally:
-                self.server.busy = False
 
         # ---- 定时设置 ----
         if route == "/__oc__/schedule":
-            s = _core.schedule_state()
-            for k in ("enabled", "interval_hours", "preset", "drive"):
-                if k in body:
-                    s[k] = body[k]
-            # interval_hours 必须是数字：历史数据损坏或前端 bug 传入字符串时
-            # 直接 400，而不是 float() 崩成 500，更不能把垃圾值原样落盘。
-            # 注意校验必须在 enabled 判断**之外**：关掉定时任务时传进来的非法值
-            # 一样会写盘，等下次开启时就成了下一次事故的种子（实测 enabled=false
-            # 时 "abc" 被原样落盘，/state 回读到的仍是 "abc"）。
-            try:
-                hrs = max(0.25, float(s.get("interval_hours") or 24))
-            except (TypeError, ValueError):
-                return self._json(
-                    {"error": "interval_hours 必须是数字"}, 400)
-            s["interval_hours"] = hrs
-            if s.get("enabled"):
-                s["next_run"] = time.time() + hrs * 3600
-            else:
-                s["next_run"] = 0
-            # 持锁写入：与 _run_scheduled 的锁内写回串行化，否则定时任务刚算好的
-            # next_run 会被这里的陈旧快照覆盖（用户一改设置就立刻又触发一次）
+            if not isinstance(body, dict):
+                return self._json({"error": "请求体必须是 JSON 对象"}, 400)
+            patch: dict = {}
+            if "enabled" in body:
+                patch["enabled"] = bool(body["enabled"])
+            if "interval_hours" in body:
+                raw_hrs = body["interval_hours"]
+                if isinstance(raw_hrs, bool):
+                    return self._json({"error": "interval_hours 必须是数字"}, 400)
+                try:
+                    hrs_val = float(raw_hrs)
+                except (TypeError, ValueError):
+                    return self._json({"error": "interval_hours 必须是数字"}, 400)
+                if not math.isfinite(hrs_val):
+                    return self._json({"error": "interval_hours 必须是有限数字"}, 400)
+                patch["interval_hours"] = max(0.25, min(hrs_val, 24.0 * 30.0))
+            if "drive" in body:
+                drv = str(body["drive"] or "").strip().rstrip(":/\\").upper()
+                if not re.fullmatch(r"[A-Z]", drv):
+                    return self._json({"error": "drive 必须是单个盘符字母"}, 400)
+                patch["drive"] = drv
+            if "preset" in body:
+                raw_p = body["preset"]
+                known = {
+                    str(p.get("id") or "")
+                    for p in (_core.load_targets().get("presets") or [])
+                    if isinstance(p, dict) and p.get("id")
+                }
+                if not isinstance(raw_p, str) or not raw_p.strip() or (known and raw_p.strip() not in known):
+                    return self._json({"error": "preset 不是已知预设"}, 400)
+                patch["preset"] = raw_p.strip()
             with _core._lock:
                 cur = _core.schedule_state()
-                cur.update({k: s[k] for k in
-                            ("enabled", "interval_hours", "preset", "drive",
-                             "next_run") if k in s})
-                if not cur.get("enabled"):
-                    cur["next_run"] = 0
+                cur.update(patch)
+                hrs = _core._schedule_run_interval(cur)
+                cur["interval_hours"] = hrs
+                cur["next_run"] = (time.time() + hrs * 3600) if cur.get("enabled") else 0
+                cur.pop("last_summary", None)
                 _core._atomic_write(_core.SCHEDULE_PATH, cur)
-                s = cur
-            return self._json(s)
+            return self._json(cur)
 
         # ---- 自定义换算单位 ----
         if route == "/__oc__/units":
@@ -1124,11 +1133,10 @@ class Handler(BaseHTTPRequestHandler):
             paths_in = [str(x).strip() for x in paths_in if str(x).strip()]
             if len(paths_in) > 50:
                 return self._json({"error": "单次最多 50 个路径"}, 400)
-            if getattr(self.server, "busy", False):
-                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
-            self.server.busy = True
-            trashed_total = [0]
-            try:
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
+                trashed_total = [0]
                 results = []
                 for pth in paths_in:
                     item = {"path": pth, "ok": False, "trashed": False,
@@ -1189,8 +1197,6 @@ class Handler(BaseHTTPRequestHandler):
                                    "trashed_h": _core.human(trashed_total[0]),
                                    "error": "" if done == len(results) else first_err,
                                    "results": results})
-            finally:
-                self.server.busy = False
 
         if route == "/__oc__/bloatware/scan":
             now0 = time.time()
@@ -1213,7 +1219,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "仅 Windows"}, 400)
             bw_scan = _core.bloatware_scan()
             matched_keys = {str(it.get("reg_key") or "").lower()
-                            for it in (bw_scan.get("installed") or []) if isinstance(it, dict)}
+                            for it in (bw_scan.get("found") or []) if isinstance(it, dict)}
             if reg_key.strip().lower() not in matched_keys:
                 return self._json({"error": "仅允许卸载已识别的毒瘤软件条目"}, 403)
             import winreg
@@ -1252,7 +1258,10 @@ class Handler(BaseHTTPRequestHandler):
                             exe_path = argv[0]
                             params = subprocess.list2cmdline([argv[i] for i in range(1, argc.value)])
                         finally:
-                            _ct.WinDLL("kernel32").LocalFree(argv)
+                            _k32 = _ct.WinDLL("kernel32")
+                            _k32.LocalFree.argtypes = [_ct.c_void_p]
+                            _k32.LocalFree.restype = _ct.c_void_p
+                            _k32.LocalFree(argv)
                         _s32.ShellExecuteW.argtypes = [
                             _wt.HWND, _wt.LPCWSTR, _wt.LPCWSTR,
                             _wt.LPCWSTR, _wt.LPCWSTR, _ct.c_int]
@@ -1265,35 +1274,31 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json({"error": f"启动失败：{exc2}"}, 500)
                 return self._json({"error": f"启动失败：{exc}"}, 500)
         if route == "/__oc__/bloatware/sweep":
-            if getattr(self.server, "busy", False) or not _core._CLEAN_LOCK.acquire(blocking=False):
-                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
             reg_key = str(body.get("reg_key") or "")
             dirs = body.get("dirs") or []
             if not isinstance(dirs, list) or (not dirs and not reg_key):
-                _core._CLEAN_LOCK.release()
                 return self._json({"error": "dirs/reg_key 不能同时为空"}, 400)
-            bw_scan = _core.bloatware_scan()
-            allowed_dirs: set[str] = set()
-            allowed_keys: set[str] = set()
-            for it in (bw_scan.get("installed") or []) + (bw_scan.get("orphans") or []):
-                if not isinstance(it, dict):
-                    continue
-                if it.get("reg_key"):
-                    allowed_keys.add(str(it["reg_key"]).strip().lower())
-                for d0 in (it.get("residue_dirs") or []):
-                    allowed_dirs.add(os.path.normpath(str(d0)).lower())
-                if it.get("path"):
-                    allowed_dirs.add(os.path.normpath(str(it["path"])).lower())
-            if reg_key and reg_key.strip().lower() not in allowed_keys:
-                _core._CLEAN_LOCK.release()
-                return self._json({"error": "仅允许清理已识别的毒瘤软件注册表项"}, 403)
-            safe_dirs = [str(x) for x in dirs
-                         if os.path.normpath(str(x)).lower() in allowed_dirs][:20]
-            if dirs and not safe_dirs:
-                _core._CLEAN_LOCK.release()
-                return self._json({"error": "仅允许清理已识别的毒瘤残留目录"}, 403)
-            self.server.busy = True
-            try:
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
+                bw_scan = _core.bloatware_scan()
+                allowed_dirs: set[str] = set()
+                allowed_keys: set[str] = set()
+                for it in (bw_scan.get("found") or []):
+                    if not isinstance(it, dict):
+                        continue
+                    if it.get("reg_key"):
+                        allowed_keys.add(str(it["reg_key"]).strip().lower())
+                    for d0 in (it.get("residue_dirs") or []):
+                        allowed_dirs.add(os.path.normpath(str(d0)).lower())
+                    if it.get("path"):
+                        allowed_dirs.add(os.path.normpath(str(it["path"])).lower())
+                if reg_key and reg_key.strip().lower() not in allowed_keys:
+                    return self._json({"error": "仅允许清理已识别的毒瘤软件注册表项"}, 403)
+                safe_dirs = [str(x) for x in dirs
+                             if os.path.normpath(str(x)).lower() in allowed_dirs][:20]
+                if dirs and not safe_dirs:
+                    return self._json({"error": "仅允许清理已识别的毒瘤残留目录"}, 403)
                 r = _core.bloatware_sweep(reg_key, safe_dirs)
                 _core._BLOAT_CACHE.update(ts=0.0, r=None)
                 try:
@@ -1318,31 +1323,20 @@ class Handler(BaseHTTPRequestHandler):
                         errs.append(r["reg_error"])
                     r["error"] = "；".join(errs[:3]) or "部分残留未能清除"
                 return self._json(r)
-            finally:
-                self.server.busy = False
-                _core._CLEAN_LOCK.release()
         if route == "/__oc__/junction-move":
-            if getattr(self.server, "busy", False) or not _core._CLEAN_LOCK.acquire(blocking=False):
-                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
-            self.server.busy = True
-            try:
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
                 return self._json(_core.junction_move(
                     str(body.get("src") or ""),
                     str(body.get("dst") or ""),
                     merge=bool(body.get("merge")),
                     rename_conflict=bool(body.get("rename_conflict", True))))
-            finally:
-                self.server.busy = False
-                _core._CLEAN_LOCK.release()
         if route == "/__oc__/junction-restore":
-            if getattr(self.server, "busy", False) or not _core._CLEAN_LOCK.acquire(blocking=False):
-                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
-            self.server.busy = True
-            try:
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
                 return self._json(_core.junction_restore(str(body.get("src") or "")))
-            finally:
-                self.server.busy = False
-                _core._CLEAN_LOCK.release()
         if route == "/__oc__/junction/list":
             return self._json({"records": _core._load_json(_core.MOVED_JUNCTIONS_PATH, [], use_cache=False)})
         if route == "/__oc__/recycle-restore":
@@ -1351,7 +1345,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "paths 不能为空"}, 400)
             if len(paths_in) > 50:
                 return self._json({"error": "单次最多 50 个路径"}, 400)
-            return self._json(_core.recycle_restore([str(x) for x in paths_in]))
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
+                return self._json(_core.recycle_restore([str(x) for x in paths_in]))
         if route == "/__oc__/snapshot/diff":
             try:
                 days_n = max(1, min(365, int(body.get("days") or 7)))
@@ -1384,28 +1381,38 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "paths 不能为空"}, 400)
             if len(paths_in) > 30:
                 return self._json({"error": "单次最多 30 个路径"}, 400)
-            if getattr(self.server, "busy", False):
-                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
-            self.server.busy = True
-            try:
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
                 return self._json(_core.appclean_clean([str(x) for x in paths_in]))
-            finally:
-                self.server.busy = False
         if route == "/__oc__/downloads-archive":
             p0 = body.get("paths")
             only0 = [str(x) for x in p0] if isinstance(p0, list) else None
-            return self._json(_core.downloads_archive(only=only0))
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
+                return self._json(_core.downloads_archive(only=only0))
         if route == "/__oc__/downloads-archive/undo":
-            return self._json(_core.downloads_archive_undo())
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
+                return self._json(_core.downloads_archive_undo())
         if route == "/__oc__/sync/save":
-            with _core._lock:  # P2-3：读-改-写串行化（防并发丢失更新）
-                cfg = _core._sync_cfg()
-                tok = str(body.get("token") or "").strip()
-                if tok:
-                    cfg["token"] = tok          # 令牌是用户显式「保存」才落盘
-                if "gist_id" in body:
-                    cfg["gist_id"] = str(body.get("gist_id") or "").strip()
-                _core._sync_save_cfg(cfg)
+            if "gist_id" in body:
+                gid_s = str(body.get("gist_id") or "").strip()
+                if gid_s and not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", gid_s):
+                    return self._json({"error": "gist_id 格式非法"}, 400)
+            try:
+                with _core._lock:  # P2-3：读-改-写串行化（防并发丢失更新）
+                    cfg = _core._sync_cfg()
+                    tok = str(body.get("token") or "").strip()
+                    if tok:
+                        cfg["token"] = tok          # 令牌是用户显式「保存」才落盘
+                    if "gist_id" in body:
+                        cfg["gist_id"] = str(body.get("gist_id") or "").strip()
+                    _core._sync_save_cfg(cfg)
+            except RuntimeError as exc:
+                return self._json({"error": str(exc)}, 500)
             return self._json({"ok": True,
                                "token_set": bool(str(cfg.get("token") or "").strip()),
                                "gist_id": str(cfg.get("gist_id") or "")})
@@ -1413,7 +1420,9 @@ class Handler(BaseHTTPRequestHandler):
                      "/__oc__/sync/merge"):
             token = _core._sync_token(body)
             gid = str(body.get("gist_id") or "").strip() \
-                or str(_core._sync_cfg().get("gist_id") or "")
+                or str(_core._sync_cfg().get("gist_id") or "").strip()
+            if gid and not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", gid):
+                return self._json({"error": "gist_id 格式非法"}, 400)
             try:
                 if route.endswith("push"):
                     return self._json({"ok": True,
@@ -1493,10 +1502,9 @@ class Handler(BaseHTTPRequestHandler):
             if not selected:
                 return self._json({"error": "规则里的清理项在当前盘上都不再适用，"
                                             "请重新勾选后覆盖保存"}, 400)
-            if getattr(self.server, "busy", False):
-                return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
-            self.server.busy = True
-            try:
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
                 entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                          "drive": drive,
                          "trigger": f"规则「{rule['name']}」（{drive}:）",
@@ -1518,8 +1526,6 @@ class Handler(BaseHTTPRequestHandler):
                     {"entry": entry, "disk": _core.get_disk_info(drive),
                      "stats": _core.history_stats(), "rule": rule["name"]},
                     self._query().get("lang")))
-            finally:
-                self.server.busy = False
 
         # ---- 在资源管理器中打开 / 定位 ----
         if route == "/__oc__/reveal":
@@ -1606,21 +1612,24 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/ai/config":
             patch = {k: v for k, v in (body or {}).items() if k in _core._AI_DEFAULTS}
             new_key = str(patch.get("api_key") or "").strip()
-            with _core._lock:
-                if not body.get("clear_api_key") and not new_key and patch.get("base_url"):
-                    cur_ai = _core.load_ai_config()
-                    if cur_ai.get("api_key"):
-                        old_u = urlparse(str(cur_ai.get("base_url") or ""))
-                        new_u = urlparse(str(patch.get("base_url") or ""))
-                        if (old_u.scheme.lower(), (old_u.hostname or "").lower(), old_u.port) != (
-                                new_u.scheme.lower(), (new_u.hostname or "").lower(), new_u.port):
-                            return self._json(
-                                {"error": "修改接口地址时请重新填写或勾选清空 API Key"}, 400)
-                if body.get("clear_api_key"):
-                    patch["api_key"] = ""
-                elif not new_key:
-                    patch.pop("api_key", None)
-                _core.save_ai_config(patch)
+            try:
+                with _core._lock:
+                    if not body.get("clear_api_key") and not new_key and patch.get("base_url"):
+                        cur_ai = _core.load_ai_config()
+                        if cur_ai.get("api_key"):
+                            old_u = urlparse(str(cur_ai.get("base_url") or ""))
+                            new_u = urlparse(str(patch.get("base_url") or ""))
+                            if (old_u.scheme.lower(), (old_u.hostname or "").lower(), old_u.port) != (
+                                    new_u.scheme.lower(), (new_u.hostname or "").lower(), new_u.port):
+                                return self._json(
+                                    {"error": "修改接口地址时请重新填写或勾选清空 API Key"}, 400)
+                    if body.get("clear_api_key"):
+                        patch["api_key"] = ""
+                    elif not new_key:
+                        patch.pop("api_key", None)
+                    _core.save_ai_config(patch)
+            except RuntimeError as exc:
+                return self._json({"error": str(exc)}, 500)
             return self._json({"ok": True, "ai": _core.ai_public_config()})
         if route == "/__oc__/ai/test":
             return self._json(_core.ai_test())
@@ -1631,12 +1640,18 @@ class Handler(BaseHTTPRequestHandler):
             pids = (body or {}).get("pids")
             if not isinstance(pids, list) or not pids:
                 return self._json({"error": "pids 不能为空"}, 400)
-            return self._json(_core.stop_lock_processes(pids))
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
+                return self._json(_core.stop_lock_processes(pids))
         if route == "/__oc__/delete-on-reboot":
             paths = (body or {}).get("paths")
             if not isinstance(paths, list) or not paths:
                 return self._json({"error": "paths 不能为空"}, 400)
-            return self._json(_core.schedule_delete_on_reboot(paths))
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
+                return self._json(_core.schedule_delete_on_reboot(paths))
         if route == "/__oc__/autostart":
             return self._json(_core.autostart_set(bool((body or {}).get("enabled"))))
         if route == "/__oc__/backup/import":
@@ -1644,19 +1659,25 @@ class Handler(BaseHTTPRequestHandler):
             b64 = str((body or {}).get("data_b64") or "").strip()
             if not b64:
                 return self._json({"error": "缺少备份文件内容"}, 400)
-            try:
-                raw = base64.b64decode(b64, validate=True)
-                return self._json(_core.import_full_backup(raw))
-            except Exception as exc:
-                return self._json({"error": str(exc)}, 400)
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
+                try:
+                    raw = base64.b64decode(b64, validate=True)
+                    return self._json(_core.import_full_backup(raw))
+                except Exception as exc:
+                    return self._json({"error": str(exc)}, 400)
         if route == "/__oc__/data-dir/migrate":
-            try:
-                res = _core.migrate_data_dir(
-                    str((body or {}).get("target") or ""),
-                    reset=bool((body or {}).get("reset")))
-                return self._json(res)
-            except ValueError as exc:
-                return self._json({"error": str(exc)}, 400)
+            with _core.try_op_lock(self.server) as locked:
+                if not locked:
+                    return self._json({"error": "已有清理或维护任务在执行，请等待完成"}, 409)
+                try:
+                    res = _core.migrate_data_dir(
+                        str((body or {}).get("target") or ""),
+                        reset=bool((body or {}).get("reset")))
+                    return self._json(res)
+                except ValueError as exc:
+                    return self._json({"error": str(exc)}, 400)
         if route == "/__oc__/ai/models":
             return self._json(_core.ai_list_models())
         if route == "/__oc__/ai/explain":

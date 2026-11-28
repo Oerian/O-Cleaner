@@ -22,17 +22,15 @@ def load_history() -> list:
 
 def append_history(entry: dict) -> None:
     # 两层锁：_lock 防本进程多线程交错，_cross_process_lock 防双开实例
-    # 各自「读-改-写」互相覆盖（丢的是清理凭据，事后无法追溯删了什么）。
+    # 各自「读-改-写」互相覆盖；独立回执写入也在同锁内完成，避免同秒 TOCTOU。
     with _core._lock, _core._cross_process_lock("history"):
         hist = load_history()
         hist.insert(0, entry)
         _core._atomic_write(_core.HISTORY_PATH, hist[:200])
-    # 同步落一份独立回执：history.json 只保留最近 200 条且可能被清空，
-    # 回执文件是每次清理的永久凭据（路径/体积/文件数/结果），用户可单独拷走。
-    try:
-        _write_receipt(entry)
-    except Exception:
-        traceback.print_exc()  # 回执失败不影响清理本身，也不影响历史入账
+        try:
+            _write_receipt(entry)
+        except Exception:
+            traceback.print_exc()  # 回执失败不影响清理本身，也不影响历史入账
 
 
 def _write_receipt(entry: dict) -> None:
@@ -55,23 +53,31 @@ def _write_receipt(entry: dict) -> None:
     _core._atomic_write(path, receipt)
 
 
+def _safe_int(val, default: int = 0) -> int:
+    try:
+        return int(val or 0)
+    except (TypeError, ValueError):
+        return default
+
+
 def list_receipts(q: str = "", drive: str = "", limit: int = 50) -> dict:
     """列出 data/receipts/ 下已落盘的清理回执摘要（按文件名倒序，支持关键词与盘符过滤）。"""
     q0 = str(q or "").strip().lower()
     drv0 = str(drive or "").strip().rstrip(":").upper()
-    lim = max(1, min(200, int(limit or 50)))
+    lim = max(1, min(200, _safe_int(limit, 50) or 50))
     items: list[dict] = []
     if not _core.RECEIPT_DIR.is_dir():
         return {"ok": True, "receipts": [], "total": 0}
     files = sorted(_core.RECEIPT_DIR.glob("cleanup-*.json"), reverse=True)
     for fp in files:
-        data = _core._load_json(fp, None, use_cache=True)
+        data = _core._load_json(fp, None, use_cache=False)
         if not isinstance(data, dict):
             continue
         r_drv = str(data.get("drive") or "").upper()
         if drv0 and drv0 not in r_drv.split(","):
             continue
-        res = data.get("results") or []
+        raw_res = data.get("results")
+        res = raw_res if isinstance(raw_res, list) else []
         if q0:
             hay = " ".join([
                 fp.name,
@@ -83,15 +89,16 @@ def list_receipts(q: str = "", drive: str = "", limit: int = 50) -> dict:
             ]).lower()
             if q0 not in hay:
                 continue
+        freed_n = _safe_int(data.get("freed"))
         items.append({
             "name": fp.name,
             "time": str(data.get("time") or ""),
             "drive": r_drv,
             "trigger": str(data.get("trigger") or ""),
-            "freed": int(data.get("freed") or 0),
-            "freed_h": str(data.get("freed_h") or _core.human(int(data.get("freed") or 0))),
-            "failed": int(data.get("failed") or 0),
-            "targets": int(data.get("targets") or len(res)),
+            "freed": freed_n,
+            "freed_h": str(data.get("freed_h") or _core.human(freed_n)),
+            "failed": _safe_int(data.get("failed")),
+            "targets": _safe_int(data.get("targets") or len(res)),
         })
         if len(items) >= lim:
             break

@@ -46,6 +46,44 @@ WIZTREE_LICENSE_NOTE = (
 )
 
 
+def _wiztree_sig_check(p: str) -> tuple[bool, str]:
+    """校验 WizTree 可执行文件官方 Authenticode 签名，返回 (是否通过, 状态串)。"""
+    try:
+        st, subj = _core._authenticode_info(p)
+        ok = st == "Valid" and "antibody software" in (subj or "").lower()
+        return ok, str(st or "Unknown")
+    except Exception:
+        return False, "Unknown"
+
+
+def _in_program_files(p: str) -> bool:
+    """判断路径是否位于 Program Files 受保护安装根目录下。"""
+    try:
+        rp = os.path.realpath(p).lower()
+    except OSError:
+        return False
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        r = os.environ.get(var) or ""
+        if not r:
+            continue
+        try:
+            rr = os.path.realpath(r).lower().rstrip("\\")
+        except OSError:
+            continue
+        if rr and (rp == rr or rp.startswith(rr + "\\")):
+            return True
+    return False
+
+
+def _wiztree_cand_ok(p: str) -> bool:
+    """检查路径存在且在提权环境下满足信任根或官方签名要求。"""
+    if not p or not os.path.isfile(p):
+        return False
+    if _core.is_admin() and not _in_program_files(p):
+        return _wiztree_sig_check(p)[0]
+    return True
+
+
 def find_wiztree() -> str | None:
     """找 WizTree 可执行文件。返回完整路径或 None（没装就静默走原路径）。
 
@@ -63,7 +101,7 @@ def find_wiztree() -> str | None:
     # 1) 本目录便携版优先：可移动性的关键
     for n in WIZTREE_NAMES:
         p = str(_core.WIZTREE_PORTABLE_DIR / n)
-        if os.path.isfile(p):
+        if _wiztree_cand_ok(p):
             return p
     # 2) 常见安装位置 + 各盘符根下的 \WizTree。逐盘探测而不是把某台
     #    机器的安装盘位写死进源码 —— 有人习惯把它装在数据盘根目录。
@@ -71,7 +109,7 @@ def find_wiztree() -> str | None:
     for d in (*WIZTREE_HINTS, *drives):
         for n in WIZTREE_NAMES:
             p = os.path.join(d, n)
-            if os.path.isfile(p):
+            if _wiztree_cand_ok(p):
                 return p
     # 注册表：读取卸载项里的 InstallLocation（WizTree 会写这个键）
     try:
@@ -97,7 +135,7 @@ def find_wiztree() -> str | None:
                                 loc = str(winreg.QueryValueEx(k, "InstallLocation")[0])
                                 for n in WIZTREE_NAMES:
                                     p = os.path.join(loc, n)
-                                    if os.path.isfile(p):
+                                    if _wiztree_cand_ok(p):
                                         return p
                         except OSError:
                             continue
@@ -109,7 +147,7 @@ def find_wiztree() -> str | None:
     import shutil as _sh
     for n in WIZTREE_NAMES:
         p = _sh.which(n)
-        if p:
+        if p and _wiztree_cand_ok(p):
             return p
     return None
 
@@ -181,13 +219,15 @@ def acquire_wiztree(timeout: int = 300) -> dict:
     result = {"ok": False, "error": "", "path": "", "version": "",
               "portable_dir": str(_core.WIZTREE_PORTABLE_DIR), "log": []}
 
-    # 已经有了就直接返回，不重复下载
+    # 已经有了且官方签名有效才直接返回，否则重新下载便携版
     if wiztree_available().get("found"):
         st = wiztree_status()
-        result.update(ok=True, path=st["path"], version=st["version"],
-                      already=True)
-        result["log"].append("已经可用，无需下载")
-        return result
+        cur_p = str(st.get("path") or "")
+        if cur_p and _wiztree_sig_check(cur_p)[0]:
+            result.update(ok=True, path=cur_p, version=st["version"],
+                          already=True)
+            result["log"].append("已经可用，无需下载")
+            return result
 
     try:
         _core.WIZTREE_PORTABLE_DIR.mkdir(parents=True, exist_ok=True)
@@ -306,8 +346,8 @@ def _wiztree_export(drive: str, timeout: int = 300) -> tuple[str | None, str]:
     exe = (wiztree_available().get("path") or "")
     if not exe:
         return None, "未安装 WizTree"
-    sig, subj = _core._authenticode_info(exe)
-    if sig != "Valid" or "antibody software" not in subj.lower():
+    sig_ok, sig = _wiztree_sig_check(exe)
+    if not sig_ok:
         return None, f"WizTree 可执行文件签名校验未通过（{sig}），已拒绝执行"
     letter = (drive or "C").rstrip(":").upper() + ":"
     csv_path = os.path.join(
@@ -649,7 +689,7 @@ def _load_mft_fast():
                 lib = ctypes.CDLL(dll_path)
                 lib.mft_fast_version.argtypes = []
                 lib.mft_fast_version.restype = ctypes.c_int
-                if lib.mft_fast_version() != 4:
+                if lib.mft_fast_version() != 5:
                     continue
                 lib.mft_scan_chunk.argtypes = [
                     ctypes.c_void_p,                    # buf
@@ -872,9 +912,9 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                 return False
             base_idx = records
             records += n_recs
-            arr_parent.frombytes(memoryview(c_parent)[:n_recs])
-            arr_size.frombytes(memoryview(c_size)[:n_recs])
-            arr_flags.extend(memoryview(c_flags)[:n_recs])
+            arr_parent.frombytes(memoryview(c_parent).cast("B")[:n_recs * 8])
+            arr_size.frombytes(memoryview(c_size).cast("B")[:n_recs * 8])
+            arr_flags.frombytes(memoryview(c_flags).cast("B")[:n_recs])
             for k in range(kept):
                 li = c_nidx[k]
                 idx = base_idx + li
@@ -922,6 +962,16 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                         mv = memoryview((ctypes.c_uint8 * uv).from_address(pv))
                         if not _consume_c(ctypes.c_void_p(pv), uv, mv):
                             used_c_reader = False
+                            records = 0
+                            del arr_parent[:]
+                            del arr_size[:]
+                            del arr_flags[:]
+                            dir_names.clear()
+                            file_keep.clear()
+                            file_mtime.clear()
+                            exts.clear()
+                            if c_ext_tbl is not None:
+                                ctypes.memset(c_ext_tbl, 0, ctypes.sizeof(c_ext_tbl))
                             break
                 finally:
                     fast_dll.mft_reader_close(rd_ctx)
@@ -1149,6 +1199,9 @@ def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str,
     「体积 ≥ floor、一层目录、以及 need_frns（达标文件的父目录）的祖先
     链」拼路径；floor=0 时全部可达目录都拼（等价旧行为，测试用）。
     """
+    root_low = os.path.normpath(root).lower()
+    if len(root_low) == 2 and root_low[1] == ":":
+        root_low += "\\"
     n_recs = len(arr_size)
     fast_dll = _load_mft_fast()
     if (fast_dll is not None and n_recs > 5
@@ -1170,9 +1223,12 @@ def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str,
                 if 0 <= frn < n_recs and c_in_tree[frn]:
                     want.add(frn)
             dir_total: dict[int, int] = {5: int(c_dir_total[5])}
+            for frn in dir_names:
+                if 0 < frn < n_recs and c_in_tree[frn]:
+                    dir_total[frn] = int(c_dir_total[frn])
             for frn in want:
                 dir_total[frn] = int(c_dir_total[frn])
-            dir_path: dict[int, str] = {5: root.lower()}
+            dir_path: dict[int, str] = {5: root_low}
             for frn in want:
                 chain = []
                 cur = frn
@@ -1245,7 +1301,7 @@ def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str,
             want.add(frn)
 
     # 按 parent 链向上补齐祖先（memo 化：链上每个名字只解码一次）
-    dir_path: dict[int, str] = {5: root.lower()}
+    dir_path: dict[int, str] = {5: root_low}
     for frn in want:
         chain = []
         cur = frn

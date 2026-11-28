@@ -312,7 +312,7 @@ def schedule_delete_on_reboot(paths: list[str]) -> dict:
             skipped.append({"path": p, "reason": reason})
             continue
         try:
-            real = os.path.realpath(p, strict=True)
+            real = _core._realpath_strict(p)
         except OSError:
             skipped.append({"path": p, "reason": "无法解析真实路径"})
             continue

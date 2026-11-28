@@ -13,6 +13,7 @@ core 在自身初始化早期 import 本模块，本模块在**调用期**才访
 """
 
 from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
+import copy
 import io
 import json
 import os
@@ -95,55 +96,57 @@ def _cross_process_lock(name: str, timeout: float = 3.0):
                 pass
 
 
+_CACHE_MAX = 128
+
+
 def _load_json(path: Path, default, use_cache: bool = True):
-    """读 JSON。utf-8-sig 容错记事本保存的 BOM；带 mtime 缓存。"""
+    """读 JSON。utf-8-sig 容错记事本保存的 BOM；带线程安全的深拷贝 mtime 缓存。"""
     key = str(path)
     try:
         mtime = path.stat().st_mtime
     except OSError:
-        return default
-    if use_cache and _cache.get(key, (None, None))[1] == mtime:
-        return _cache[key][0]
+        return copy.deepcopy(default)
+    if use_cache:
+        with _lock:
+            hit = _cache.get(key)
+            if hit is not None and hit[1] == mtime:
+                return copy.deepcopy(hit[0])
     try:
         with open(path, "r", encoding="utf-8-sig") as fh:
             data = json.load(fh)
     except Exception:
-        return default
+        return copy.deepcopy(default)
     if use_cache:
-        _cache[key] = (data, mtime)
+        with _lock:
+            if len(_cache) >= _CACHE_MAX and key not in _cache:
+                _cache.pop(next(iter(_cache)), None)
+            _cache[key] = (copy.deepcopy(data), mtime)
     return data
 
 
 def _atomic_write(path: Path, data) -> None:
-    """原子写 JSON：先写临时文件再 os.replace，避免读到半个文件。
-
-    临时文件名必须唯一（带 pid + 线程 id + 随机串），不能用固定的 `.tmp` 后缀：
-    并发写同一个目标文件时，两个线程会同时打开**同一个** tmp 并互相覆盖，
-    随后 os.replace 争抢同一个源路径，Windows 上直接抛
-    PermissionError: [WinError 5] 拒绝访问。实测并发 POST /__oc__/schedule
-    20 路时有 3 路 500（调用点虽然持了 _lock，但 _atomic_write 还被
-    append_history 等其他路径调用，锁不住所有组合）。
-
-    os.replace 在 Windows 上偶发共享冲突（杀软/索引器短暂持有目标文件），
-    这里做几次短重试 —— 写配置失败是绝对不可接受的。
-    """
+    """原子写 JSON：先写临时文件、落盘 flush/fsync 再 os.replace 并清缓存。"""
     tmp = path.with_name(
         f"{path.name}.{os.getpid()}.{threading.get_ident()}."
         f"{uuid.uuid4().hex[:8]}.tmp")
     try:
-        # 父目录不存在就先建：用户用 --data-dir 指向一个全新空目录
-        # （数据迁移场景）时，第一次保存配置不该因为「config/ 还没建」
-        # 而抛 FileNotFoundError。以前这里直接 open 会失败。
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=2)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
         last: Exception | None = None
         for attempt in range(4):
             try:
                 os.replace(tmp, path)
+                with _lock:
+                    _cache.pop(str(path), None)
                 return
             except PermissionError as exc:   # WinError 5 / 32：被短暂占用
                 last = exc
@@ -482,8 +485,12 @@ def import_full_backup(raw_bytes: bytes) -> dict:
                     raise ValueError("备份解压总体积超过上限，已中止")
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
-                tmp.write_bytes(chunk)
-                os.replace(tmp, dst)
+                try:
+                    tmp.write_bytes(chunk)
+                    os.replace(tmp, dst)
+                except Exception:
+                    tmp.unlink(missing_ok=True)
+                    raise
                 copied += 1
             _cache.clear()
     return {"ok": True, "files": copied}
@@ -540,7 +547,11 @@ def migrate_data_dir(target_dir: str, reset: bool = False) -> dict:
                 except OSError as exc:
                     raise ValueError(f"迁移文件失败（{rel}）：{exc}") from exc
     tmp_ptr = ptr.with_name(f".ocleaner-data-dir.{os.getpid()}.tmp")
-    tmp_ptr.write_text(str(dst), encoding="utf-8")
-    os.replace(tmp_ptr, ptr)
+    try:
+        tmp_ptr.write_text(str(dst), encoding="utf-8")
+        os.replace(tmp_ptr, ptr)
+    except Exception:
+        tmp_ptr.unlink(missing_ok=True)
+        raise
     return {"ok": True, "data_dir": str(dst),
             "copied": copied, "need_restart": True}

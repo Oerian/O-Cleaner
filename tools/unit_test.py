@@ -465,7 +465,7 @@ def main() -> int:
     c_src = Path(app.BASE_DIR) / "ocleaner" / "mft_fast.c"
     dll_obj = _eng._load_mft_fast()
     check("MFT 原生加速：mft_fast.c 就位且缺失 DLL 时安全回退 Python",
-          c_src.is_file() and (dll_obj is None or dll_obj.mft_fast_version() == 4),
+          c_src.is_file() and (dll_obj is None or dll_obj.mft_fast_version() == 5),
           f"c_src={c_src.is_file()} dll={dll_obj}")
 
     # ---------- 社区规则一键上传（无令牌 Issue 模式） ----------
@@ -592,7 +592,6 @@ def main() -> int:
           not app.check_deletable(r"C:\Windows\SystemApps", "tree", False)[0])
     check("护栏加固：localhost 尾点 SSRF 拒绝",
           bool(app._is_unsafe_remote("http://localhost.:8770/__oc__/state")))
-    _zbuf = _io_zip = None
     import io as _zio, zipfile as _zzf
     _zb = _zio.BytesIO()
     with _zzf.ZipFile(_zb, "w") as _zz:
@@ -608,6 +607,213 @@ def main() -> int:
                   _ib.get("files") == 0, f"{_ib}")
     finally:
         app.DATA_DIR = _orig_dd
+
+    # ---------- v2.18 P0/P1 深度审计回归测试（10 项） ----------
+    # 1) bloatware/uninstall & sweep 读 "found" 键 + 异常时 _CLEAN_LOCK 必释放
+    from http.server import ThreadingHTTPServer as _THS2
+    import threading as _th2
+    import urllib.request as _ur2, urllib.error as _ue2
+    orig_bw_scan = app.bloatware_scan
+    orig_sched_p = app.SCHEDULE_PATH
+    try:
+        with tempfile.TemporaryDirectory() as _td3:
+            app.SCHEDULE_PATH = Path(_td3) / "schedule.json"
+            app._atomic_write(app.SCHEDULE_PATH, {
+                "enabled": False, "interval_hours": 24,
+                "preset": "safe", "drive": "C",
+                "last_summary": {"freed": 999},
+            })
+            _srv2 = _THS2(("127.0.0.1", 0), app.Handler)
+            _srv2.busy = False
+            _t2 = _th2.Thread(target=_srv2.serve_forever, daemon=True)
+            _t2.start()
+            _p2 = _srv2.server_port
+
+            def _req2(method, path, body=b"{}", hdrs=None):
+                h0 = {"Host": f"127.0.0.1:{_p2}", "Content-Type": "application/json"}
+                if hdrs:
+                    h0.update(hdrs)
+                rq = _ur2.Request(f"http://127.0.0.1:{_p2}{path}",
+                                  data=body if method == "POST" else None,
+                                  headers=h0, method=method)
+                try:
+                    with _ur2.urlopen(rq, timeout=3) as rp:
+                        return rp.status, rp.read().decode("utf-8", "replace")
+                except _ue2.HTTPError as e:
+                    return e.code, e.read().decode("utf-8", "replace")
+
+            try:
+                fake_reg = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\__OC_FAKE_BLOAT__"
+                app.bloatware_scan = lambda: {"ok": True, "found": [{"reg_key": fake_reg, "residue_dirs": []}]}
+                st_u, body_u = _req2("POST", "/__oc__/bloatware/uninstall",
+                                     json.dumps({"reg_key": fake_reg}).encode("utf-8"))
+                check("毒瘤清除：bloatware/uninstall 识别 found 列表不误报 403",
+                      st_u == 404 and "注册表" in body_u, f"status={st_u} {body_u}")
+
+                def _boom_scan():
+                    raise RuntimeError("injected scan failure")
+                app.bloatware_scan = _boom_scan
+                st_sw, _ = _req2("POST", "/__oc__/bloatware/sweep",
+                                 json.dumps({"reg_key": fake_reg, "dirs": []}).encode("utf-8"))
+                acq_ok = app._CLEAN_LOCK.acquire(blocking=False)
+                if acq_ok:
+                    app._CLEAN_LOCK.release()
+                check("并发互斥锁：bloatware/sweep 异常后 _CLEAN_LOCK 必释放",
+                      acq_ok and st_sw >= 400, f"status={st_sw} acq={acq_ok}")
+
+                # 2) POST /__oc__/schedule 拒绝 Infinity/bool 并清理 last_summary
+                st_inf, _ = _req2("POST", "/__oc__/schedule",
+                                  json.dumps({"interval_hours": "Infinity"}).encode("utf-8"))
+                st_bool, _ = _req2("POST", "/__oc__/schedule",
+                                   json.dumps({"interval_hours": True}).encode("utf-8"))
+                st_ok, body_ok = _req2("POST", "/__oc__/schedule",
+                                       json.dumps({"enabled": False, "interval_hours": 12}).encode("utf-8"))
+                saved_sch = json.loads(app.SCHEDULE_PATH.read_text(encoding="utf-8"))
+                check("定时调度：拒绝 Infinity/bool 且落盘移除 last_summary",
+                      st_inf == 400 and st_bool == 400 and st_ok == 200
+                      and "last_summary" not in saved_sch and saved_sch.get("interval_hours") == 12.0,
+                      f"{st_inf}/{st_bool}/{st_ok} {saved_sch}")
+            finally:
+                _srv2.shutdown()
+                _srv2.server_close()
+    finally:
+        app.bloatware_scan = orig_bw_scan
+        app.SCHEDULE_PATH = orig_sched_p
+
+    # 3) MFT C 零拷贝转换 + ABI v5 + _mft_agg_paths dir_total 一致性
+    from array import array as _arr
+    import ctypes as _ct
+    _c_p = (_ct.c_int64 * 4)(0, 5, 5, 6)
+    _c_f = (_ct.c_uint8 * 4)(1, 1, 0, 0)
+    _ap0, _af0 = _arr("q"), _arr("B")
+    _ap0.frombytes(memoryview(_c_p).cast("B")[:32])
+    _af0.frombytes(memoryview(_c_f).cast("B")[:4])
+    _ap_t = _arr("q", [0, 0, 0, 0, 0, 5, 5, 6, 7])
+    _az_t = _arr("q", [0, 0, 0, 0, 0, 0, 0, 0, 2000])
+    _af_t = _arr("B", [0, 0, 0, 0, 0, 1, 1, 1, 0])
+    _dn_t = {6: "a".encode("utf-16-le"), 7: "b".encode("utf-16-le")}
+    _dt0, _dp0 = _eng._mft_agg_paths(_ap_t, _az_t, _af_t, _dn_t, "C:", floor=0)
+    _dt1, _dp1 = _eng._mft_agg_paths(_ap_t, _az_t, _af_t, _dn_t, "C:\\", floor=5000)
+    check("MFT 加速回归：array(.cast('B')) 转化与 _mft_agg_paths dir_total 一致",
+          list(_ap0) == [0, 5, 5, 6] and list(_af0) == [1, 1, 0, 0]
+          and _dt0 == _dt1 and _dt0.get(7) == 2000 and _dp0.get(5) == "c:\\" and _dp1.get(5) == "c:\\",
+          f"dt0={_dt0} dt1={_dt1} dp0={_dp0}")
+
+    # 4) Win32 原生验签不受 PSModulePath 污染影响
+    _orig_psmp = os.environ.get("PSModulePath")
+    os.environ["PSModulePath"] = r"C:\__nonexistent_pwsh7_modules__"
+    try:
+        _sig_exe = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "explorer.exe"
+        _st_sig, _subj_sig = app._authenticode_info(str(_sig_exe))
+        check("原生验签：WinVerifyTrust 在污染 PSModulePath 下仍验签 Valid",
+              _st_sig == "Valid" and "microsoft" in _subj_sig.lower(),
+              f"{_st_sig} {_subj_sig}")
+    finally:
+        if _orig_psmp is None:
+            os.environ.pop("PSModulePath", None)
+        else:
+            os.environ["PSModulePath"] = _orig_psmp
+
+    # 5) guard.py Junction 指向个人数据域保留 why_r + _realpath_strict
+    with tempfile.TemporaryDirectory() as _td4:
+        _tp = Path(_td4)
+        check("护栏兼容：_realpath_strict 正常工作",
+              os.path.normcase(app._realpath_strict(str(_tp))) == os.path.normcase(os.path.realpath(str(_tp))))
+        _docs_real = Path(os.path.expandvars(r"%USERPROFILE%\Documents"))
+        if _docs_real.is_dir():
+            import subprocess as _sp4
+            _jdir = _tp / "doc_junc"
+            _r_mk = _sp4.run(
+                ["cmd", "/c", "mklink", "/J", str(_jdir), str(_docs_real)],
+                capture_output=True, text=True, timeout=5)
+            if _r_mk.returncode == 0 and _jdir.exists():
+                try:
+                    _ok_j, _why_j = app.check_deletable(str(_jdir), "tree", allow_user_data=True)
+                    check("护栏 Junction：指向个人数据目录时保留强制回收站说明 real_note",
+                          _ok_j and "个人数据" in (_why_j or ""),
+                          f"ok={_ok_j} why={_why_j!r}")
+                finally:
+                    _sp4.run(["cmd", "/c", "rmdir", str(_jdir)], capture_output=True)
+
+    # 6) server.py 跨端口 CSRF 与 Sec-Fetch-Site 严格拦截
+    _fake2 = type("F2", (), {"headers": {}})()
+    _fake2.headers = {"Host": "127.0.0.1:8770", "Origin": "http://127.0.0.1"}
+    _rej_default_port = not app.Handler._origin_ok(_fake2)
+    _fake2.headers = {"Host": "127.0.0.1:8770", "Origin": "http://127.0.0.1:8770",
+                      "Sec-Fetch-Site": "cross-site"}
+    _rej_sfs = not app.Handler._origin_ok(_fake2)
+    _fake2.headers = {"Host": "127.0.0.1:8770", "Origin": "http://127.0.0.1:8770",
+                      "Sec-Fetch-Site": "same-origin"}
+    _ok_sfs = app.Handler._host_ok(_fake2) and app.Handler._origin_ok(_fake2)
+    check("入口守卫：拦截默认80端口跨站Origin及cross-site并放行same-origin",
+          _rej_default_port and _rej_sfs and _ok_sfs,
+          f"{_rej_default_port}/{_rej_sfs}/{_ok_sfs}")
+
+    # 7) store.py 深拷贝缓存与 _atomic_write 清除同 tick 缓存
+    with tempfile.TemporaryDirectory() as _td5:
+        _jp = Path(_td5) / "cache_test.json"
+        app._atomic_write(_jp, {"k": [1, 2]})
+        _loaded1 = app._load_json(_jp, {}, use_cache=True)
+        _loaded1["k"].append(999)
+        _loaded2 = app._load_json(_jp, {}, use_cache=True)
+        app._atomic_write(_jp, {"k": [3]})
+        _in_cache_after = str(_jp) in app._cache
+        _loaded3 = app._load_json(_jp, {}, use_cache=True)
+        check("存储缓存：深拷贝隔离修改且 _atomic_write 立即清理缓存",
+              _loaded2 == {"k": [1, 2]} and not _in_cache_after and _loaded3 == {"k": [3]},
+              f"l2={_loaded2} in_cache={_in_cache_after} l3={_loaded3}")
+
+    # 8) integrations.py 脱敏与非法 gist_id 拒绝
+    orig_exp2, orig_sc2 = app._export_bundle, _integ._sync_cfg
+    try:
+        _integ._sync_cfg = lambda: {}
+        _user_home = os.path.normpath(os.path.expanduser("~"))
+        app._export_bundle = lambda: {
+            "kind": "ocleaner-custom",
+            "overrides": {f"{_user_home}\\MyAppCache": {"label": f"{_user_home} 缓存", "cleanable": True, "label_kind": "clean"}},
+            "fs_groups": [{"id": "g1", "name": "私有组", "paths": [f"{_user_home}\\Secret"]}],
+            "units": [],
+        }
+        _up2 = _integ.community_upload({"scope": "all", "title": "脱敏单测"})
+        _jt2 = _up2.get("json_text") or ""
+        _gid_bad = False
+        try:
+            _integ._sync_fetch("tok", "../bad-gist")
+        except ValueError:
+            _gid_bad = True
+        check("社区上传与同步安全：路径脱敏 %USERPROFILE% 跳过 fs_groups 且拒绝非法 gist_id",
+              "%USERPROFILE%" in _jt2 and "fs_groups" not in _jt2 and _gid_bad,
+              f"gid_bad={_gid_bad} jt={_jt2[:120]}")
+    finally:
+        app._export_bundle, _integ._sync_cfg = orig_exp2, orig_sc2
+
+    # 9) receipts.py 畸形回执容错
+    _orig_rcp_dir = app.RECEIPT_DIR
+    try:
+        with tempfile.TemporaryDirectory() as _td6:
+            app.RECEIPT_DIR = Path(_td6)
+            (app.RECEIPT_DIR / "cleanup-20261128000001.json").write_text(
+                json.dumps({"time": "2026-11-28", "freed": "not-an-int", "results": "bad"}),
+                encoding="utf-8")
+            (app.RECEIPT_DIR / "cleanup-20261128000002.json").write_text(
+                json.dumps({"time": "2026-11-28", "drive": "D", "freed": 1024, "results": []}),
+                encoding="utf-8")
+            _lr = app.list_receipts()
+            check("回执检索：单条畸形字段回执不拖垮列表接口",
+                  _lr.get("ok") and _lr.get("total") == 2, f"{_lr}")
+    finally:
+        app.RECEIPT_DIR = _orig_rcp_dir
+
+    # 10) load_convert --data-dir 缺失时回退内置 8 个单位
+    _orig_cp = app.CONVERT_PATH
+    try:
+        with tempfile.TemporaryDirectory() as _td7:
+            app.CONVERT_PATH = Path(_td7) / "missing-convert.json"
+            _cv = app.load_convert()
+            check("换算单位回退：--data-dir 缺失 convert.json 时加载内置全部单位",
+                  len(_cv.get("units") or []) >= 8, f"units={len(_cv.get('units') or [])}")
+    finally:
+        app.CONVERT_PATH = _orig_cp
 
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"

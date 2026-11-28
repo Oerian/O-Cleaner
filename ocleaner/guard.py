@@ -12,6 +12,7 @@ selftest / guard_matrix 的 50 项护栏矩阵断言直接落到本模块。
 BASE_DIR）经 `_core.` 惰性引用 —— monkeypatch 对这里可见。
 """
 from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
+import itertools
 import os
 import re
 
@@ -137,7 +138,8 @@ def _content_says_program_body(path: str) -> str:
     if os.path.basename(os.path.normpath(path)).lower() in ALLOWED_CONTAINER_NAMES:
         return ""
     try:
-        entries = [e for e in os.scandir(path)][: _CONTENT_SCAN_ENTRY_CAP]
+        with os.scandir(path) as it:
+            entries = list(itertools.islice(it, _CONTENT_SCAN_ENTRY_CAP))
     except OSError:
         return ""
     names = {e.name.lower() for e in entries}
@@ -160,10 +162,8 @@ def _content_says_program_body(path: str) -> str:
                 if sub_checked < _CONTENT_SCAN_SUBDIR_CAP:
                     sub_checked += 1
                     try:
-                        sub_names |= {
-                            s.name.lower()
-                            for s in os.scandir(e.path)
-                        } | {e.name.lower()}
+                        with os.scandir(e.path) as sub_it:
+                            sub_names |= {s.name.lower() for s in sub_it} | {e.name.lower()}
                     except OSError:
                         continue
             else:
@@ -212,7 +212,8 @@ def _looks_like_browser_profile(path: str) -> bool:
     weak = {"cache", "code cache", "gpucache", "shadercache", "blob_storage",
             "default", "profile", "profiles"}
     try:
-        names = {e.name.lower() for e in os.scandir(path)}
+        with os.scandir(path) as it:
+            names = {e.name.lower() for e in it}
     except OSError:
         return False
     if _core._browser_evidence(names, core, aux):
@@ -228,7 +229,8 @@ def _looks_like_browser_profile(path: str) -> bool:
             sp = os.path.join(path, sub)
             if not os.path.isdir(sp):
                 continue
-            sub_names = {e.name.lower() for e in os.scandir(sp)}
+            with os.scandir(sp) as sub_it:
+                sub_names = {e.name.lower() for e in sub_it}
             if _core._browser_evidence(sub_names, core, aux):
                 return True
         except OSError:
@@ -324,15 +326,26 @@ def check_deletable(path: str, kind: str = "tree",
         return False, "拒绝：不允许清理盘符根目录"
 
     # junction / 符号链接前置复检（必须在任何早期 return True 之前执行）：
-    # strict=True 防止目标不可解析或权限拒绝时静默返回原路径而 fail-open。
+    # strict 语义防止目标不可解析或权限拒绝时静默返回原路径而 fail-open。
+    real_note = ""
     try:
-        real = os.path.realpath(norm, strict=True)
+        real = _core._realpath_strict(norm)
+    except PermissionError:
+        if _core._is_reparse_dir(norm) or os.path.islink(norm):
+            return False, "拒绝：无法解析链接目标真实路径（权限受限）"
+        try:
+            os.lstat(norm)
+            parent_real = _core._realpath_strict(os.path.dirname(norm))
+            real = os.path.join(parent_real, os.path.basename(norm))
+        except OSError:
+            return False, "拒绝：无法解析目标真实路径（可能为悬空链接或权限受限）"
     except OSError:
         return False, "拒绝：无法解析目标真实路径（可能为悬空链接或权限受限）"
     if os.path.normpath(real).lower() != low:
         ok_r, why_r = check_deletable(real, kind, allow_user_data)
         if not ok_r:
             return False, why_r
+        real_note = why_r
 
     # 保留设备名（2026-10-21 护栏升级）：CON / NUL / COM1 这类名字在 Win32
     # 层是设备而不是文件。路径里出现它们时，os.remove / rmtree 打到的是设备
@@ -472,12 +485,9 @@ def check_deletable(path: str, kind: str = "tree",
     except Exception:
         pass
 
-    if os.path.normpath(real).lower() != low:
-        return True, optin_note
-
     # 不可读时不在这里判定拒绝，交由上层报「需要管理员权限」，
     # 这样 C:\\Windows\\Temp 能给出可读提示而不是硬性拒绝
-    return True, optin_note
+    return True, optin_note or real_note
 
 def _looks_like_installed_program(path: str) -> bool:
     """判断目录里装的是**程序本体**（而不是缓存）。
@@ -500,7 +510,8 @@ def _looks_like_installed_program(path: str) -> bool:
     if not os.path.isdir(path):
         return False
     try:
-        entries = list(os.scandir(path))
+        with os.scandir(path) as it:
+            entries = list(it)
     except OSError:
         return False
     ver_dirs = 0

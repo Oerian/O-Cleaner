@@ -101,15 +101,20 @@ jobs:
       - name: 资源包索引与摘要校验
         run: python -X utf8 tools/packs_ci_validate.py
 
-      # 必须检查**全部** script 块：旧版用 [regex]::Match 只取第一个匹配，
-      # 而 index.html 的第一个 script 块只有 400 多字节（一小段初始化），
-      # 真正 200 KB+ 的应用主体是第二个块 —— 主脚本写坏语法，这道闸门照样绿。
-      - name: 界面 JS 语法检查（web/app.js 与内嵌 script 块）
+      - name: 前端 i18n 与静态资源完整性审计（--strict-i18n）
+        run: python -X utf8 tools/audit_dead.py --strict-i18n
+
+      # 必须检查**全部**前端 .js（含 web/js/*.js）与内嵌 script 块
+      - name: 界面 JS 语法检查（web/**/*.js 与内嵌 script 块）
         shell: pwsh
         run: |
-          node --check web/app.js
-          if ($LASTEXITCODE -ne 0) { Write-Host "web/app.js 语法错误"; exit 1 }
-          Write-Host "web/app.js 语法通过"
+          $jsBad = 0
+          Get-ChildItem -Path web -Recurse -Filter *.js | Sort-Object FullName | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { Write-Host "JS 语法错误: $($_.FullName)"; $jsBad = 1 }
+            else { Write-Host "JS 语法通过: $($_.Name)" }
+          }
+          if ($jsBad -eq 1) { exit 1 }
           $html = Get-Content web/index.html -Raw -Encoding UTF8
           $ms = [regex]::Matches($html, '(?s)<script[^>]*>(.*?)</script>')
           if ($ms.Count -eq 0) { Write-Host "找不到 <script> 块"; exit 1 }
@@ -136,6 +141,7 @@ jobs:
   test:
     name: 自测
     runs-on: windows-latest
+    timeout-minutes: 20
     needs: lint
     if: github.event_name != 'push' || contains(github.event.head_commit.message, '[ci]') || contains(github.event.head_commit.message, '[CI]')
     steps:
@@ -166,6 +172,7 @@ jobs:
   ui:
     name: 界面渲染检查
     runs-on: windows-latest
+    timeout-minutes: 20
     needs: lint
     if: github.event_name != 'push' || contains(github.event.head_commit.message, '[ci]') || contains(github.event.head_commit.message, '[CI]')
     steps:

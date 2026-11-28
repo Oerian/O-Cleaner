@@ -47,6 +47,9 @@ $rules = @{
     '.example' = @{ Encoding = 'utf8'; Eol = 'crlf' }  # M-18: .gitattributes 已声明而契约检查漏覆盖
     '.yaml' = @{ Encoding = 'utf8';    Eol = 'crlf' }
     '.js'   = @{ Encoding = 'utf8';    Eol = 'crlf' }
+    '.css'  = @{ Encoding = 'utf8';    Eol = 'crlf' }
+    '.c'    = @{ Encoding = 'utf8';    Eol = 'crlf' }
+    '.rc'   = @{ Encoding = 'utf8';    Eol = 'crlf' }
 }
 
 $utf8Bom = New-Object System.Text.UTF8Encoding($true)

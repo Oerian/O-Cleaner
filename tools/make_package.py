@@ -46,14 +46,18 @@ INCLUDE = [
     "ocleaner/deleter.py",
     "ocleaner/engines.py",
     "ocleaner/guard.py",
+    "ocleaner/locks.py",
     "ocleaner/store.py",
     "ocleaner/games.py",
     "ocleaner/integrations.py",
     "ocleaner/measure.py",
     "ocleaner/mft_fast.c",
     "ocleaner/receipts.py",
+    "ocleaner/recycle.py",
+    "ocleaner/runtime.py",
     "ocleaner/scheduler.py",
     "ocleaner/server.py",
+    "ocleaner/tray.py",
     "tools/unit_test.py",
     "启动 O-Cleaner.bat",
     "README.md",
@@ -64,6 +68,8 @@ INCLUDE = [
     "CHANGELOG.md",
     "docs/CONTRIBUTING.md",
     "docs/SECURITY.md",
+    "docs/ARCHITECTURE.md",
+    "docs/ROADMAP.md",
     "docs/HANDOFF.md",
     "docs/screenshots/ui-overview.png",
     "config/drives.json",
@@ -83,6 +89,7 @@ INCLUDE = [
     "packs/explanations.json",
     "web/index.html",
     "web/styles.css",
+    "web/js/i18n.js",
     "web/app.js",
     "web/icon.ico",
     "tools/selftest.py",
@@ -164,6 +171,12 @@ def build_zip(out_path: Path, ver: str) -> None:
         if _rel not in INCLUDE:
             fail(f"清单缺漏：{_rel} 在源码树中但不在 INCLUDE "
                  f"（请登记后重新打包）")
+    if (ROOT / "web" / "js").is_dir():
+        for _p in sorted((ROOT / "web" / "js").glob("*.js")):
+            _rel = f"web/js/{_p.name}"
+            if _rel not in INCLUDE:
+                fail(f"清单缺漏：{_rel} 在源码树中但不在 INCLUDE "
+                     f"（请登记后重新打包）")
     _py_tools = sorted((ROOT / "tools").glob("unit_test.py"))
     for _p in _py_tools:
         _rel = f"tools/{_p.name}"

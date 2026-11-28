@@ -57,8 +57,10 @@ Self-tests and quality gates (fast unit/guard gates plus full end-to-end suite; 
 python -X utf8 tools\lint_rules.py --strict      # rules and resource pack gate
 python -X utf8 tools\_lint_selftest.py           # verifies the previous gate can actually catch defects
 python -X utf8 tools\guard_matrix.py             # 50-case deletion guardrail matrix + rule unit self-check
-python -X utf8 tools\unit_test.py                # 49 fast pure-logic unit tests (<2s, zero disk side effects)
-python -X utf8 tools\selftest.py                 # 590+ full end-to-end assertions (real deletions + HTTP)
+python -X utf8 tools\unit_test.py                # 85+ fast pure-logic unit tests (<2s, zero disk side effects)
+python -X utf8 tools\check_undefined.py          # cross-module _core.X + AST F821 undefined-name check
+python -X utf8 tools\audit_dead.py --strict-i18n # CSS/DOM/CSS-var and complete i18n dictionary gate
+python -X utf8 tools\selftest.py                 # full end-to-end self-tests (real deletions + HTTP)
 ```
 
 There is also a browser-based check, which requires the service to be running first (uses the system's existing Edge/Chrome, no extra install):
@@ -77,10 +79,10 @@ On startup it automatically scans the current drive (default: a data drive; the 
 
 The interface uses a **top header + two independently scrollable columns + sticky footer** layout:
 - **Top header**: drive selector cards on the right, view switcher (`Scan Overview` / `Game Usage Overview`), theme toggle (`Light / Dark / Auto`), and language toggle (`A / 中 / EN`).
-- **Left main column (`#leftcol`)**: toolbar (rescan, full-disk scan, engine selector, scan depth, largest files, duplicate large files, downloads organizer, compact mode, select all/none, cleanup scope, custom directory), **Disk Overview** (capacity bar, 150px usage ring, and the 3-tab **widget chart dock** to the right of the ring), and the active functional view (**Usage Ranking** or **Game Usage Overview**).
-- **Right sidebar (`aside`)**: collapsible panels for Environment Self-Check, One-Click Presets, Resource Packs, AI Assistant, Cumulative Freed & Conversions, Custom Rules (including GitHub Gist two-way cloud sync and custom bundle import/export), Scheduled Auto-Clean, Recent Cleanups, and Guide.
+- **Left main column (`#leftcol`)**: toolbar (rescan, full-disk scan, engine selector, scan depth, largest files, duplicate large files, downloads organizer, system slimming, compact mode, select all/none, cleanup scope, custom directory), **Disk Overview** (capacity bar, 150px usage ring, and the 3-tab **widget chart dock** to the right of the ring), and the active functional view (**Usage Ranking**, **Game Usage Overview**, or **Analysis Center**).
+- **Right sidebar (`aside`)**: 8 collapsible panels for Environment Self-Check, One-Click Presets, AI Assistant, Cumulative Freed & Conversions, Rules / Presets / Resource Packs (with custom rules, aggregation groups, community pack catalog, GitHub Gist cloud sync, and custom bundle import/export), Scheduled Auto-Clean, Recent Cleanups, and Guide / Data Migration.
 
-Two functional pages live as permanent buttons in the top bar: **Scan Overview** and **Game Usage Overview**.
+Three functional pages live as permanent buttons in the top bar: **Scan Overview**, **Game Usage Overview**, and **Analysis Center**.
 Click a button to switch; the current page is highlighted — no need to hunt for entries through layers of buttons.
 At the top of the right sidebar there is a sticky **panel directory bar** listing all panel titles; clicking any entry automatically expands and scrolls to that panel.
 The Usage Ranking supports keyboard navigation (`↑` / `↓` to move focus, `Space` to toggle selection, `Enter` to drill down), and pressing `Esc` goes back one level (closes modal → pops drill-down level → returns to Scan Overview).
@@ -650,20 +652,34 @@ O-Cleaner\
 ├─ 启动 O-Cleaner.bat      double-click to start (verifies Python 3.8+ runtime)
 ├─ app.py                  entry point and backward-compatible symbol export shim
 ├─ ps_scripts.py           PowerShell script template constants
-├─ ocleaner\               core standard-library package
-│   ├─ __init__.py         package exports
-│   ├─ core.py             scan engines, identification rules, and HTTP routes
-│   ├─ store.py            atomic JSON writes (_atomic_write), mtime-cached reads, and locks
-│   ├─ deleter.py          3-state deletion (rm_tree_strict), lock precheck, reparse guard, recovery
+├─ ocleaner\               core standard-library package (17 modules; see ARCHITECTURE.md)
+│   ├─ __init__.py         package exports and 17-module manifest
+│   ├─ runtime.py          acyclic runtime base (paths / APP_VERSION / _CLEAN_LOCK / try_op_lock)
+│   ├─ core.py             scan orchestration, identification, sys_slim, and re-export facade
+│   ├─ server.py           HTTP router (/__oc__/* endpoints / entry guards / op lock / /js/*.js)
+│   ├─ analysis.py         Analysis Center (big files / dupes / bloatware / junction / appclean / dl / snapshot)
+│   ├─ engines.py          3-engine auto selection, MFT reader bridge, WinVerifyTrust verification
+│   ├─ mft_fast.c          double-buffered MFT reader & dir aggregation C accelerator (ABI v5)
+│   ├─ guard.py            9-layer deletion guardrails, reparse recheck, app/profile protection
+│   ├─ deleter.py          lock precheck, 3-state atomic deletion (rm_tree_strict), reboot delete
+│   ├─ recycle.py          Recycle Bin capacity probe, $I/$R parser, restore, targeted purge
+│   ├─ locks.py            CreateFileW lock probe, candidate detection, fail-closed process stop
+│   ├─ tray.py             port probing, Edge --app window layout, pure ctypes system tray
+│   ├─ store.py            atomic JSON writes (flush+fsync), deepcopy mtime cache, locks, backup/migrate
+│   ├─ receipts.py         cleanup history and searchable audit receipts in data/receipts/
+│   ├─ scheduler.py        background scheduled cleanup runner
 │   ├─ measure.py          in-process os.scandir measurement primitives (no PowerShell cold-start)
-│   ├─ credentials.py      Windows DPAPI credential encryption (prevents secret leaks on folder copy)
+│   ├─ credentials.py      Windows DPAPI credential encryption (fail-closed)
 │   ├─ games.py            Steam / Epic / GOG game discovery, orphan detection, and size trends
-│   └─ integrations.py     bring-your-own AI assistant, GitHub Gist sync, and release update check
+│   └─ integrations.py     bring-your-own AI assistant, GitHub Gist sync, self-update, redacted community upload
 ├─ README.md               project introduction
 ├─ docs\
 │   ├─ USAGE.md            full usage guide (Chinese)
 │   ├─ USAGE-en.md         this file (full usage guide in English)
-│   ├─ ROADMAP.md          project roadmap
+│   ├─ ARCHITECTURE.md     layered architecture & module contracts
+│   ├─ ROADMAP.md          project roadmap (v2.19 -> v3.0+)
+│   ├─ SECURITY.md         security policy, guardrail matrix, and trust boundaries
+│   ├─ CONTRIBUTING.md     contribution guidelines and CI gates
 │   ├─ CUSTOMIZE.md        custom data bundle specification
 │   └─ DEV-PLAYBOOK.md     development and testing playbook
 ├─ config\
@@ -686,13 +702,19 @@ O-Cleaner\
 │   ├─ index.json          pack manifest ("Check updates from GitHub" downloads according to it)
 │   └─ *.json              5 built-in packs: windows-system / games-platform / games-titles / apps-common / explanations
 ├─ web\
-│   └─ index.html          the interface (HTML + CSS + JS + bilingual dictionary all in one file)
+│   ├─ index.html          UI DOM skeleton (3 views + 8 collapsible panels)
+│   ├─ styles.css          theme CSS variables and responsive two-column styles
+│   ├─ js\i18n.js          bilingual dictionary (I18N_EN / I18N_UNITS_EN) and helpers
+│   └─ app.js              main frontend application logic
 ├─ tools\
 │   ├─ lint_rules.py       rules and resource pack linter (safety gate before release/contribution)
 │   ├─ _lint_selftest.py   reverse defect-injection self-test for the linter itself (63 cases)
 │   ├─ guard_matrix.py     50-case deletion guardrail matrix + rule unit self-check
-│   ├─ unit_test.py        fast pure-logic unit tests (49 cases, <2s)
-│   ├─ selftest.py         full functional self-tests (590+ assertions)
+│   ├─ check_undefined.py  cross-module _core.X + AST F821 undefined-name check
+│   ├─ audit_dead.py       frontend CSS / DOM / CSS-var / strict i18n audit
+│   ├─ packs_ci_validate.py community pack index and SHA-256 verification
+│   ├─ unit_test.py        fast pure-logic unit tests (85+ cases, <2s)
+│   ├─ selftest.py         full functional self-tests (real deletions + HTTP end-to-end)
 │   ├─ cdp_check.js        real-browser rendering check (140+ assertions, uses system Edge/Chrome)
 │   ├─ doctor.py           environment self-check for new devices
 │   ├─ fix-encoding.ps1    the single canonical tool for the encoding and line-ending contract
@@ -751,7 +773,8 @@ provided the program can determine whether the drive is the system drive (by che
 
 ## 11. What's new in v2.12 – v2.16
 
-- **Analysis Center**: third primary view unifying seven specialized tools (Big Files, Duplicate Files, App Deep Clean, Bloatware Removal, Disk Snapshots, Downloads Organizer, Disk Migration) in a consistent ranking-row layout with session caching and tab-switch race guards.
+- **Analysis Center**: third primary view unifying eight specialized tools (Big Files, Duplicate Files, App Deep Clean, Bloatware Removal, Disk Snapshots, Downloads Organizer, Disk Migration, and System Slimming) in a consistent ranking-row layout with session caching and tab-switch race guards.
+- **System Slimming (Official Windows Tools)**: safely runs `DISM /StartComponentCleanup`, `powercfg -h on/off`, and Delivery Optimization cache cleanup via `%SystemRoot%\System32` binaries.
 - **One-click restore from Recycle Bin**: in "History → Details", entries moved to the Recycle Bin get a "↩ Restore" link (exact original-path matching).
 - **Disk Snapshots**: compare recent 7-day scan snapshots with a center-line growth/shrink chart (hover shows "then → now") and top-level New Files ranking (with top-300 cutoff filtering); 🔄 marks hot re-growth.
 - **Full-drive search**: search file/folder names across the whole drive from the ranking header.

@@ -38,7 +38,7 @@ static inline uint64_t rd_u64(const uint8_t *p) {
 }
 
 OC_EXPORT int mft_fast_version(void) {
-    return 4;
+    return 5;
 }
 
 /* Try to aggregate UTF-16LE extension into fixed ExtSlot[4096] hash table.

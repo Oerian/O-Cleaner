@@ -12,9 +12,11 @@ monkeypatch（core.X = stub）对本模块调用点可见。
 
 from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import json
+import os
 import re
 import socket
 from datetime import datetime
+from urllib.parse import urlparse
 
 import ocleaner.core as _core
 from ocleaner.credentials import _dpapi_protect, _dpapi_unprotect
@@ -109,10 +111,46 @@ def _gist_request(method: str, url: str, token: str,
         raise RuntimeError(f"GitHub API 错误 {e.code}：{detail or e.reason}")
 
 
+_MAX_GIST_BYTES = 16 * 1024 * 1024
+
+
+def _validate_gist_id(gist_id: str) -> str:
+    gid = str(gist_id or "").strip()
+    if gid and not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", gid):
+        raise ValueError("gist_id 格式非法")
+    return gid
+
+
+def _redact_user_text(s: str) -> str:
+    """脱敏字符串中的本机用户主目录与当前用户名，防止上传公开社区规则时泄露隐私。"""
+    if not s:
+        return s
+    home = os.path.normpath(os.path.expanduser("~"))
+    if home and len(home) > 3:
+        for pat in (home, home.replace("\\", "/")):
+            s = re.sub(re.escape(pat), "%USERPROFILE%", s, flags=re.I)
+    uname = (os.environ.get("USERNAME") or os.environ.get("USER") or "").strip()
+    if uname and len(uname) >= 2:
+        s = re.sub(rf"(?i)(^|[\\/]){re.escape(uname)}(?=[\\/]|$)", r"\1<USER>", s)
+    return s
+
+
+def _redact_user_obj(obj):
+    if isinstance(obj, str):
+        return _redact_user_text(obj)
+    if isinstance(obj, list):
+        return [_redact_user_obj(x) for x in obj]
+    if isinstance(obj, dict):
+        return {(_redact_user_text(k) if isinstance(k, str) else k): _redact_user_obj(v)
+                for k, v in obj.items()}
+    return obj
+
+
 def _sync_push(token: str, gist_id: str = "") -> dict:
     """把本机自定义数据全集推到私密 Gist；gist_id 为空时自动创建。"""
     if not token:
         raise RuntimeError("缺少访问令牌：先在下方填入 GitHub 个人访问令牌并保存")
+    gist_id = _validate_gist_id(gist_id)
     bundle = _core._export_bundle()
     payload = {"kind": "ocleaner-sync",
                "device": socket.gethostname(),
@@ -128,7 +166,7 @@ def _sync_push(token: str, gist_id: str = "") -> dict:
         st, r = _gist_request("POST", _GIST_API, token, body)
     if st not in (200, 201) or not r.get("id"):
         raise RuntimeError(f"Gist 保存失败（{st}）")
-    gid = str(r["id"])
+    gid = _validate_gist_id(str(r["id"]))
     cfg = _sync_cfg()
     if gid != gist_id:
         cfg["gist_id"] = gid            # 首次推送：记住自动创建的 Gist
@@ -141,26 +179,24 @@ _COMMUNITY_REPO = "Oerian/O-Cleaner"
 
 
 def community_upload(body: dict | None = None) -> dict:
-    """打包本机自定义规则/释义/单位用于社区贡献（脱敏，不含令牌与主机名）。
-    若已配置 GitHub 令牌则顺带创建公开 Gist 并生成带 Gist 链接的 Issue 链接；
-    否则直接返回预填 GitHub Issue 链接 + 格式化 JSON 供一键提交。"""
+    """打包本机自定义规则/释义/单位用于社区贡献（脱敏：%USERPROFILE%/用户名，默认跳过 fs_groups）。"""
     from urllib.parse import quote as _url_quote
 
     b = body or {}
     scope = str(b.get("scope") or "all").strip().lower()
-    title = str(b.get("title") or "").strip()[:120]
+    title = _redact_user_text(str(b.get("title") or "").strip()[:120])
     raw = _core._export_bundle()
     out: dict = {"kind": "ocleaner-custom",
                  "version": getattr(_core, "APP_VERSION", "")}
     if scope in ("all", "overrides"):
         if raw.get("overrides"):
-            out["overrides"] = raw["overrides"]
-        if raw.get("fs_groups"):
-            out["fs_groups"] = raw["fs_groups"]
+            out["overrides"] = _redact_user_obj(raw["overrides"])
+        if bool(b.get("include_fs_groups")) and raw.get("fs_groups"):
+            out["fs_groups"] = _redact_user_obj(raw["fs_groups"])
     if scope in ("all", "rules") and raw.get("rules"):
-        out["rules"] = raw["rules"]
+        out["rules"] = _redact_user_obj(raw["rules"])
     if scope in ("all", "units") and raw.get("units"):
-        out["units"] = raw["units"]
+        out["units"] = _redact_user_obj(raw["units"])
 
     n_ov = len(out.get("overrides") or {})
     n_gr = len(out.get("fs_groups") or [])
@@ -203,20 +239,25 @@ def community_upload(body: dict | None = None) -> dict:
                 "gist_url": gist_url, "raw_url": raw_url,
                 "issue_url": issue_url, "json_text": json_text}
 
-    # 无令牌模式：直接生成预填 GitHub Issue（超长时提示从剪贴板粘贴）
-    if len(json_text) <= 4500:
-        payload_block = f"```json\n{json_text}\n```"
-    else:
-        payload_block = "```json\n（规则 JSON 较长，O-Cleaner 已自动复制到剪贴板，请在此处 Ctrl+V 粘贴）\n```"
-    issue_body = (
-        f"### 规则说明\n{title or '社区贡献规则包'}\n\n"
-        f"### 内容统计\n{summary}\n"
-        f"### 规则数据包 (`ocleaner-custom`)\n{payload_block}\n"
-    )
-    issue_url = (f"https://github.com/{_COMMUNITY_REPO}/issues/new"
-                 f"?labels=rule-contribution&title={_url_quote(issue_title)}"
-                 f"&body={_url_quote(issue_body)}")
+    def _build_issue_url(block: str) -> str:
+        ib = (
+            f"### 规则说明\n{title or '社区贡献规则包'}\n\n"
+            f"### 内容统计\n{summary}\n"
+            f"### 规则数据包 (`ocleaner-custom`)\n{block}\n"
+        )
+        return (f"https://github.com/{_COMMUNITY_REPO}/issues/new"
+                f"?labels=rule-contribution&title={_url_quote(issue_title)}"
+                f"&body={_url_quote(ib)}")
+
+    clip_block = "```json\n（规则 JSON 较长，O-Cleaner 已自动复制到剪贴板，请在此处 Ctrl+V 粘贴）\n```"
+    clipboard_only = len(json_text) > 4500
+    payload_block = clip_block if clipboard_only else f"```json\n{json_text}\n```"
+    issue_url = _build_issue_url(payload_block)
+    if len(issue_url.encode("utf-8")) > 7000:
+        clipboard_only = True
+        issue_url = _build_issue_url(clip_block)
     return {"ok": True, "mode": "issue", "count": total,
+            "clipboard_only": clipboard_only,
             "issue_url": issue_url, "json_text": json_text}
 
 
@@ -224,17 +265,24 @@ def _sync_fetch(token: str, gist_id: str) -> dict:
     """取回 Gist 里的同步载荷；远端为空/未建返回 {}。"""
     if not gist_id:
         return {}
+    gist_id = _validate_gist_id(gist_id)
     st, r = _gist_request("GET", f"{_GIST_API}/{gist_id}", token)
     if st != 200:
         raise RuntimeError(f"Gist 读取失败（{st}）")
     f = (r.get("files") or {}).get(_GIST_FILE) or {}
     content = str(f.get("content") or "")
     if f.get("truncated") and f.get("raw_url"):
-        # Gist 单文件超过 1MB 会截断：走 raw_url 拿全文（纯文本响应）
-        req = _core._UrlRequest(f["raw_url"], headers={
+        raw_u = str(f["raw_url"])
+        pu = urlparse(raw_u)
+        if pu.scheme.lower() != "https" or (pu.hostname or "").lower() != "gist.githubusercontent.com":
+            raise RuntimeError("非法的 Gist 原始文件地址")
+        req = _core._UrlRequest(raw_u, headers={
             "Authorization": f"Bearer {token}", "User-Agent": "O-Cleaner"})
         with _core._urlopen(req, timeout=30) as resp:
-            content = resp.read().decode("utf-8")
+            raw_bytes = resp.read(_MAX_GIST_BYTES + 1)
+            if len(raw_bytes) > _MAX_GIST_BYTES:
+                raise RuntimeError("远端同步文件超过 16 MB 体积上限")
+            content = raw_bytes.decode("utf-8")
     if not content.strip():
         return {}
     try:

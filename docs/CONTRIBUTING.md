@@ -100,10 +100,14 @@ python -X utf8 tools/lint_rules.py --strict     # 第 [2/8] 节专门检查资�
 python -X utf8 tools/lint_rules.py --strict   # 规则与资源包门禁（8 项检查，警告计为失败）
 python -X utf8 tools/_lint_selftest.py        # 验证 linter 有检出能力（知识库 15 类 + 资源包 20 类 + 脚本模板 5 类注入，共 44 项）
 python -X utf8 tools/guard_matrix.py          # 删除护栏 50 项对抗矩阵 + 规则单元自检（秒级，动护栏必跑）
-python -X utf8 tools/unit_test.py             # 纯逻辑快速单元测试（49 项，无磁盘写副作用，2 秒内跑完）
+python -X utf8 tools/unit_test.py             # 纯逻辑快速单元测试（85+ 项，无磁盘写副作用，2 秒内跑完）
+python -X utf8 tools/check_undefined.py       # _core.X 跨模块引用 + AST F821 裸名检查
+python -X utf8 tools/audit_dead.py --strict-i18n # 前端 CSS/DOM/CSS变量/全量 i18n 键检查
+python -X utf8 tools/packs_ci_validate.py     # 社区资源包索引与 SHA-256 摘要校验
 python -m pyflakes app.py ps_scripts.py ocleaner tools   # Python 静态死导入与未定义符号检查
-python -X utf8 tools/selftest.py              # 590+ 项断言，含真实删除与 HTTP 端到端
-node tools/cdp_check.js "http://127.0.0.1:8770"   # 真实浏览器渲染与交互检查（140+ 项断言）
+python -X utf8 tools/selftest.py              # 全量端到端自测，含真实删除与 HTTP 端到端
+node --check web/js/i18n.js web/app.js        # 前端 JS 语法检查
+node tools/cdp_check.js "http://127.0.0.1:8770"   # 真实浏览器渲染与交互检查（Edge CDP）
 ```
 
 断言数量依机器环境浮动：数据盘数量、是否装有 Steam、是否装有 WizTree
@@ -146,9 +150,9 @@ gh workflow run ci.yml --repo <owner>/<repo> --ref main
 
 ### 前后端架构约定
 
-- **后端模块化（`app.py` + `ocleaner/`）**：根目录 `app.py` 保持为启动入口与向后兼容导出层（re-export `ocleaner.core` 全部符号），核心实现位于 `ocleaner/` 标准库子包（`core.py`、`store.py`、`deleter.py`、`measure.py`、`credentials.py`、`games.py`、`integrations.py`）。新增子模块时必须同步加入 `tools/make_package.py` 的 `INCLUDE` 清单。
-- **前端单文件（`web/index.html`）**：HTML + CSS + JS + 双语词典集中于单文件，不引入构建步骤、不引第三方库；所有动态插入 `innerHTML` 的字段必须经过 `esc()` 转义；新增渲染函数需注册到 `setLang()` 的语言切换重绘列表中。
-- **零运行时依赖**：只用 Python 标准库 + 系统自带的 PowerShell / Win32 API / Edge。
+- **后端分层架构（`app.py` + `ocleaner/` 17 模块）**：根目录 `app.py` 保持为启动入口与向后兼容导出层（re-export `ocleaner.core` 全部符号），核心实现按职责拆分为 `ocleaner/` 标准库子包（含无环基础 `runtime.py`，以及 `core.py`、`analysis.py`、`server.py`、`engines.py`、`guard.py`、`deleter.py`、`recycle.py`、`locks.py`、`tray.py`、`store.py`、`receipts.py`、`scheduler.py`、`measure.py`、`credentials.py`、`games.py`、`integrations.py`，详情见 [ARCHITECTURE.md](ARCHITECTURE.md)）。新增子模块时必须同步加入 `tools/make_package.py` 的 `INCLUDE` 清单。
+- **前端零构建分层（`web/index.html` + `styles.css` + `js/i18n.js` + `app.js`）**：纯静态 HTML/CSS/JS，不引入构建步骤与第三方库；`web/js/i18n.js` 须先于 `web/app.js` 加载；所有动态插入 `innerHTML` 的字段必须经过 `esc()` 转义；新增翻译键须补全英文词条（由 `--strict-i18n` 强制拦截），新增模块须登记 `make_package.py`。
+- **零运行时依赖**：只用 Python 标准库 + 原生 Win32 API / 可选 `mft_fast.dll` / PowerShell / Edge。
 - **确认与焦点约束**：危险操作（删除）必须有确认弹窗，列出确切路径与大小，且弹窗开启时焦点默认落于安全按钮（「取消」）。
 
 ### 编码与换行（必须遵守）
@@ -157,7 +161,7 @@ gh workflow run ci.yml --repo <owner>/<repo> --ref main
 |---|---|---|
 | `*.bat` `*.cmd` | 纯 ASCII | CRLF |
 | `*.ps1` | UTF-8 **带 BOM** | CRLF |
-| `*.py` `*.json` `*.html` `*.md` `*.yml` `*.yaml` `*.js` | UTF-8 **无 BOM** | CRLF |
+| `*.py` `*.json` `*.html` `*.md` `*.yml` `*.yaml` `*.js` `*.css` `*.c` `*.rc` | UTF-8 **无 BOM** | CRLF |
 
 原因：cmd.exe 无法正确解析使用 LF 换行的批处理文件（会把下一行内容并入上一行的 `echo`）；
 PowerShell 5.1 在中文 Windows 上会把没有 BOM 的文件按 GBK 读取，导致语法错误。
@@ -174,7 +178,7 @@ PowerShell 5.1 在中文 Windows 上会把没有 BOM 的文件按 GBK 读取，�
 - [ ] `tools/lint_rules.py --strict` 通过
 - [ ] `tools/_lint_selftest.py` 通过（linter 有检出能力）
 - [ ] `tools/guard_matrix.py` 通过（删除护栏 50 项矩阵 + 规则单元自检）
-- [ ] `tools/unit_test.py` 通过（49 项快速纯逻辑单测）
+- [ ] `tools/unit_test.py`、`tools/check_undefined.py`、`tools/audit_dead.py --strict-i18n` 全部通过（≥ 85 项纯逻辑回归 + AST + 全量 i18n）
 - [ ] `tools/selftest.py` 通过（或受宿主删除配额限制时由 CI 权威验证）
 - [ ] 新增/修改的规则我亲手验证过识别结果符合预期
 - [ ] 如果我改了断言，是因为代码确实对了，而不是为了让它变绿

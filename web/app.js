@@ -304,8 +304,9 @@ async function installWizTree() {
   WIZ_INSTALLING = true;
   b.disabled = true; b.textContent = t("wiz.downloading","正在下载并解压…");
   try {
-    const r = await apiJSON(`${API}/__oc__/wiztree/install`,
-                                 { method: "POST" });
+    const r = await apiJSON(`${API}/__oc__/wiztree/install`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
     if (r.status) STATE.wiztree = r.status;
     renderGuide();
     if (r.ok) {
@@ -438,7 +439,9 @@ async function aiFetchModels() {
     // 先把当前填的接口与密钥存下去，拉列表用的就是刚填的这组；
     // 放进 try 里 —— aiSave 挂了也要走 finally 复位按钮
     await aiSave();
-    const r = await apiJSON(`${API}/__oc__/ai/models`, { method: "POST" });
+    const r = await apiJSON(`${API}/__oc__/ai/models`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
     if (out) out.innerHTML = r.ok
       ? `<span class="res-ok">${t("ai.modelsGot","识别到 {n} 个模型，点击「模型」输入框从下拉建议里选择").replace("{n}", (r.models || []).length)}</span>`
       : `<span class="res-err">${esc(r.error || "获取失败")}</span>`;
@@ -1240,9 +1243,9 @@ function renderFsGroups() {
     try {
       await fsGroupOp("rename", { id: g.id, name: nn.trim() });
       renderFsGroups();
-      if (FS && view === "full") renderChart();
+      _syncGroupState(g.id, { rename: nn.trim() });
       toast(t("grp.renamed", "聚合组已重命名"));
-    } catch (e) { toast(t("grp.fail", "操作失败：") + esc(e.message)); }
+    } catch (e) { toast(t("grp.fail", "操作失败：") + (e && e.message || String(e))); }
   }));
   box.querySelectorAll("[data-gdel]").forEach(b => b.addEventListener("click", async () => {
     const g = groups.find(x => x.id === b.dataset.gdel);
@@ -1251,9 +1254,9 @@ function renderFsGroups() {
     try {
       await fsGroupOp("delete", { id: g.id });
       renderFsGroups();
-      if (FS && view === "full") renderChart();
+      _syncGroupState(g.id, { del: true });
       toast(t("grp.deleted", "已删除聚合组"));
-    } catch (e) { toast(t("grp.fail", "操作失败：") + esc(e.message)); }
+    } catch (e) { toast(t("grp.fail", "操作失败：") + (e && e.message || String(e))); }
   }));
 }
 
@@ -2231,90 +2234,122 @@ async function fsGroupOp(op, body) {
   if (r.groups) STATE.fs_groups = r.groups;
   return r;
 }
+function _syncGroupState(gid, opts = {}) {
+  const suf = "\\__cgrp_" + String(gid || "").toLowerCase();
+  if (FS && FS.hiddenKids) {
+    for (const k of Object.keys(FS.hiddenKids)) {
+      if (!k.endsWith(suf)) continue;
+      if (opts.del) {
+        delete FS.hiddenKids[k];
+      } else if (opts.removePath) {
+        const rk = normKey(opts.removePath);
+        FS.hiddenKids[k] = (FS.hiddenKids[k] || []).filter(m => normKey(m.path) !== rk);
+        if (!FS.hiddenKids[k].length) delete FS.hiddenKids[k];
+      }
+    }
+  }
+  for (let i = fsStack.length - 1; i >= 0; i--) {
+    if (!normKey(fsStack[i].path).endsWith(suf)) continue;
+    if (opts.del || (opts.removePath && !(FS && FS.hiddenKids && FS.hiddenKids[normKey(fsStack[i].path)]))) {
+      fsStack = fsStack.slice(0, i);
+    } else if (opts.rename) {
+      fsStack[i].name = opts.rename;
+    }
+  }
+  if (FS && view === "full") {
+    renderOverview();
+    renderChart();
+  }
+}
 function openGroupDialog(node) {
   if (node.custom_group) return openGroupMgrDialog(node);
   const nk = normKey(node.path);
   const inG = (STATE.fs_groups || []).filter(g => g.paths.includes(nk));
   const other = (STATE.fs_groups || []).filter(g => !g.paths.includes(nk));
   $("modal").innerHTML = `
-    <h3>${t("grp.dlgTitle","把「{v}」归入聚合组").replace("{v}", esc(node.name))}</h3>
-    ${inG.length ? `<p class="dim">${t("grp.alreadyIn","已在以下聚合组：")}</p><ul class="grouplist">${
-      inG.map(g => `<li>${esc(g.name)} <button class="tiny ghost" data-out="${esc(g.id)}">${t("grp.remove","移出")}</button></li>`).join("")}</ul>` : ""}
-    ${other.length ? `<p class="dim">${t("grp.canJoin","可加入：")}</p><ul class="grouplist">${
-      other.map(g => `<li>${esc(g.name)} <button class="tiny ghost" data-in="${esc(g.id)}">${t("grp.join","加入")}</button></li>`).join("")}</ul>` : ""}
-    <div class="ab" style="margin-top:12px">
-      <input id="grpNewName" placeholder="${t("grp.newNamePh","新聚合组名称，如：游戏")}" style="flex:1">
-      <button id="grpNewGo" class="go">${t("grp.create","新建并归入")}</button>
+    <h2>${t("grp.dlgTitle","把「{v}」归入聚合组").replace("{v}", esc(node.name))}</h2>
+    <div class="mbody">
+      ${inG.length ? `<p class="hint">${t("grp.alreadyIn","已在以下聚合组：")}</p><ul class="grouplist">${
+        inG.map(g => `<li>${esc(g.name)} <button class="tiny ghost" data-out="${esc(g.id)}">${t("grp.remove","移出")}</button></li>`).join("")}</ul>` : ""}
+      ${other.length ? `<p class="hint">${t("grp.canJoin","可加入：")}</p><ul class="grouplist">${
+        other.map(g => `<li>${esc(g.name)} <button class="tiny ghost" data-in="${esc(g.id)}">${t("grp.join","加入")}</button></li>`).join("")}</ul>` : ""}
+      <div class="field" style="margin-top:12px">
+        <input id="grpNewName" placeholder="${t("grp.newNamePh","新聚合组名称，如：游戏")}" style="flex:1">
+        <button id="grpNewGo" class="go">${t("grp.create","新建并归入")}</button>
+      </div>
     </div>
-    <div class="modal-foot" style="display:flex;justify-content:flex-end;margin-top:10px">
+    <div class="mfoot">
       <button id="grpClose" class="ghost">${t("grp.close","关闭")}</button>
     </div>`;
   $("mask").classList.add("on");
-  $("grpClose").addEventListener("click", () => { closeModal(); renderChart(); });
+  $("grpClose").addEventListener("click", () => { closeModal(); if (FS && view === "full") { renderOverview(); renderChart(); } });
   $("modal").querySelectorAll("[data-in]").forEach(b => b.addEventListener("click", async () => {
     try {
       await fsGroupOp("add", { id: b.dataset.in, paths: [node.path] });
-      renderFsGroups(); renderChart(); openGroupDialog(node);
-    } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
+      renderFsGroups(); _syncGroupState(b.dataset.in); openGroupDialog(node);
+    } catch (e) { toast(t("grp.fail","操作失败：") + (e && e.message || String(e))); }
   }));
   $("modal").querySelectorAll("[data-out]").forEach(b => b.addEventListener("click", async () => {
     try {
       await fsGroupOp("remove", { id: b.dataset.out, paths: [node.path] });
-      renderFsGroups(); renderChart(); openGroupDialog(node);
-    } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
+      renderFsGroups(); _syncGroupState(b.dataset.out, { removePath: node.path }); openGroupDialog(node);
+    } catch (e) { toast(t("grp.fail","操作失败：") + (e && e.message || String(e))); }
   }));
   $("grpNewGo").addEventListener("click", async () => {
     const name = $("grpNewName").value.trim();
     if (!name) return;
     try {
       await fsGroupOp("add", { name, paths: [node.path] });
-      renderFsGroups(); closeModal(); renderChart();
-    } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
+      renderFsGroups(); closeModal();
+      if (FS && view === "full") { renderOverview(); renderChart(); }
+    } catch (e) { toast(t("grp.fail","操作失败：") + (e && e.message || String(e))); }
   });
 }
 function openGroupMgrDialog(node) {
   const members = (FS.hiddenKids || {})[normKey(node.path)] || [];
   const g = (STATE.fs_groups || []).find(x => x.id === node.gid) || {};
   $("modal").innerHTML = `
-    <h3>${t("grp.mgrTitle","管理聚合组「{v}」").replace("{v}", esc(g.name || node.name))}</h3>
-    <div class="ab" style="margin:8px 0">
-      <input id="grpRename" value="${esc(g.name || "")}" style="flex:1">
-      <button id="grpRenameGo" class="go">${t("grp.rename","改名")}</button>
+    <h2>${t("grp.mgrTitle","管理聚合组「{v}」").replace("{v}", esc(g.name || node.name))}</h2>
+    <div class="mbody">
+      <div class="field" style="margin:8px 0">
+        <input id="grpRename" value="${esc(g.name || "")}" style="flex:1">
+        <button id="grpRenameGo" class="go">${t("grp.rename","改名")}</button>
+      </div>
+      <p class="hint">${t("grp.members","成员（{n}）：").replace("{n}", members.length)}</p>
+      <ul class="grouplist">${members.map(m =>
+        `<li>${esc(m.name)} <button class="tiny ghost" data-out="${esc(m.path)}">${t("grp.remove","移出")}</button></li>`).join("")
+        || `<li class="hint">${t("grp.noMembers","（无成员）")}</li>`}</ul>
     </div>
-    <p class="dim">${t("grp.members","成员（{n}）：").replace("{n}", members.length)}</p>
-    <ul class="grouplist">${members.map(m =>
-      `<li>${esc(m.name)} <button class="tiny ghost" data-out="${esc(m.path)}">${t("grp.remove","移出")}</button></li>`).join("")
-      || `<li class="dim">${t("grp.noMembers","（无成员）")}</li>`}</ul>
-    <div class="modal-foot" style="display:flex;justify-content:space-between;margin-top:12px">
-      <button id="grpDel" class="ghost res-err">${t("grp.delete","删除聚合组")}</button>
+    <div class="mfoot">
+      <button id="grpDel" class="ghost res-err left">${t("grp.delete","删除聚合组")}</button>
       <button id="grpClose" class="ghost">${t("grp.close","关闭")}</button>
     </div>`;
   $("mask").classList.add("on");
-  $("grpClose").addEventListener("click", () => { closeModal(); renderChart(); });
+  $("grpClose").addEventListener("click", () => { closeModal(); if (FS && view === "full") { renderOverview(); renderChart(); } });
   $("grpRenameGo").addEventListener("click", async () => {
     const name = $("grpRename").value.trim();
     if (!name) return;
     try {
       await fsGroupOp("rename", { id: node.gid, name });
-      const h3 = $("modal").querySelector("h3");
-      if (h3) h3.textContent = t("grp.mgrTitle","管理聚合组「{v}」").replace("{v}", name);
-      renderFsGroups(); renderChart();
+      const h2 = $("modal").querySelector("h2");
+      if (h2) h2.textContent = t("grp.mgrTitle","管理聚合组「{v}」").replace("{v}", name);
+      renderFsGroups(); _syncGroupState(node.gid, { rename: name });
       toast(t("grp.renamed", "聚合组已重命名"));
     }
-    catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
+    catch (e) { toast(t("grp.fail","操作失败：") + (e && e.message || String(e))); }
   });
   $("modal").querySelectorAll("[data-out]").forEach(b => b.addEventListener("click", async () => {
     try {
       await fsGroupOp("remove", { id: node.gid, paths: [b.dataset.out] });
-      renderFsGroups(); closeModal(); renderChart();
-    } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
+      renderFsGroups(); closeModal(); _syncGroupState(node.gid, { removePath: b.dataset.out });
+    } catch (e) { toast(t("grp.fail","操作失败：") + (e && e.message || String(e))); }
   }));
   $("grpDel").addEventListener("click", async () => {
     try {
       await fsGroupOp("delete", { id: node.gid });
-      renderFsGroups(); closeModal(); renderChart();
+      renderFsGroups(); closeModal(); _syncGroupState(node.gid, { del: true });
       toast(t("grp.deleted", "已删除聚合组"));
-    } catch (e) { toast(t("grp.fail","操作失败：") + esc(e.message)); }
+    } catch (e) { toast(t("grp.fail","操作失败：") + (e && e.message || String(e))); }
   });
 }
 
@@ -2346,9 +2381,10 @@ async function doClean() {
       toast(String(e0));
     }
   }
-  _lastCleanReq = { ids: [...selected], paths: [...selPaths],
+  _lastCleanReq = { ids: [...selected], paths: dirSel,
     only_paths: only, allow_non_cleanable: !!hasNonCleanSel,
-    drive, custom_path: customPath };
+    drive, custom_path: customPath,
+    trash: !!(trashBox && trashBox.checked) };
   try {
     let data = { entry: { time: new Date().toISOString().slice(0, 19).replace("T", " "), drive, results: [], freed: 0, freed_h: "0 B", targets: 0 }, stats: STATE.stats, merged: [] };
     if (selected.size > 0 || dirSel.length > 0) {
@@ -2902,6 +2938,7 @@ async function startFullScan() {
   const hit = FS_CACHE.get(drive);
   if (hit && hit.depth === depth && Date.now() - hit.at < FS_CACHE_TTL) {
     FS = hit.fs;
+    fsStack = [];
     selPaths.clear();          // 新树新路径：按路径勾选作废
     buildKidsIndex();
     fsMode = "biggest";
@@ -2924,12 +2961,8 @@ async function startFullScan() {
   fsScanDepth = depth;
   const b = $("btnFullScan");
   b.disabled = true; b.textContent = t("fs.scanningFull","全盘扫描中…");
-  view = "full";
-  renderViewNav();                   // 扫描页可能还没机会走 switchView，先同步导航
+  switchView("full");
   fsStack = [];
-  $("steamView").style.display = "none";
-  $("fullView").style.display = "flex";
-  setToolbars(true, true);
   $("fsHint").textContent = t("fs.driveHint","{drive}: 盘").replace("{drive}", drive);
   $("fsNav").innerHTML = "";
   // 排行区先给占位：扫描期间这里一片空白会让用户以为面板坏了；
@@ -3259,6 +3292,25 @@ function renderOverview() {
  *     后端退化为原生现扫，要等几百毫秒到数秒 —— 慢，但远比
  *     「点不动就只弹详情」有用，所以两条路都放开，只是给出不同提示。
  */
+function _fsStackForNode(node) {
+  const p = String(node.path || "").replace(/\//g, "\\").replace(/\\+$/, "");
+  const parts = p.split("\\").filter(Boolean);
+  if (parts.length <= 1) return [];
+  const byPath = new Map((FS?.nodes || []).map(n => [normKey(n.path), n]));
+  const out = [];
+  for (let i = 1; i < parts.length; i++) {
+    const curPath = parts.slice(0, i + 1).join("\\");
+    const hit = byPath.get(normKey(curPath));
+    const isLast = i === parts.length - 1;
+    out.push({
+      path: isLast ? node.path : (hit ? hit.path : curPath),
+      name: isLast ? node.name : (hit ? hit.name : parts[i]),
+      size: isLast ? node.size : (hit ? hit.size : 0),
+    });
+  }
+  return out;
+}
+
 async function fsDrill(node) {
   if (!node) return;
   if (node.type !== "dir") { showDetail(node); return; }
@@ -3272,10 +3324,11 @@ async function fsDrill(node) {
   }
   const key = normKey(node.path);
   const hasKids = !!(FS.kids && FS.kids[key] && FS.kids[key].length);
+  const prevStack = fsStack;
+  fsStack = _fsStackForNode(node);
+  fsMode = "dirs";
+  renderOverview();
   if (!hasKids) {
-    fsStack.push({ path: node.path, name: node.name, size: node.size });
-    fsMode = "dirs";
-    renderOverview();
     if (!FS.subdir_ready) {
       $("fsChart").innerHTML = '<div class="loading" style="margin:0">' +
         `<span class="spin"></span>${t("fs.noWiztreeOnTheFly","未启用 WizTree 加速，正在现场扫描该目录（可能需要几秒）…")}</div>`;
@@ -3283,19 +3336,14 @@ async function fsDrill(node) {
     await loadSubLevel(node);
     const got = !!(FS.kids && FS.kids[key] && FS.kids[key].length);
     if (!got) {
-      // 拉不到子项（空目录/无权限）：退回上一层并弹详情，别让用户面对空层发愣
-      fsStack.pop();
+      // 拉不到子项（空目录/无权限）：恢复原层级栈并弹详情，别让用户面对空层发愣
+      fsStack = prevStack;
       renderOverview();
       renderChart();
       showDetail(node);
       return;
     }
-    renderChart();
-    return;
   }
-  fsStack.push({ path: node.path, name: node.name, size: node.size });
-  fsMode = "dirs";
-  renderOverview();
   renderChart();
 }
 
@@ -3459,7 +3507,15 @@ function renderChart() {
   $("fsModes").innerHTML = modes.map(([k, label]) =>
     `<span class="seg${fsMode === k ? " on" : ""}" data-m="${k}">${esc(label)}</span>`).join("");
   $("fsModes").querySelectorAll(".seg").forEach(s =>
-    s.addEventListener("click", () => { fsMode = s.dataset.m; hiddenAggOpen = false; renderChart(); }));
+    s.addEventListener("click", () => {
+      fsMode = s.dataset.m;
+      hiddenAggOpen = false;
+      if (fsMode === "biggest" && fsStack.length) {
+        fsStack = [];
+        renderOverview();
+      }
+      renderChart();
+    }));
   // 排序方式切换（持久到 localStorage，跨会话记住偏好）
   $("fsSort").innerHTML = [
     ["size", t("sort.size","按占用")], ["name", t("sort.name","按名称")],
@@ -4949,6 +5005,11 @@ async function openDupFiles() {
       gChk.indeterminate = cn > 0 && cn < kids.length;
     });
   };
+  const setDupPath = (p, on) => {
+    if (!p) return;
+    if (on) { selPaths.add(p); _dupSelPaths.add(p); }
+    else { selPaths.delete(p); _dupSelPaths.delete(p); }
+  };
   const applyPreset = () => {
     const minv = parseInt(($("dupPreset") || {}).value || "0", 10);
     document.querySelectorAll("#modal .vrow-wrap[data-gsize]").forEach(w0 => {
@@ -4957,8 +5018,7 @@ async function openDupFiles() {
       w0.querySelectorAll(".dupChk").forEach(c => {
         if (c.disabled) return;
         c.checked = !!grp && Number(grp) >= minv;
-        if (c.checked) { selPaths.add(c.dataset.p); _dupSelPaths.add(c.dataset.p); }
-        else { selPaths.delete(c.dataset.p); _dupSelPaths.delete(c.dataset.p); }
+        setDupPath(c.dataset.p, c.checked);
       });
     });
     updateFooter();
@@ -4992,8 +5052,7 @@ async function openDupFiles() {
       }
       for (const c of chks) {
         c.checked = (c !== keepChk);
-        if (c.checked) { selPaths.add(c.dataset.p); _dupSelPaths.add(c.dataset.p); }
-        else { selPaths.delete(c.dataset.p); _dupSelPaths.delete(c.dataset.p); }
+        setDupPath(c.dataset.p, c.checked);
       }
     });
     updateFooter();
@@ -5020,7 +5079,7 @@ async function openDupFiles() {
       w0.querySelectorAll(".dupChk").forEach(c => {
         if (c.disabled) return;
         c.checked = true;
-        selPaths.add(c.dataset.p);
+        setDupPath(c.dataset.p, true);
       });
     });
     updateFooter();
@@ -5030,7 +5089,7 @@ async function openDupFiles() {
   if (noneBtn) noneBtn.addEventListener("click", () => {
     document.querySelectorAll("#modal .dupChk").forEach(c => {
       c.checked = false;
-      selPaths.delete(c.dataset.p);
+      setDupPath(c.dataset.p, false);
     });
     updateFooter();
     syncPicked();
@@ -5041,7 +5100,7 @@ async function openDupFiles() {
       const w0 = a0.closest(".vrow-wrap");
       w0.querySelectorAll(".dupChk").forEach(c0 => {
         c0.disabled = !a0.checked;
-        if (!a0.checked) { c0.checked = false; selPaths.delete(c0.dataset.p); }
+        if (!a0.checked) { c0.checked = false; setDupPath(c0.dataset.p, false); }
       });
       const g0 = w0.querySelector(".dupGChk");
       if (g0) { g0.disabled = !a0.checked; if (!a0.checked) g0.checked = false; }
@@ -5055,16 +5114,14 @@ async function openDupFiles() {
       w0.querySelectorAll(".dupChk").forEach(c0 => {
         if (c0.disabled) return;
         c0.checked = g0.checked;
-        if (g0.checked) selPaths.add(c0.dataset.p);
-        else selPaths.delete(c0.dataset.p);
+        setDupPath(c0.dataset.p, g0.checked);
       });
       updateFooter();
       syncPicked();
     }));
   document.querySelectorAll("#modal .dupChk").forEach(c =>
     c.addEventListener("change", () => {
-      if (c.checked) selPaths.add(c.dataset.p);
-      else selPaths.delete(c.dataset.p);
+      setDupPath(c.dataset.p, c.checked);
       updateFooter();
       syncPicked();
     }));
@@ -5212,7 +5269,15 @@ async function openBloatware(fresh = false) {
       body: JSON.stringify({ fresh: !!fresh }) });
   } catch (e) { r = { error: String(e) }; }
   if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
-  const found = r && r.found || [];
+  if (!r || r.error) {
+    $("modal").innerHTML = `<h2>${t("bw.title", "毒瘤软件清除")}</h2>
+      <div class="mbody"><div class="empty">${esc((r && r.error) || t("up.fail", "检查失败"))}</div>
+      <div style="text-align:right;padding-top:10px">
+        <button class="tiny" id="bwClose">${t("cc.close", "关闭")}</button></div></div>`;
+    $("bwClose").addEventListener("click", closeModal);
+    return;
+  }
+  const found = r.found || [];
   const hit = found.filter(a => a.uninstall || a.quiet || (a.residue_dirs || []).length);
   $("modal").innerHTML = `<h2>${t("bw.title", "毒瘤软件清除")}
       <span class="hint">${t("bw.n", "发现 {n} 项").replace("{n}", hit.length)}</span></h2>
@@ -5243,7 +5308,8 @@ async function openBloatware(fresh = false) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reg_key: a.reg_key }) }).then(rr =>
           toast(rr.ok ? t("bw.unLaunched", "官方卸载程序已启动，完成向导后回来点「② 清扫残留」")
-                      : (rr.error || "启动失败"))).catch(() => {});
+                      : (rr.error || t("up.fail", "检查失败"))))
+        .catch(e => toast(e && e.message || String(e)));
     }));
   [...document.querySelectorAll("#modal .bw-sw")].forEach(b =>
     b.addEventListener("click", async () => {
@@ -5260,7 +5326,7 @@ async function openBloatware(fresh = false) {
         toast(t("bw.sweptDetail", "残留清扫完成：移入回收站 {d} 个目录，删除 {r} 条注册表键")
           .replace("{d}", dirN).replace("{r}", rr.reg_deleted || 0));
       }
-      openBloatware(true);
+      if (_anSeq === anSeq) openBloatware(true);
     }));
 }
 
@@ -5401,7 +5467,9 @@ async function openJunctionMove() {
       if ($("jmGo")) { $("jmGo").disabled = false; $("jmGo").textContent = t("jm.go", "开始搬家"); }
     }
   });
-  const recs = await apiJSON(`${API}/__oc__/junction/list`, { method: "POST" }).catch(() => null);
+  const recs = await apiJSON(`${API}/__oc__/junction/list`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  }).catch(() => null);
   if (_anSeq !== anSeq) return;
   const list = recs && recs.records || [];
   const recBox = $("jmRecs");
@@ -5477,11 +5545,11 @@ async function openSnapDiff(selDrive) {
   const load0 = async () => {
     const r = await apiJSON(`${API}/__oc__/snapshot/diff`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ drive, days: 7 }) }).catch(e0 => ({ error: String(e0) }));
+      body: JSON.stringify({ drive: drv0, days: 7 }) }).catch(e0 => ({ error: String(e0) }));
     if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
     const box = $("sdBody");
     if (!box) return;
-    if (r.error) { box.innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
+    if (!r || r.error) { box.innerHTML = `<div class="empty">${esc((r && r.error) || t("up.fail", "检查失败"))}</div>`; return; }
     const d0 = r.diff || [];
     const nf = r.new_files || [];
     // 变化区重构为**中线柱状图**——共用中央基线，
@@ -5579,6 +5647,16 @@ async function openAppClean(fresh = false) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ drive, fresh: !!fresh }) }).catch(e => ({ error: String(e) }));
   if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
+  if (!r || r.error) {
+    $("modal").innerHTML = `<h2>${t("ac.title", "应用专清")}</h2>
+      <div class="mbody"><div class="empty">${esc((r && r.error) || t("up.fail", "检查失败"))}</div>
+      <div style="text-align:right;padding-top:10px">
+        <button class="tiny" id="acRescan">${t("ac.rescan", "重新扫描")}</button>
+        <button class="tiny" id="acClose">${t("cc.close", "关闭")}</button></div></div>`;
+    $("acClose").addEventListener("click", closeModal);
+    $("acRescan").addEventListener("click", () => openAppClean(true));
+    return;
+  }
   const apps = r.apps || [];
   const kindBadge = k => k === "cache"
     ? `<span style="color:var(--ok-fg)">${t("ac.cache", "缓存·可清")}</span>`
@@ -5620,7 +5698,7 @@ async function openAppClean(fresh = false) {
       } else {
         toast(t("ac.cleanedH", "已移入回收站（{v}，明细计入清理记录）").replace("{v}", rr.trashed_h || "0 B"));
       }
-      openAppClean(true);
+      if (_anSeq === anSeq) openAppClean(true);
     }));
 }
 
@@ -5724,24 +5802,27 @@ async function openDownloadsAdvice() {
     toast(t("dl.arcSelDone", "已归档 {n} 个文件到 {cats}")
       .replace("{n}", rr.moved)
       .replace("{cats}", (rr.by_category || []).join("、")));
-    openDownloadsAdvice();
+    if (_anSeq === anSeq) openDownloadsAdvice();
   });
   $("dlArc").addEventListener("click", async () => {
     if (!confirm(t("dl.arcConfirm", "把下载目录顶层的全部文件按类型移入分类子文件夹？（可在弹窗里一键撤销）"))) return;
     $("dlArc").disabled = true; $("dlArc").textContent = t("dl.archiving", "归档中…");
     const rr = await apiJSON(`${API}/__oc__/downloads-archive`, {
-      method: "POST" }).catch(e => ({ error: String(e) }));
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    }).catch(e => ({ error: String(e) }));
     toast(rr.error || t("dl.arcDone", "已归档 {n} 个文件到 {cats}")
       .replace("{n}", rr.moved).replace("{cats}", (rr.by_category || []).join("、")));
-    openDownloadsAdvice();
+    if (_anSeq === anSeq) openDownloadsAdvice();
   });
   $("dlUndo").addEventListener("click", async () => {
     $("dlUndo").disabled = true; $("dlUndo").textContent = t("dl.undoing", "撤销中…");
     const rr = await apiJSON(`${API}/__oc__/downloads-archive/undo`, {
-      method: "POST" }).catch(e => ({ error: String(e) }));
-    toast(rr.error || t("dl.undone", "已撤销最近一次归档（{n} 个文件移回顶层）")
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    }).catch(e => ({ error: String(e) }));
+    const undoErr = rr.error || (!rr.ok && (rr.errors || []).join("；"));
+    toast(undoErr || t("dl.undone", "已撤销最近一次归档（{n} 个文件移回顶层）")
       .replace("{n}", rr.restored));
-    openDownloadsAdvice();
+    if (_anSeq === anSeq) openDownloadsAdvice();
   });
   if (dlGo) dlGo.addEventListener("click", async () => {
     const picked = [...document.querySelectorAll("#modal .dlChk:checked")]
@@ -5761,7 +5842,7 @@ async function openDownloadsAdvice() {
       toast(t("dl.done", "已移入回收站 {n}/{total} 个")
         .replace("{n}", rr.done).replace("{total}", rr.total));
     }
-    openDownloadsAdvice();
+    if (_anSeq === anSeq) openDownloadsAdvice();
   });
 }
 
@@ -5967,6 +6048,8 @@ $("btnAll").addEventListener("click", () => {
 $("btnNone").addEventListener("click", () => {
   applyPreset(STATE.presets.find(p => p.id === "none"));
   selPaths.clear();
+  _bfSelPaths.clear();
+  _dupSelPaths.clear();
   document.querySelectorAll("#fsChart .rowsel").forEach(cb => { cb.checked = false; });
   updateFooter();
 });
@@ -6640,7 +6723,14 @@ $("btnSchSave").addEventListener("click", async () => {
     const f = e.target.files && e.target.files[0];
     e.target.value = "";
     if (!f) return;
-    msg.textContent = t("mig.working", "正在迁移数据…");
+    if (f.size > 24 * 1024 * 1024) {
+      msg.innerHTML = `<span class="res-err">${esc("备份文件超过 24 MB 体积上限")}</span>`;
+      return;
+    }
+    if (!confirm(t("bak.confirm", "确定从所选备份还原配置？当前自定义规则与分组将被合并/覆盖。"))) return;
+    const impBtn = $("btnBakImport");
+    if (impBtn) impBtn.disabled = true;
+    msg.textContent = t("bak.working", "正在还原备份…");
     try {
       const buf = new Uint8Array(await f.arrayBuffer());
       let bin = "";
@@ -6658,6 +6748,8 @@ $("btnSchSave").addEventListener("click", async () => {
       await loadState();
     } catch (ex) {
       msg.innerHTML = `<span class="res-err">${esc(ex && ex.message || String(ex))}</span>`;
+    } finally {
+      if (impBtn) impBtn.disabled = false;
     }
   });
 })();
@@ -6779,7 +6871,9 @@ $("btnUpCheck").addEventListener("click", async () => {
   btn.disabled = true;
   msg.textContent = t("up.checking", "检查中…");
   try {
-    const r = await apiJSON(`${API}/__oc__/app/update_check`, { method: "POST" });
+    const r = await apiJSON(`${API}/__oc__/app/update_check`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
     if (!r.ok) {
       msg.textContent = r.error || t("up.fail", "检查失败");
     } else if (r.newer) {
@@ -6794,7 +6888,9 @@ $("btnUpCheck").addEventListener("click", async () => {
         btn.disabled = true;
         su.textContent = t("up.updating", "下载校验中…");
         try {
-          const ur = await apiJSON(`${API}/__oc__/app/self_update`, { method: "POST" });
+          const ur = await apiJSON(`${API}/__oc__/app/self_update`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+          });
           if (!ur.ok) {
             toast(ur.error || t("up.fail", "升级失败"));
             su.disabled = false;
@@ -7029,914 +7125,6 @@ function initTheme() {
   applyTheme();
 }
 
-/* ==================== i18n：界面双语（L1 骨架 + L2 动态文案） ==================== */
-/* 中文是源码默认文案（HTML 与 t() 调用处直接写中文），字典只收英文翻译 ——
-   换回中文时还原原文，字典里不必重复中文。
-   静态骨架：data-i18n → textContent、data-i18n-ph → placeholder、
-   data-i18n-title → title；动态文案：t(key, zh) 取词（支持 {n} 占位）。
-   语言存 localStorage("oc-lang")：auto 跟随系统/浏览器语言
-   （navigator.language，非 zh 开头一律英文），zh/en 强制指定。
-   切换语言后 setLang 会重画动态渲染的内容。 */
-const I18N_EN = {
-  "tag": "Disk Cleanup Assistant",
-  "nav.full": "Scan Overview", "nav.steam": "Game Storage",
-  "theme.aria": "UI Theme",
-  "theme.light": "Light", "theme.light.title": "Light mode",
-  "lang.autoTitle": "Follow system language", "lang.zhTitle": "Chinese",
-  "theme.dark": "Dark", "theme.dark.title": "Dark mode",
-  "theme.system": "Auto", "theme.system.title": "Follow system",
-  "lang.aria": "Language / 语言",
-  "adminwarn.a": "Running without administrator rights. Items in system directories will ask for admin permission. Restart via ",
-  "adminwarn.b": " or click the button to elevate now.",
-  "adminwarn.elevate": "Elevate & restart",
-  "pre.yield": "Est. {n} items · {v} cleanable",
-  "pre.yield0": "No matching cleanable items on this machine",
-  "el.ok": "Restarting as administrator — this page will recover automatically…",
-  "el.fail": "Elevation failed: ",
-  "el.timeout": "Timed out waiting for the elevated instance. Please reopen O-Cleaner.",
-  "btn.scan": "Rescan", "btn.fullScan": "Full-disk scan",
-  "sync.head": "Cloud sync (GitHub Gist · two-way)",
-  "sync.intro": "Store units, description overrides and fixed rules in <b>your own private GitHub Gist</b> and sync across devices. Requires a <a href=\"https://github.com/settings/tokens\" target=\"_blank\" rel=\"noopener\">personal access token</a> with gist scope; the token is stored only in local config/sync.json. Two-way sync = pull & merge (remote items are added into local, never overwriting your existing ones) → push the merged set back; deletions do not propagate.",
-  "sync.token": "Token", "sync.save": "Save", "sync.gistId": "Gist ID",
-  "sync.push": "Push", "sync.pull": "Pull & merge", "sync.merge": "Two-way sync",
-  "sync.working": "Syncing…", "sync.saved": "Saved (token stays in local config/sync.json)",
-  "sync.fail": "Sync failed: ", "sync.emptyRemote": "cloud is empty",
-  "sync.pushed": "pushed back to cloud", "sync.fromDevice": "from {v}",
-  "sync.noChange": "nothing to change", "sync.lastPush": "Last push",
-  "sync.lastPull": "Last pull", "sync.needToken": "no token configured yet",
-  "btn.bigFiles": "Largest files",
-  "btn.all": "Select all", "btn.none": "Select none", "btn.save": "Save",
-  "scope.label": "Cleanup scope",
-  "scope.all": "Current drive + user-level caches",
-  "scope.drive": "Current-drive items only",
-  "depth.title": "How many levels to expand (customizable, default 1). Fewer levels scan faster; click deeper folders to drill down (sorted by size/name). Game installs and promoted folders always appear in the ranking",
-  "depth.1": "1 level (default)", "depth.2": "2 levels",
-  "depth.3": "3 levels", "depth.4": "4 levels", "depth.5": "5 levels (slowest)",
-  "custom.label": "Custom directory",
-  "custom.placeholder": "e.g. D:\\Downloads or E:\\GameCache — press Enter to scan known junk folders inside",
-  "custom.scan": "Scan this directory", "custom.clear": "Cancel",
-  "pane.disk": "Disk Overview",
-  "pane.steamOverview": "Game Storage",
-  "steam.filter": "Filter by name, e.g. witcher",
-  "pane.orphans": "Recycle Suggestions",
-  "pane.epic": "Epic Games Library", "pane.gog": "GOG Games Library",
-  "pane.fsChart": "Space Usage Ranking",
-  "pane.fsChartHint": "Click to drill down · right-click for custom label / pin-to-top",
-  "pnav.aria": "Side panel navigation",
-  "pane.guide": "Environment Self-check",
-  "pane.guideHint": "Read this on first use",
-  "pane.presets": "One-click Presets",
-  "pane.steamPanel": "Steam Games Library",
-  "pane.customLibs": "Custom Game Libraries",
-  "pane.customLibsHint": "Manually add any game library or a single game folder",
-  "cg.namePh": "Name, e.g. Cloud-drive library",
-  "cg.pathPh": "Folder, e.g. D:\Games",
-  "cg.add": "Add",
-  "cg.note": "Read-only: measures size and lists top-level items. Nothing here is ever cleaned. Re-adding the same folder renames it.",
-  "cg.phLabel": "Default placeholder image",
-  "cg.phHint": "Shown for games without cover art; replace it with any image you like",
-  "cg.phChange": "Change image", "cg.phReset": "Restore default",
-  "cg.phTooBig": "Image too large (max 2 MB)", "cg.phReadFail": "Failed to read image",
-  "cg.phSaved": "Placeholder updated", "cg.phResetDone": "Default placeholder restored",
-  "cg.phFail": "Operation failed: ",
-  "cg.empty": "No custom entries yet. Add libraries that Steam/Epic don't know about (cloud-drive letters, external disks, hand-made collections) to see their usage here.",
-  "cg.approx": "approx.",
-  "cg.approxTitle": "Too many files to count fully — this is a lower bound",
-  "cg.readFail": "read failed",
-  "cg.kids": "Items",
-  "cg.del": "Remove",
-  "cg.delConfirm": "Remove \"{n}\" from the overview? Nothing on disk is touched.",
-  "cg.fail": "Operation failed: ",
-  "cg.needBoth": "Both name and folder are required",
-  "cg.added": "Added: ",
-  "cg.sizeUnknown": "not measured",
-  "cg.noKids": "No items found",
-  "pane.packs": "Resource Packs",
-  "packs.import": "Import local pack", "packs.update": "Check updates on GitHub",
-  "packs.intro": "Resource packs are pure-JSON \"recognition & explanation\" data: what a folder/file is, whether it rebuilds automatically, what deleting means, when to keep it. The more packs installed, the higher the \"recognized\" share in cards and the disk tree. Drop in your own pack, or have the AI generate one for this machine.",
-  "pane.ai": "AI Assistant", "ai.optional": "optional",
-  "ai.intro": "Connect your own AI service (any OpenAI Chat Completions compatible endpoint) to explain cleanable items and generate cleanup plans from your requests. The key is stored only in <code>config/ai.json</code> on this machine and is sent nowhere except the endpoint you enter.",
-  "ai.base": "Endpoint", "ai.key": "API key", "ai.model": "Model",
-  "ai.enable": "Enabled", "ai.test": "Test connection",
-  "ai.planTitle": "Generate a cleanup plan",
-  "ai.planDesc": "Describe what you want cleaned, e.g. \"C: has only 8 GB left, pick out what's safe to clean\".",
-  "ai.askPh": "Describe your cleanup goal…",
-  "ai.planBtn": "Generate plan", "ai.clearBtn": "Clear result",
-  "ai.batchBtn": "Batch explain unknown",
-  "ai.working": "Working…",
-  "ai.batchNone": "No unrecognized items in current view",
-  "ai.batchFail": "Batch explain failed",
-  "ai.batchStat": "Explained {n} items (cached {c}, new {f})",
-  "ai.saveOv": "Save note",
-  "ai.savedOv": "Saved",
-  "pane.cum": "Cumulative Cleanup & Units",
-  "cum.manage": "Add / manage conversion units",
-  "unit.label": "Name", "unit.size": "Size", "unit.equals": "= 1 of this unit",
-  "unit.note": "Note", "unit.add": "Add unit", "unit.example": "Fill example",
-  "pane.rules": "Custom Rules",
-  "rules.hint": "Check fixed items and save them under a name",
-  "rules.help": "Save the current selection as a rule to re-apply it with one click later; tick \"Clean right after saving\" to clean these items immediately upon saving.",
-  "rules.namePh": "Name the rule, e.g. \"Weekly cache cleanup\"",
-  "rules.auto": "Clean right after saving",
-  "rules.saveBtn": "Save current selection as rule",
-  "rules.bundleHead": "Import / export custom data (units & explanations)",
-  "rules.bundleDesc": "Bundles conversion units, explanation/verdict overrides and fixed-item rules into one JSON for machine migration or for the AI to generate from the spec and import back. Format: docs\\CUSTOMIZE.md; every item is validated on import with a reason for each rejection.",
-  "bundle.export": "Export custom data", "bundle.import": "Import custom data",
-  /* ---- 动态文案（L2）：JS 渲染的提示、徽章、结论 ---- */
-  "badge.unk": "Unrecognized", "badge.clean": "Cleanable", "badge.keep": "Keep",
-  "fs.this": "This level ({n})", "fs.top": "Top level ({n})",
-  "fs.biggest": "Biggest items across the whole tree",
-  "fs.filesOnly": "Files only",
-  "fs.allClean": "All cleanable ({n})",
-  "fs.hintBiggest": "Big items sorted by size across all levels (container dirs excluded)",
-  "fs.hintClean": "Everything judged cleanable in the whole tree",
-  "fs.hintDrill": "Click a folder to drill down, a file for details",
-  "fs.hiddenTab": "System hidden items ({n})",
-  "fs.hintHidden": "Items Explorer hides by default ($RECYCLE.BIN, System Volume Information, NTFS metadata, hidden folders and files). Switch back with one click — no need to climb back up.",
-  "fs.emptyHidden": "No default-hidden items were found on this drive. If you are sure they exist (e.g. $RECYCLE.BIN), the scan depth may be too shallow — try a deeper or full scan.",
-  "fs.hiddenAggName": "System hidden items",
-  "fs.hiddenAggBadge": "Hidden",
-  "fs.hiddenAggDesc": "Items Explorer hides by default — click to expand/collapse",
-  "fs.hiddenAggCount": " ({n} items)",
-  "fs.hintWizOn": " (WizTree enabled — drill to any level)",
-  "fs.hintWizOff": " (No WizTree — deep drills scan on the fly, slower but work)",
-  "fs.emptyLayer": "Nothing above {h} at this level.",
-  "fs.emptyLayerTail": "Switch views above, or go back one level.",
-  "fs.pinned": "Pinned", "fs.pinnedTitle": "Pinned to the top of the ranking — right-click to unpin",
-  /* —— i18n L3 收尾：动态弹窗与行内文案（详情 / 删除 / AI / 细分 / 编辑 / 子树 / 后缀 / Steam 页）—— */
-  "det.title": "What is this item", "det.recognizedAs": "Identified as",
-  "det.category": "Category", "det.risk": "Risk level", "det.basis": "Basis",
-  "det.usage": "Size", "det.filesSuffix": "files", "det.modified": "Last modified",
-  "det.what": "What it is", "det.cleanHead": "Safe to clean",
-  "det.keepHead": "Keep / do not delete directly", "det.tip": "Tip: ", "det.path": "Path: ",
-  "det.noRule": "No rule matches this name in the knowledge base, so this tool makes no cleaning suggestion for it. You can add a rule in config\\filetypes.json or install a resource pack that covers it.",
-  "det.howClean": "Tick this row in the size ranking to include it in cleaning",
-  "det.noDel": "This tool will not delete this item",
-  "det.aiAsk": "Ask AI to explain", "det.custom": "Custom explanation",
-  "det.parts": "Break down: what can be deleted", "det.delGame": "Delete this game",
-  "det.reveal": "Show in Explorer", "det.locate": "Locate this folder",
-  "det.copy": "Copy path", "det.ok": "Got it",
-  "dg.head": "Delete game",
-  "dg.irreversible": "This cannot be undone", "dg.permanent": "The entire folder will be permanently deleted",
-  "dg.gameWhat": "the game itself, plus saves, configs and mods stored inside this folder",
-  "dg.savesSafe": "Most games keep saves in", "dg.savesWhere": "Documents\\My Games",
-  "dg.savesSafe2": "or platform cloud saves — unaffected. But before deleting, make sure",
-  "dg.savesSafe3": "nothing inside this folder is something you want to keep",
-  "dg.itemGame": "Game", "dg.location": "Location",
-  "dg.scanningSaves": "Looking for local saves…",
-  "dg.saferWay": "The safer way",
-  "dg.uninstallAdvice": "Uninstall from the {plat} client — it also clears the library record without leftovers. Deleting the folder directly also frees the space; the client will then show \"not installed\", and you can re-download to play again.",
-  "dg.willFree": "Estimated release", "dg.cancel": "Cancel", "dg.confirm": "Confirm delete",
-  "dg.noSaves": "No local saves with a matching name were found in common locations such as Documents\\My Games or AppData (this does not rule out platform cloud saves).",
-  "dg.savesFound": "Found {n} possible local save locations — deleting the game will not touch them (all outside the install folder). Back them up first if you want a thorough wipe:",
-  "dg.savesApprox": "approx.",
-  "dg.deleting": "Deleting…", "dg.deletingLong": "Deleting the whole folder; large folders may take tens of seconds…",
-  "dg.done": "Deleted", "dg.partial": "Partially deleted", "dg.failed": "Delete failed",
-  "dg.notFully": "Not fully deleted", "dg.freedSome": "Part of the space was released",
-  "dg.freedNone": "No space changed", "dg.freed": "Released",
-  "dg.freedNothing": "No space was released",
-  "dg.diskFree": "{letter}: currently {v} free.",
-  "dg.diskStale": "The disk overview was scanned before the deletion and is stale; run \"Full-disk scan\" again for fresh numbers.",
-  "dg.requestFail": "Request failed: ",
-  "ai.requesting": "Requesting…", "ai.explain": "AI explanation",
-  "ai.requestingSvc": "Requesting your configured AI service…",
-  "ai.disclaimer": "Generated by your own model; for reference only",
-  "ai.requestFail": "Request failed",
-  "part.open": "Open", "part.emptyGroup": "Nothing in this group",
-  "part.canExpand": "▸ Expandable", "part.whoTakes": "What takes up this level (sorted by size)",
-  "part.dirs": "Subfolders", "part.files": "Files", "part.count": "",
-  "part.allKids": "All child items · total {v}",
-  "part.treeTip": "Folders marked \"▸ Expandable\" can be expanded further (instant at any depth with WizTree acceleration). Green = cleanable per the knowledge base, orange = keep, grey = unknown to the knowledge base — no judgment made.",
-  "part.mftFast": "WizTree MFT acceleration",
-  "part.mftNote": "The child list comes straight from the full-disk MFT snapshot; the disk was not scanned again.",
-  "part.title": "Break down",
-  "part.analyzing": "Analyzing the items inside… (large folders may take seconds to tens of seconds)",
-  "part.privacy": "Only names and sizes are read — no file contents, nothing is modified.",
-  "part.back": "Back", "part.fail": "Analysis failed", "part.cantAnalyze": "Cannot analyze this folder",
-  "part.browserData": "Browser data", "part.gameInstall": "Game install",
-  "part.whatIs": "What is in this folder", "part.cacheBox": "Cleanable cache subfolders",
-  "part.items": "items", "part.ofTotal": "{n}% of total",
-  "part.gameBody": "Game data", "part.userData": "User data / program files",
-  "part.noJudge": "No judgment made", "part.denied": "Permission denied",
-  "part.deniedNote": "This folder needs administrator rights to be read fully; the sizes below may be underestimates. Reopen this tool as administrator for complete data.",
-  "part.sec1": "① Cache subfolders — rebuilt automatically after deletion",
-  "part.sec1Empty": "No cleanable cache subfolders were identified here, so the whole folder is not recommended for cleaning.",
-  "part.sec2": "② Do not delete these",
-  "part.keepBrowser": "User data such as bookmarks, passwords, cookies, sign-in state, extensions and history lives here, along with the browser's own files. Deleting it is unrecoverable — keep it as is, even if it \"looks big\".",
-  "part.keepGame": "These are part of the game itself (packs, executables, shader caches). Deleting any of them by hand can crash the game or force a tens-of-GB re-download. To reclaim this space, uninstall via Steam / the game's launcher.",
-  "part.keepUnknown": "This is not a cache, and not something this tool can judge for you. It only lays out the size distribution without conclusions — confirm the purpose yourself before deciding.",
-  "part.cacheGame": "A few games keep separate cache folders. Deleting them is safe — the game rebuilds them, though shaders may recompile and loading may be slower the first time.",
-  "part.cacheGeneric": "These are derived caches (Cache / Code Cache / GPUCache and the like) that programs regenerate on the next run; deleting them at most slows the first visit to a site. Clean them via the matching items in the main list instead of by hand.",
-  "ov.title": "Custom display — {n}",
-  "ov.badgeLabel": "Badge text (leave empty to restore the default \"Clean / Keep / Unrecognized\", max 16 characters)",
-  "ov.badgePh": "e.g. My downloads, keep for now",
-  "ov.kindLabel": "Badge style (click to pick; badge background and bar color follow together)",
-  "ov.follow": "Follow recognition", "ov.kColor": "Custom color",
-  "ov.colorNote": "Badge and bar both use this color",
-  "ov.noteLabel": "Description below (pre-filled with the current one; empty restores the recognized text, max 120 characters)",
-  "ov.notePh": "Text here replaces the description below the row",
-  "ov.pinLabel": "Pin to the top of the ranking",
-  "ov.pinDesc": "(pin this deep folder to the first level of the size ranking so you don't have to click down layer by layer; untick to restore. Stored in local custom data and travels with migrated data)",
-  "ov.warn": "Note: badge style and color are display preferences only — they never change this tool's risk verdict for the folder, nor turn \"Keep\" into an auto-checked \"Clean\".",
-  "ov.cancel": "Cancel", "ov.save": "Save",
-  "ov2.title": "Custom explanation — {n}",
-  "ov2.intro": "Edited text shows on cards and in details; \"Verdict\" decides whether it counts as cleanable (affects \"Select cleanable\" and the badge). Your edits take priority over built-in text and resource packs.",
-  "ov2.what": "What it is", "ov2.rebuild": "Rebuildable?", "ov2.impact": "Delete impact",
-  "ov2.keepIf": "Keep if", "ov2.verdict": "Verdict",
-  "ov2.followDefault": "Follow default verdict", "ov2.cleanable": "Cleanable",
-  "ov2.notCleanable": "Not cleanable (keep)",
-  "ov2.riskNote": "Note: marking a high-risk item \"Cleanable\" does not lower its risk level; cleaning still treats it as high risk (deleted to the Recycle Bin by default).",
-  "sub.expand": "Expand ▾", "sub.collapse": "Collapse ▴",
-  "sub.scanning": "Scanning child items on demand…",
-  "sub.none": "No visible subfolders here, or empty.",
-  "sub.loadFail": "Failed to load: ",
-  "sub.showMore": "Show more ({n} more)",
-  "sub.truncated": "This level has {total} items in total; only the top {listed} by size are listed.",
-  "sub.gameBody": "game data", "sub.gameLib": "Game library",
-  "sub.expandTitle": "Expand child items in place",
-  "sf.steamGame": "Steam game", "sf.steamLib": "Steam library",
-  "sf.epicGame": "Epic game", "sf.gogGame": "GOG game",
-  "sf.gameLib": "game library", "sf.file": "file", "sf.dir": "folder",
-  "sf.locatedAt": "in {v}",
-  "st.gamesSuffix": "games", "st.countSuffix": "",
-  "st.driveSuffix": "drive",
-  "st.loading": "Reading the Steam manifest…",
-  "st.notFound": "No Steam installation detected, or no installed games in its libraries.",
-  "st.notFoundNote": "This tool looks for Steam in the registry and common paths, then reads libraryfolders.vdf. If your Steam lives in an unusual location, tell me the library path and I'll add a rule.",
-  "st.installedGames": "Installed games", "st.totalSize": "Steam recorded total",
-  "st.libCount": "Steam libraries",
-  "st.filtered": "{n} matched", "st.totalN": "{n} in total",
-  "st.noMatch": "No matching games.", "st.neverPlayed": "Never played",
-  "st.orphanExpand": "Click to expand · tick items to delete in bulk",
-  
-  
-  "st.staleDays": "{n} days since last play",
-  "st.gameBodyClean": "Game data · Cleanable", "st.gameBodyKeep": "Game data · Keep",
-  "st.recSizeAt": "Steam recorded size · in {v}", "st.missing": "Folder missing",
-  "st.detailTitle": "Steam game (read from the Steam manifest)",
-  "st.confidence": "High (Steam's own records)",
-  "st.impact": "Steam recorded size {size}; last updated {updated}; last played {played} ({stale}).",
-  "st.noRecord": "no record", "st.playedRecently": "played recently",
-  "st.orphanFoundAny": "{n} leftover folders found (Steam / Epic / GOG)",
-  "st.suggCount": "{n} suggested for recycling",
-  "st.suggGroup": "Suggested for recycling (big installs not played in a long while)",
-  "st.orphanGroup": "Leftover folders",
-  "st.orphanTotal": "(total {v})",
-  "st.orphanNoteSteam": "Usually leftovers from incomplete uninstalls — the most rewarding space to reclaim.",
-  "st.orphanCheck": "But make sure nothing inside is worth keeping first",
-  "st.orphanSavesMaybe": "some games keep saves or mods here.",
-  "st.delete": "Delete", "st.openDir": "Open folder",
-  "st.epicTitle": "Epic games", "st.epicSource": "Epic launcher's .item manifests",
-  "st.gogTitle": "GOG games", "st.gogSource": "GOG registry",
-  "st.zeroGames": "0 games",
-  "st.goCustom": "Add a game library manually",
-  "st.trendLbl": "Game library size trend: {a} → {b} ({pct}%)",
-  "st.recHint": "Tick items, then delete them together with the main \"Clean selected\" button",
-  "st.growWarn": "Heads-up: the game library grew ~{v} (+{pct}%) in the last week — check whether a big new install landed, or some game's saves / mods are ballooning.",
-  "st.exportLbl": "Game list:",
-  "st.exportCsv": "Export CSV", "st.exportMd": "Export Markdown",
-  "st.exported": "Exported {n} game records",
-  "ow.head": "{n} uninstall leftover folders found ({v} in total) — the most rewarding space to reclaim.",
-  "ow.go": "Review now", "ow.dismissTitle": "Don't show again this session",
-  "dg.riskRemember": "I understand the risks; don't show the long warning again",
-  "dg.riskRestore": "Restore full warnings",
-  "st.platDetailTitle": "{label} (read from {src})",
-  "st.platConfidence": "High ({label}'s own records)",
-  "st.platImpact": "Manifest/registry recorded size {v}.",
-  "fs.cachedResult": "{drive}: scanned {mins} min ago (click \"Full-disk scan\" to force a rescan)",
-  "fs.scanningFull": "Full-disk scan running…", "fs.driveHint": "{drive}: drive",
-  "fs.progressInd": "Total work is unknown at this step; the stripes mean it is still moving",
-  "fs.progressPct": "Overall progress {n}%",
-  "fs.scanFail": "Disk overview scan failed: ",
-  "fs.scanFailHint": "You can first confirm the server works from a command line:",
-  "fs.noWiztreeOnTheFly": "WizTree acceleration is off; scanning this folder on the fly (may take seconds)…",
-  "fs.tagline": "{drive}: drive · {explained} identified · {depth} level(s){engine}",
-  "fs.mftFast": " · WizTree MFT accelerated", "fs.mftFast2": "WizTree MFT acceleration",
-  "fs.mftOwnFast": " · Direct MFT read", "fs.mftOwn2": "Direct MFT read",
-  "fs.mftOwnStat": "MFT read: {n} records, parsed in {s}s",
-  "fs.mftOwnNote": "<span>MFT engine: reads the NTFS Master File Table directly with admin rights — no external tool, no temp files.</span>",
-  "fs.psWalk": "PowerShell recursive scan",
-  "fs.wiztreeNote": "<span>Reads the MFT via the WizTree installed on this machine — faster than per-folder recursion; it is never installed or modified.</span>",
-  "fs.psHint": "<span>Currently scanning with PowerShell (slowest): WizTree is not installed and the process is not elevated. Click “Elevate & restart” (top right) to use the built-in MFT engine (fastest), or install WizTree to speed things up.</span>",
-  "fs.scannedNow": "Scanned this run",
-  "fs.extFilesShort": "files",
-  "fs.extOther": "Other types", "fs.extNone": "no extension",
-  "fs.mixHead": "Of what was scanned, how much is cleanable vs. keep",
-  "fs.upLevel": "Up one level", "fs.curDir": "Current folder: ",
-  "fs.levelStat": "{n} items at this level, {v} total", "fs.parent": "Parent level",
-  "fs.tickTitle": "Tick to include this item in cleaning",
-  "fs.drillHint": "Open to see child items ›", "fs.detailBtn": "Details",
-  "scan.running": "Scanning…", "scan.tallying": "Tallying…",
-  "scan.lastTime": "Last scan {v}", "scan.fail": "Scan failed: ",
-  "drv.system": "System",
-  "drv.title": "{letter}: total {t}, {p}% used, {f} free",
-  "drv.free": "{v} free",
-  "gd.admin": "Administrator rights",
-  "gd.adminOk": "Present — Recycle Bin and Windows\\Temp can be tallied",
-  "gd.adminNo": "Missing. Recycle Bin and Windows\\Temp will show \"needs administrator\"; click Elevate & restart above or right-click O-Cleaner.exe → Run as administrator",
-  "gd.dataDir": "Data folder", "gd.unknown": "(unknown)",
-  "gd.redirected": "(redirected here)",
-  "gd.dataDirNote": "(next to the program by default: history and configs live inside, copy the whole folder to migrate, USB sticks included)",
-  "gd.dataWrite": "Data folder writable",
-  "gd.dataWriteOk": "Verified writable — history and configs save normally",
-  "gd.dataWriteNo": "NOT writable! History and configs cannot be saved. Move the whole program to a writable folder (not Program Files or similar protected locations), or run as administrator",
-  "fs.chartPending": "When the scan finishes, the size ranking and drill-down will appear here.",
-  "gd.ready": "Ready", "gd.bundled": "Bundled here", "gd.sysInstalled": "Installed on system",
-  "gd.mftFast": "Full-disk scans read the MFT — much faster than recursion.",
-  "gd.portableNote": "This copy lives in the O-Cleaner folder; copy it to another PC and it just works.",
-  "gd.notInstalled": "Not installed",
-  "gd.withoutNote": "It works without it, but full-disk scans fall back to recursion and take noticeably longer.",
-  "gd.wiztree": "WizTree acceleration",
-  "gd.downloadBtn": "Download the WizTree portable edition (about 7.5 MB)",
-  "gd.downloadNote": "Download the portable edition from the official diskanalyzer.com and unzip it into",
-  "gd.portableProps": "<b>No system install, no registry, no administrator rights</b>; copy the folder to another PC and it takes effect immediately.",
-  "gd.licenseHead": "Third-party component", "gd.homepage": "Homepage", "gd.distLicense": "Distribution license",
-  "wiz.downloading": "Downloading and extracting…", "wiz.retry": "Retry download",
-  "wiz.unknown": "unknown reason",
-  "packs.hint": "{live}/{total} enabled · {n} entries", "packs.none": "No resource packs in the packs/ folder yet.",
-  "packs.entries": "{n} entries", "packs.userSrc": "Imported", "packs.builtinSrc": "Built-in",
-  "packs.cantEnable": "Cannot enable: ", "packs.del": "Delete",
-  "packs.updateFail": "Update failed: ", "packs.updateDone": "Update finished: {ok} ok{bad}",
-  "packs.updateBad": ", {n} failed", "packs.applied": "Applied", "packs.opFail": "Operation failed: ",
-  "ai.keySaved": "Saved (ends {tail}); leave empty to keep it", "ai.ready": "Ready",
-  "ai.keyStored": "Key stored locally in <code>config/ai.json</code>",
-  "ai.noKey": "No key yet. Only the endpoint you enter yourself will ever receive it.",
-  "ai.saved": "Saved", "ai.saveFail": "Save failed", "ai.requesting2": "Requesting…",
-  "ai.fetchModels": "Fetch list", "ai.fetching": "Fetching…",
-  "ai.clearKey": "Clear key", "ai.keyCleared": "Key cleared",
-  "ai.modelsGot": "Found {n} models — click the model input to pick one from the suggestions",
-  "ai.guideTitle": "How to connect? — setup guide",
-  "ai.guide1": "Get an OpenAI-compatible endpoint: for DeepSeek, register at platform.deepseek.com and create an API key; local Ollama needs no key.",
-  "ai.guide2": "Click the DeepSeek / Ollama chip above to fill the base URL (or type any compatible URL).",
-  "ai.guide3": "Paste your key into the key box — it stays in local config/ai.json and is only sent to the endpoint you entered.",
-  "ai.guide4": "Click \"Fetch list\" to auto-detect available models and pick one from the suggestions (DeepSeek: deepseek-chat; reasoning model: deepseek-reasoner).",
-  "ai.guide5": "Check \"Enabled\" → Save → Test connection.",
-  "ai.unknown": "unknown reason",
-  "ai.testOk": "Connection OK, model replied: ", "ai.empty": "(empty)",
-  "ai.testFail": "Connection failed: ", "ai.genFail": "Generation failed",
-  "ai.pickedFrom": "Picked {m} of {n} items the built-in rules marked cleanable",
-  "ai.noCandidates": "No candidates yet — they appear after the regular scan confirms cleanable items on this drive",
-  "ai.noSummary": "(the model gave no summary)",
-  "ai.dropped": "; the model also mentioned {n} ids not in the list, dropped",
-  "ai.applyPicks": "Select only these {n} items",
-  "ai.applyNote": "After selection you still click \"Clean selected\" at the bottom to actually run it. AI can never delete anything by itself.",
-  "ai.rawReply": "Raw model reply",
-  "cc.selectedOnly": "Only the {n} ticked sub-items", "cc.emptyAll": "Empty the whole Recycle Bin",
-  "cc.nonCleanNote": "Not recommended by the tool (keep/unrecognized): you ticked it explicitly; the server still applies system-folder protection",
-  "cc.recycleSugg": "Recycle suggestion: game data not played in a long while; the whole folder will be deleted",
-  "cc.recycleOrphan": "Uninstall leftover folder; the whole folder will be deleted",
-  "cc.recycleProgress": "Deleting recycle item {i}/{n}: {name}",
-  "cc.pathNote": "Empty the folder contents (the server re-identifies and re-checks)",
-  "cc.title": "Confirm clean — {drive}: drive · This cannot be undone",
-  "cc.nonCleanHead": "{n} \"keep / unrecognized\" items are included — the tool does not recommend deleting them:",
-  "cc.nonCleanBody": "These are not caches; they may be program data, personal files, or folders whose purpose cannot be judged. Deletion may be unrecoverable. Please make sure you have inspected the contents yourself.",
-  "cc.andMore": "…and {n} more", "cc.riskyHead": "Irreversible or diagnosis-affecting items are included:",
-  "cc.risk": "risk", "cc.trashNote": "unrecoverable once the bin is emptied",
-  "fs.grp": "Group", "fs.grpTitle": "File this item into a custom group",
-  "fs.grpMgr": "Manage", "fs.grpMgrTitle": "Manage members and name of this group",
-  "grp.dlgTitle": "File \"{v}\" into a group", "grp.alreadyIn": "Already in these groups:",
-  "grp.canJoin": "Available groups:", "grp.remove": "Remove", "grp.join": "Add",
-  "grp.newNamePh": "New group name, e.g. Games", "grp.create": "Create and file",
-  "grp.close": "Close", "grp.fail": "Operation failed: ",
-  "grp.mgrTitle": "Manage group \"{v}\"", "grp.rename": "Rename",
-  "grp.members": "Members ({n}):", "grp.noMembers": "(no members)",
-  "grp.delete": "Delete group",
-  "cc.diagNote": "deleting loses historical diagnosis clues",
-  "cc.trashOpt": "Send high-risk items to the Recycle Bin (recoverable; space is only freed when the bin is emptied and is not counted above)",
-  "cc.adminNote": "These need administrator rights and will fail with normal rights:",
-  "cc.thItem": "Item", "cc.thPath": "Path", "cc.thSize": "Size", "cc.thFiles": "Files",
-  "cc.progressing": "Deleting per the list; files in use are skipped automatically.",
-  "cc.total": "{n} items, estimated release", "cc.cancel": "Cancel",
-  "cc.goAnyway": "Delete anyway ({n} not-recommended items included)", "cc.go": "Confirm delete",
-  "cc.cleaning": "Cleaning",
-  "cr.freed": "Released this run",
-  "cr.trashedNote": "Some high-risk items went to the Recycle Bin (recoverable): that space is freed when the bin is emptied and is not counted above.",
-  "cr.thFreed": "Released", "cr.thDeleted": "Deleted", "cr.thSkipped": "Skipped",
-  "cr.inBin": "{n} items moved to the Recycle Bin; freed when the bin is emptied",
-  "cr.toBin": "→ Recycle Bin",
-  "cr.skippedHead": "These were skipped — in use, no permission, or path missing (not an error):",
-  "cr.locked": "in use", "cr.andNMore": "and {n} more",
-  "cr.cumulative": "Total released so far {v}; conversions on the right panel are updated.",
-  "cr.onceHead": "One-time files — deleted for good, they will not come back",
-  "cr.unkHead": "Other items (no rebuild info)",
-  "cr.regenHead": "Caches — rebuilt automatically, no need to worry",
-  "cr.done": "Done",
-  "eb.scopeNote": "Only removes the {n} items this run moved into the bin and frees their space for good; other contents of the bin are untouched. Unrecoverable.",
-  "eb.armConfirm": "Confirm empty (unrecoverable)", "eb.emptying": "Emptying",
-  "sch.off": "Not enabled. Enable it and keep this service window open for runs to happen.",
-  "sch.never": "never", "sch.next": "Next: ", "sch.last": "Last: ",
-  "sch.saved": "Saved", "sch.saveBtn": "Save schedule",
-  "sch.enable": "Enable (takes effect while the service runs)",
-  "sch.every": "Every", "sch.hoursPreset": "hours, with preset",
-  "hist.none": "No records yet", "hist.lockedN": "{label} ({n} items in use)",
-  "hist.freed": "Released {v}", "hist.nothing": "Nothing cleanable", "hist.skipped": "Skipped: ",
-  "hist.receiptBtn": "receipt", "hist.receiptNone": "Full record for this entry not found",
-  "hist.receipt": "Export per-item receipt (JSON) for this cleanup",
-  "hist.searchPh": "Search folder / time…",
-  "hist.receiptsBtn": "Receipts",
-  "rcp.title": "Cleanup Receipts Archive",
-  "rcp.ph": "Search receipts by path / folder / trigger…",
-  "rcp.search": "Search",
-  "rcp.loading": "Loading receipts archive…",
-  "rcp.empty": "No matching cleanup receipts found",
-  "rcp.items": "{n} items",
-  "rcp.detail": "Details",
-  "rcp.trashed": "→ Recycle Bin",
-  "rcp.noItems": "No item details recorded",
-  "hist.detailBtn": "Details",
-  "hist.detailTitle": "Per-item view of what was deleted",
-  "hist.detailTitle2": "Cleanup details",
-  "hist.toTrash": "Recycle Bin",
-  "hist.searchNone": "No cleanup records matching “{kw}”",
-  "ai.ollamaOk": "Connected to local Ollama (offline, zero data leaves the machine). Model: ",
-  "ai.ollamaEmpty": "Local Ollama is reachable but has no models yet (ollama pull one first)",
-  "ai.ollamaDown": "Local port 11434 not responding: Ollama may not be running. Start it and click again",
-  "dup.keep": "Keep (baseline)",
-  "dup.go": "Clean selected (move to Recycle Bin)",
-  "dup.none": "Select the copies to clean first",
-  "dup.confirm": "Move the selected {n} copies to the Recycle Bin? (restorable anytime)",
-  "dup.working": "Moving to Recycle Bin…",
-  "dup.done": "Moved {n}/{total} copies to the Recycle Bin",
-  "btn.jm": "Disk Relocation",
-  "btn.bloat": "Bloatware Removal",
-  "bw.title": "Bloatware Removal",
-  "bw.loading": "Scanning against signature library (registry uninstall entries + known dirs)…",
-  "bw.n": "{n} found",
-  "bw.uninstall": "① Run official uninstaller",
-  "bw.unTip": "After the uninstall wizard finishes, come back and click “② Sweep leftovers”",
-  "bw.residue": "Known leftover dirs: ",
-  "bw.sweep": "② Sweep leftovers (dirs to Recycle Bin + registry keys)",
-  "bw.clean": "No known bloatware from the signature library found on this machine ✓",
-  "bw.noReg": "No registry uninstall entry for this item; uninstall manually",
-  "bw.unLaunched": "Official uninstaller launched. After finishing the wizard, come back for “② Sweep leftovers”",
-  "bw.sweeping": "Sweeping…",
-  "bw.swept": "Leftover sweep finished (details recorded in cleanup history)",
-  "bw.rescan": "Rescan",
-  "bw.sweptDetail": "Sweep finished: {d} folders moved to Recycle Bin, {r} registry keys removed",
-  "jm.title": "Disk Relocation",
-  "jm.intro": "Move a space-hungry but undeletable directory to another drive and leave an NTFS Junction behind for transparent access. Verifiable end to end, restorable anytime.",
-  "jm.src": "Source directory:",
-  "jm.mode": "Destination:",
-  "jm.same": "Same-named directory on another drive (e.g. D:\SomeApp)",
-  "jm.custom": "Custom destination path",
-  "jm.drive": "Target drive:",
-  "jm.noDrive": "No other local drive found",
-  "jm.path": "Destination path:",
-  "jm.merge": "Merge if destination exists (same-name files auto-renamed; ideal for portable apps mistakenly installed on C:)",
-  "jm.warn": "Process: locked-file precheck → full copy → two-way verification → create Junction → remove staging (crash-recoverable). One-click restore from move records.",
-  "jm.go": "Start moving",
-  "jm.needSrc": "Enter the source directory",
-  "jm.needDst": "Enter the destination path",
-  "jm.working": "Moving (copy → verify → create mapping)…",
-  "jm.done": "Done: {files} files moved, Junction created at the original location.",
-  "jm.records": "Move records (one-click restore)",
-  "jm.restore": "Restore",
-  "jm.restored": "Restored to the original location",
-  "fs.searchPh": "Search file / folder names across the drive, press Enter…",
-  "fs.searchTitle": "Full-drive search",
-  "fs.searching": "Searching the scan cache…",
-  "fs.searchNone2": "No matches in the scan cache",
-  "btn.snapDiff": "Recent Spikes",
-  "sd.title": "Disk Snapshots",
-  "sd.loading": "Comparing scan snapshots…",
-  "sd.newDir": "New (not in the previous snapshot)",
-  "sd.was": "was",
-  "sd.calm": "No significant growth between snapshots ✓",
-  "hist.restore": "↩ Restore from Recycle Bin",
-  "hist.restored": "Restored to the original location",
-  "sd.hot": "Hot re-growth (grows back after cleaning; consider scheduled cleanup)",
-  "dl.archive": "Auto-archive by type",
-  "dl.undo": "Undo last archive",
-  "dl.arcConfirm": "Move all top-level files in Downloads into category subfolders? (undoable from this dialog)",
-  "dl.archiving": "Archiving…",
-  "dl.arcDone": "Archived {n} files into {cats}",
-  "dl.undoing": "Undoing…",
-  "dl.undone": "Last archive undone ({n} files moved back)",
-  "dw.extStale": "Showing the last full-scan distribution (persists across restarts); run a full scan to refresh",
-  "nav.an": "Analysis Hub",
-  "btn.moveSel": "Relocate selected to another drive",
-  "jm.noneSel": "Tick directories in the ranking first",
-  "jm.batchTitle": "Batch relocate ({n} dirs)",
-  "jm.batchIntro": "These checked directories will be moved to the target drive (Junction mapping, verified one by one, stops on hard failure):",
-  "jm.batching": "Relocating: {src}",
-  "jm.batchDone": "Batch relocate done: {ok}/{total} dirs succeeded",
-  "dup.all": "Select ALL duplicates",
-  "dup.none2": "Clear selection",
-  "dup.p0": "Preset: all sizes",
-  "dup.p1": "Preset: groups ≥1GB",
-  "dup.p5": "Preset: groups ≥5GB",
-  "dup.keepNew": "Keep newest",
-  "dup.keepOld": "Keep oldest",
-  "dup.extAll": "All extensions",
-  "dup.pickedN": "{n} duplicates checked",
-  "dup.prog": "Full-hash verification: {done}/{total} files",
-  "jm.sub": "Target subfolder (optional, auto-created):",
-  "jm.subPh": "Empty = relocate into the target drive root",
-  "dl.catAll": "tick = archive this whole category",
-  "dl.arcSel": "Archive checked",
-  "dl.arcSelN": "Archive checked ({n})",
-  "dl.arcSelDone": "Archived {n} files into {cats}",
-  "dl.noneSel": "Tick files to archive first",
-  "sd.sub": "Two-snapshot diff: who is eating space, what is new",
-  "sd.drive": "Drive:",
-  "sd.days": "Compares snapshots of the last 7 days",
-  "sd.dirTitle": "Directory size changes (by delta)",
-  "sd.noDiff": "No directory size change between the two snapshots",
-  "sd.nfTitle": "New files",
-  "sd.nfN": "{n} files · {v}",
-  "sd.nfNone": "No new files",
-  "sd.nfOld": "Baseline snapshot predates the file list — compare again tomorrow",
-  "dup.xdir": "Cross-directory copies — likely bundled with each app (removing may break it); unchecked by default",
-  "dup.samedir": "Same-directory copies (backup/export), safe to clean",
-  "sd.growthLbl": "Space growth ranking (top 12)",
-  "sd.shrinkLbl": "Space shrink ranking (top 12)",
-  "dup.useGlobal": "Tick items, then use the global “Clean selected” button at the bottom",
-  "sd.nfOther": "Other directories",
-  "sd.nfMerged": "multiple directories merged",
-  "sd.nfTrunc": "showing first {n} only",
-  "sd.cmpTitle": "Then vs now (top-level dirs · gray bar = before · colored bar = now)",
-  "dup.gChkTitle": "tick = select all copies in this group",
-  "dup.xdirTag": "Cross-directory",
-  "dup.xdirAck2": "confirm redundant",
-  "bf.done": "Moved {n}/{total} big files to the Recycle Bin",
-  "cc.bfNote": "Big-file ranking selection: file-level cleanup, restorable from the Recycle Bin",
-  "bf.gChkTitle": "tick = select all big files in this directory",
-  "bf.gDesc": "Aggregated big files · click Expand for the files inside",
-  "bf.floorLbl": "Size ≥",
-  "bf.extAll": "All extensions",
-  "bf.filterEmpty": "No big files match the current filters",
-  "dw.pending": "Waiting for scan data — charts appear when the scan finishes",
-  "sd.nfDesc": "New files · click “Expand” for details",
-  "cc.dupNote": "Duplicate file copy (full SHA-256 verified against the kept baseline)",
-  "dup.xdirAck": "tick to confirm before checking the copies below",
-  "api.dead": "Service not back — rerun O-Cleaner manually and refresh this page",
-  "cr.permRetry": "Permanently delete these over-limit items (unrecoverable)",
-  "cr.permNote": "Skips the Recycle Bin and deletes directly; cannot be restored afterwards",
-  "cr.permConfirm": "Permanently delete? This skips the Recycle Bin and CANNOT be undone!",
-  "cr.permNoReq": "Original request not found — re-select and try again",
-  "sd.cmpLbl": "Then-vs-now (top 8): gray = before · blue = now",
-  "sd.now2": "now",
-  "btn.ac": "App Deep Clean",
-  "btn.tm": "Treemap",
-  "ac.title": "App Deep Clean",
-  "ac.loading": "Measuring per-app data directories…",
-  "ac.n": "{n} apps",
-  "ac.cache": "Cache · safe",
-  "ac.core": "Core · do not touch",
-  "ac.data": "User data · review",
-  "ac.clean": "Clean (to Recycle Bin)",
-  "ac.rescan": "Rescan",
-  "ac.cleanedH": "Moved to Recycle Bin ({v}, recorded in cleanup history)",
-  "ac.working": "Cleaning…",
-  "ac.cleaned": "Moved to Recycle Bin (recorded in history)",
-  "ac.none": "No signature-library app data dirs found on this machine",
-  "ac.tip": "core items (chat databases etc.) are never cleanable; data items (received files etc.) should be reviewed before removal.",
-  "tm.title": "Treemap",
-  "tm.loading": "Loading children from the scan cache…",
-  "tm.tip": "Click a block to drill down",
-  "tm.back": "Back to parent",
-  "dl.go": "Clean selected (to Recycle Bin)",
-  "dl.none": "Select files to clean first",
-  "dl.confirm": "Move the selected {n} files to the Recycle Bin? (restorable anytime)",
-  "dl.working": "Cleaning…",
-  "dl.done": "Moved {n}/{total} files to the Recycle Bin",
-  "foot.afterClean": "after cleaning {drive}: would have about",
-  "stat.runs": "{n} runs recorded",
-  "stat.empty": "No cleaning history yet. After the first clean, this shows the cumulative release converted into everyday units.",
-  "stat.tooSmall": "The cumulative amount is too small for these units (under 0.01 of a unit).",
-  "stat.barTitle": "{time}  {trigger}  released {v}",
-  "stat.cumFreed": "Total released", "stat.runN": "{n} cleanups",
-  "stat.since": "since {v}",
-  "stat.detail": "Detailed charts (trend / categories / drives / items)",
-  "stat.byDrive": "By drive", "stat.timeline": "Per-run release (oldest left, {n} runs)",
-  "stat.dayTrend": "Daily release, last 30 days (grey = no cleanup)",
-  "stat.dayTitle": "{day}  released {v} ({n} runs)",
-  "btn.dupFiles": "Duplicate large files",
-  "btn.dlAdvice": "Downloads tidy-up",
-  "btn.dense": "Compact rows",
-  "btn.denseOff": "Cozy rows",
-  "dup.title": "Duplicate large files",
-  "dup.loading": "Verifying sample hashes (based on scan cache, quick)…",
-  "dup.n": "{n} groups · floor {v}",
-  "dup.sameSize": "{n} identical copies, {v} each",
-  "dup.wasted": "reclaimable {v}",
-  "dup.empty": "No duplicate large files found (≥ {v} with identical content)",
-  "dup.filterEmpty": "No duplicate groups match that extension",
-  "dl.title": "Downloads tidy-up",
-  "dl.loading": "Categorising your Downloads folder…",
-  "dl.n": "{n} files · {v} total",
-  "dl.empty": "Downloads folder is empty",
-  "ov2.exclude": "Exclude forever",
-  "ov2.excludeHint": "Remove this folder from the cleanup list (still visible in usage ranking with an \"Excluded\" badge). Uncheck here anytime to restore.",
-  "fs.excluded": "Excluded",
-  "fs.excludedTitle": "Excluded permanently: not in the cleanup list. Right-click → Customize to undo.",
-  "sch.sumHead": "Scheduled cleanup finished in the background",
-  "sch.sumBody": "{time}, cleaned {n} targets, freed {v}{fail}",
-  "sch.sumFailed": "{n} failed",
-  "sch.sumOk": "Got it",
-  "cr.top3": "Top contributors",
-  "cr.secsShort": "sec",
-  "cr.failedShort": "skipped/failed",
-  "disk.fullBtn": "Full scan",
-  "disk.fullTitle": "Full-scan {d}: to see where the space goes",
-  "stat.byCat": "By category", "stat.topItems": "Top contributing items",
-  "stat.all": "Show all",
-  "unit.basis": "(basis)", "unit.expr": "Formula: ", "unit.del": "Del",
-  "unit.none": "No custom units yet.", "unit.defaultNote": "Custom unit",
-  "unit.exLabel": "concert recordings", "unit.exNote": "Example: estimated at 8 GB per recording",
-  "rule.selectedN": "{n} items ticked", "rule.selectedNone": "Nothing ticked",
-  "rule.none": "No rules yet. Tick cleanup items above and save them under a name.",
-  "rule.cleanedOnSave": "Cleaned on save",
-  "rule.stat": "{n} items · currently frees {v}",
-  "rule.missing": " · {n} items don't apply to this drive",
-  "rule.andMore": "…{n} more", "rule.apply": "Apply to selection",
-  "rule.run": "Clean now", "rule.rename": "Rename",
-  "rule.newNamePrompt": "New rule name:", "rule.cleanTitle": "Rule \"{n}\"",
-  "io.unitsAdded": "units +{n}", "io.unitsUpdated": "units ~{n}",
-  "io.overrides": "{n} explanations", "io.rulesAdded": "rules +{n}", "io.rulesUpdated": "rules ~{n}",
-  "io.skippedN": "({n} skipped, see console)", "io.nothing": "Nothing to import",
-  "io.badJson2": "Not valid JSON: ", "io.validating": "Validating and importing…",
-  "io.imported2": "Imported: ", "io.importFail2": "Import failed: ",
-  "io.downloading": "Downloading from the remote manifest…",
-  "lk.open": "Find locking processes", "lk.scopeNote": "Only candidate programs are listed; closing them is up to you",
-  "lk.notLocked": "These are not \"in use\" — the paths don't exist or lack permission, so there is nothing to look up.",
-  "lk.searching": "Searching…",
-  "lk.checking": "Checking {n} files and enumerating system processes, please wait…",
-  "lk.hitFiles": "({n} files hit)", "lk.thProc": "Process", "lk.thWhy": "Basis",
-  "lk.checkHead": "Lock check", "lk.lockedN": "{n} files are genuinely held open by other processes",
-  "lk.unknownN": "; {n} more could not be judged (insufficient rights; run as administrator to read more)",
-  "lk.truncated": "; too many files, only the first 80 were checked",
-  "lk.noneNow": "If none of them are locked right now, simply clean again.",
-  "lk.stopRetry": "Stop selected processes & retry clean",
-  "lk.stopNone": "Please select at least one process first",
-  "lk.stopConfirm": "Stop the selected processes and retry cleanup? Unsaved work may be lost:\n",
-  "lk.stopDone": "Stopped {s} process(es) ({f} failed)",
-  "lk.stopFail": "Failed to stop process: ",
-  "lk.strong": "Likely (the program lives in that folder, or its command line contains the full path)",
-  "lk.weak": "Also worth a look (the command line contains a file with the same name)",
-  "lk.noCandidate": "No suspicious process was located — that is normal; Windows offers no API to map a file handle back to its process. Open \"Task Manager → Performance → Resource Monitor → CPU → Associated Handles\" and search the file name there to find the real holder.",
-  "lk.psError": "Process enumeration did not finish: ",
-  "lk.disclaimer": "※ These are <b>candidates</b>, not proof; <b>never end system processes such as System or explorer.exe</b>. Most programs release their locks as soon as you save and exit them — then come back and clean again.",
-  "lk.fail": "Search failed: ",
-  "acc.toggle": "Click to expand / collapse", "acc.goto": "Expand and jump to this panel",
-  "esc.busy": "A scan is running; press Esc again after it finishes",
-  "clean.done": "Cleaning finished",
-  "packs.confirmDel": "Delete resource pack \"{n}\"?\n", "packs.confirmDel2": "Its explanations stop taking effect immediately; re-import to restore them.",
-  "fs.stale1": "Content was just deleted; the usage tree is stale. ",
-  "fs.stale2": "Click \"Full-disk scan\" in the toolbar to rescan.",
-  "st.gameBody": "Game install",
-  "sort.size": "By size", "sort.name": "By name",
-  "stSort.size": "By size", "stSort.stale": "Least recently played",
-  "scan.doing": "Scanning {n}: drive", "scan.elapsed": "Elapsed",
-  "scan.sec": "s", "scan.prep": "Preparing…",
-  "scan.facts": "Expanding {n} levels; click deeper folders to drill down (sortable by size/name). ",
-  "scan.keepOpen": "Keep this window and the console window open.",
-  "scan.wizOn": " (WizTree acceleration enabled)",
-  "scan.wizOff": " (No WizTree — recursive scan will be slower)",
-  "scan.mftOn": " (Built-in MFT direct read selected)",
-  "scan.mftNeedAdmin": " (MFT requires Admin — falling back to available engine)",
-  "scan.autoBoth": " (Auto-fast: WizTree / Built-in MFT)",
-  "toast.noPath": "Can't open this path (may not exist or no permission)",
-  "toast.openFail": "Open failed: ",
-  "toast.picked": "Picked {n} items — click \"Clean selected\" at the bottom",
-  "toast.notCleanable": "These items are not cleanable right now; ignored",
-  "toast.ruleApplied": "Rule \"{n}\" applied — click \"Clean selected\" at the bottom to run",
-  "toast.renamed": "Renamed",
-  "toast.ruleDeleted": "Rule deleted",
-  "toast.ruleSaved": "Rule \"{n}\" saved ({m} items)",
-  "toast.merged": "Merged {n} nested selections (only the smallest items will be cleaned)",
-  "toast.deleted": "Deleted {n}, freed {v}",
-  "toast.saveFail": "Save failed: ", "toast.saveRetry": "Save failed, please retry",
-  "toast.opRetry": "Operation failed, please retry",
-  "toast.copied": "Path copied", "toast.copyFail": "Copy failed — select the path text manually",
-  "toast.upLevel": "Back one level: ", "toast.atTop": "Already at the top level",
-  "toast.backFull": "Back to Scan Overview",
-  "toast.customDone": "Scanned custom directory: ",
-  "toast.scopeDrive": "Showing {n}: drive items only",
-  "toast.scopeAll": "Showing current drive + user-level caches",
-  "toast.unitAdded": "Unit added: ", "toast.historyCleared": "History cleared",
-  "clean.fail": "Clean failed: ", "btn.retry": "Retry",
-  "confirm.delRule": "Delete rule \"{n}\"?",
-  "confirm.clearHistory": "Clear all cleanup history? Cumulative stats reset to zero. This cannot be undone.",
-  "rule.needName": "Give the rule a name first",
-  "rule.needPick": "Pick some items to save first",
-  "rule.auto1": "Rule \"{n}\" will be saved and these {m} items cleaned immediately, freeing ",
-  "rule.auto2": "{v}.\n\nPermanent delete, not recycle bin. Continue?",
-  "rule.run1": "Run rule \"{n}\" now on {m} items, ",
-  "rule.run2": "freeing {v}.\n\nPermanent delete, not recycle bin. Continue?",
-  "rule.runFail": "Rule failed: ",
-  "eb.removed": "Removed {n} items from the recycle bin, freed {v}. ",
-  "eb.total": "Total freed so far {n}.",
-  "eb.removedToast": "Selected items removed from the recycle bin",
-  "eb.armLabel": "Empty these items from the recycle bin",
-  "eb.fail": "Empty failed: {n} (retry later)",
-  "eb.failToast": "Recycle-bin empty failed — see dialog",
-  "eb.chkPurge": "Permanently purge these {n} trashed item(s) now (checked = confirmed, irreversible)",
-  "eb.chkDefault": "Check this by default next time",
-  "eb.donePurge": "Done & Purge",
-  "packs.catalog": "Recommended Packs",
-  "packs.catLoading": "Matching local environment with community packs…",
-  "packs.envTag": "Detected environment: ",
-  "packs.recBadge": "Recommended",
-  "packs.enabledOk": "Enabled",
-  "packs.enableBtn": "Enable",
-  "packs.dlBtn": "Fetch & Enable",
-  "up.autoBtn": "1-Click Verified Update",
-  "up.updating": "Downloading & verifying…",
-  "up.done": "Updated {n} file(s) to v{v}. Restart O-Cleaner to take effect.",
-  "up.doneToast": "Verified update applied — restart O-Cleaner",
-  "btn.sysSlim": "System Slim",
-  "slim.title": "Windows Official Component Slimming",
-  "slim.loading": "Checking system component status…",
-  "slim.unsupported": "Not supported on this environment",
-  "slim.intro": "All actions run built-in Windows maintenance commands rather than deleting protected folders directly; administrator rights required.",
-  "slim.needAdm": "Currently running without administrator rights — click Elevate & restart above first.",
-  "slim.dismTitle": "WinSxS Component Store Cleanup (DISM)",
-  "slim.dismDesc": "Runs Dism.exe /StartComponentCleanup to safely remove superseded update backups while preserving OS integrity (takes 1–3 mins).",
-  "slim.hiberTitle": "Hibernation File (hiberfil.sys)",
-  "slim.hiberOn": "Enabled · Using {v}",
-  "slim.hiberOff": "Disabled · 0 B",
-  "slim.hiberDesc": "Runs powercfg /h off to immediately reclaim gigabytes on the system drive; disables Hibernate and Fast Startup (can be re-enabled here anytime).",
-  "slim.hiberOffBtn": "Disable & Reclaim",
-  "slim.hiberOnBtn": "Re-enable Hibernate",
-  "slim.doTitle": "Delivery Optimization Cache",
-  "slim.doDesc": "Clears Windows Update / Store P2P download cache via PowerShell.",
-  "slim.runBtn": "Run Cleanup",
-  "slim.confirm": "Run this official Windows maintenance command?",
-  "slim.running": "Running official maintenance command…",
-  "slim.doneFreed": "Completed, freed {v}.",
-  "slim.done": "Completed.",
-  "ov.resetDone": "Display reset to defaults", "ov.pinnedDone": "Pinned to the top",
-  "ov.savedDone": "Custom display saved", "ov.saved": "Custom description saved",
-  "ov.resetBtn": "Reset to defaults",
-  "ov.resetDescDone": "Descriptions reset to defaults",
-  "unit.deleted": "Unit deleted", "unit.needName": "Enter a unit name",
-  "unit.needSize": "Enter a size greater than 0",
-  "unit.exampleDone": "Example filled — click \"Add unit\"",
-  "custom.needPath": "Enter a directory path first",
-  "ai.needAsk": "Describe your cleanup goal first",
-  "wiz.already": "WizTree already available",
-  "wiz.ready": "WizTree portable ready — scans will be much faster",
-  "wiz.fail": "Auto install failed: ",
-  "io.exported": "Exported: conversion units / description overrides / fixed rules",
-  "io.exportFail": "Export failed, please retry", "io.badJson": "File is not valid JSON",
-  "io.imported": "Imported: ", "io.importFail": "Import failed, please retry",
-  "disk.unknownErr": "Unknown error",
-  "disk.total": "Total", "disk.used": "Used", "disk.free": "Free",
-  "sel.items": "items", "sel.free": "Estimated free", "sel.picked": "Picked",
-  "trend.freeLbl": "Free-space trend ({d1} ~ {d2}): {a} → {b} · min {min} · max {max}",
-  "tf.days": "Projected: drive {d}: will fill up in about {n} days (losing ~{v} per day — clean up soon)",
-  "tf.hot": "Frequently regrowing: {list} (grows back after cleaning; consider scheduled cleanup)",
-  "tf.dismiss": "Don't show again this session",
-  "eng.title": "Full-scan engine: auto = whoever is faster (WizTree first by default)",
-  "eng.auto": "Engine: auto (whoever is faster)",
-  "eng.wiztree": "Engine: WizTree first",
-  "eng.mft": "Engine: MFT direct read",
-  "eng.saved": "Scan engine preference saved: {p}",
-  "dw.trend": "Free-space trend", "dw.clean": "Cleanups", "dw.ext": "Type distribution",
-  "dw.loading": "Loading…", "dw.noClean": "No cleanups on this drive in the last 30 days",
-  "dw.extHint": "Run a full scan on drive {d}: to see the file type distribution here",
-  "trend.freePending": "Free-space trend records start today; the bars will appear from tomorrow",
-  "trend.tipFree": "Free",
-  "cr.lockHint": "Hint",
-  "btn.cleanSelected": "Clean selected",
-  "pane.sched": "Scheduled Auto-Clean",
-  "pane.aiprompt": "AI Prompts & Import",
-  "aiprompt.hint": "Presets · Edit & Save · 1-Click Import",
-  "aiprompt.help": "Generate prompts from presets (auto-including unrecognized items from the current scan), edit or save custom presets, and paste AI's JSON output below to apply in one click.",
-  "aiprompt.gen": "Refresh",
-  "aiprompt.copy": "Copy Prompt",
-  "aiprompt.namePh": "Preset name to save…",
-  "aiprompt.savePreset": "Save Preset",
-  "aiprompt.delPreset": "Delete",
-  "aiprompt.promptPh": "Select a preset or click Refresh…",
-  "aiprompt.importHead": "Paste AI's JSON output (auto-extracts ```json code blocks) to apply:",
-  "aiprompt.importPh": "Paste {\"kind\":\"ocleaner-custom\", ...} JSON from AI…",
-  "aiprompt.importBtn": "Import & Apply",
-  "aiprompt.clear": "Clear",
-  "aiprompt.grpBuiltin": "Built-in Presets",
-  "aiprompt.grpCustom": "My Custom Presets",
-  "aiprompt.refreshed": "Prompt refreshed with current scan",
-  "aiprompt.emptyPrompt": "Prompt is empty",
-  "aiprompt.copied": "Prompt copied to clipboard",
-  "aiprompt.needName": "Enter a preset name first",
-  "aiprompt.saved": "Custom preset saved: {n}",
-  "aiprompt.deleted": "Custom preset deleted",
-  "aiprompt.badJson": "No valid JSON object found — check that you copied the full AI output",
-  "aiprompt.importing": "Validating & importing…",
-  "comm.head": "Community · 1-Click Upload Rules to GitHub",
-  "comm.intro": "Share your path overrides, groups, or cleanup rules with the community: publishes a public Gist automatically if a GitHub token is configured in Cloud Sync, or copies & opens a pre-filled GitHub Issue with zero login required.",
-  "comm.all": "All custom data (overrides + groups + rules + units)",
-  "comm.ov": "Path overrides & groups only",
-  "comm.rules": "Fixed cleanup rules only",
-  "comm.units": "Conversion units only",
-  "comm.titlePh": "Rule title or app/scenario (optional)",
-  "comm.uploadBtn": "Upload Rules",
-  "comm.working": "Packaging & preparing upload…",
-  "comm.gistOk": "Public Gist created ({n} items) & JSON copied:",
-  "comm.issueOk": "Copied {n} items JSON & opened GitHub Issue:",
-  "comm.openIssue": "Open GitHub Issue",
-  "pane.rulesHub": "Rules · Presets · Packs",
-  "hub.rules": "My Rules",
-  "hub.presets": "AI Presets",
-  "hub.packs": "Packs",
-  "dw.extTop": "Top 12 only",
-  "dw.extAll": "Show all {n} types (scrollable)",
-  "sch.autostart": "Start with Windows (minimized to tray)",
-  "sch.autostartOn": "Autostart enabled (tray mode)",
-  "sch.autostartOff": "Autostart disabled",
-  "lk.rebootDel": "Schedule delete on reboot",
-  "lk.rebootConfirm": "Schedule {n} locked file(s) for deletion on next Windows reboot? (Requires Administrator)",
-  "lk.rebootDone": "Scheduled {s} file(s) for reboot deletion ({k} skipped)",
-  "lk.rebootFail": "Failed to schedule reboot deletion: ",
-  "mig.head": "Data Migration & Full Backup",
-  "mig.intro": "Relocate history, disk trends, and custom rules to a designated folder, or export a portable backup archive for cross-device recovery.",
-  "mig.dirPh": "New data folder, e.g. D:\\O-Cleaner-Data",
-  "mig.moveBtn": "Move Folder",
-  "mig.resetBtn": "Reset Default",
-  "mig.expBtn": "Export Full Backup (.zip)",
-  "mig.impBtn": "Restore Backup",
-  "mig.needDir": "Enter a target folder path first",
-  "mig.working": "Migrating data…",
-  "mig.moved": "Migrated {n} file(s) to {d}. Restart O-Cleaner to take effect.",
-  "mig.resetOk": "Reset to program folder. Restart O-Cleaner to take effect.",
-  "mig.restored": "Restored {n} file(s) successfully.",
-  "grp.listHead": "Custom Archive Groups",
-  "grp.pathCount": "{n} path(s)",
-  "grp.renamePrompt": "Enter new group name:",
-  "grp.renamed": "Group renamed",
-  "grp.delConfirm": "Delete group \"{n}\"? (Only dissolves the group; files on disk are untouched)",
-  "grp.deleted": "Group deleted",
-  "pane.history": "Recent Cleanups",
-  "pane.help": "Guide",
-  "unit.clearAll": "Clear all",
-  "fs.mftStat": "WizTree exported {n} rows, parsed in {s}s",
-  "help.body1": "The \"?\" on each card expands the full description of that category: what it is, whether it rebuilds automatically, the impact of deletion, and when to keep it.",
-  "help.body2": "<b style=\"color:var(--fg)\">Never touched</b><br>Your documents / pictures / Desktop, installed programs, downloaded AI models, <code>Windows\\Installer</code>, and the <code>WinSxS</code> component store.<br>Cleanup targets are guarded by the built-in protection list — the tool stays inside its bounds even if its config gets corrupted.",
-  "up.current": "Current version",
-  "up.check": "Check for updates",
-  "up.checking": "Checking…",
-  "up.uptodate": "Up to date",
-  "up.newer": "new version available — open the release page",
-  "up.fail": "Check failed",
-  "bf.title": "Largest files on this drive",
-  "bf.loading": "Scanning the whole drive for the biggest files (instant via the built-in MFT engine with admin rights)…",
-  "bf.n": "top {n}",
-  "bf.empty": "No files above the size floor",
-  "bf.age.all": "All time", "bf.age.7": "Last 7 days",
-  "bf.age.30": "Last 30 days", "bf.age.90": "Last 90 days",
-  "bf.age.empty": "No big files in that period",
-  "bf.reveal": "Open location in Explorer",
-  "bf.matched": "Filtered {m}/{n}",
-  "bf.reset": "Reset",
-  "bf.more": "Show all ({n} more folders)",
-  "cc.close": "Close"
-};
-/* 动态文案取词：en 界面且有词条时用译文，否则回落到调用处的中文原文。
-   词条支持 {n}/{m}/{v}/{h} 占位，调用侧 .replace 填值。
-   用 `key in` 判定而不是真值判断 —— 空字符串词条（如英文的量词后缀）
-   是合法译文，不能被当成「缺失」回落到中文。 */
-function t(key, zh) {
-  return i18nLocale() === "en" && key in I18N_EN ? I18N_EN[key] : zh;
-}
-/* 内置换算单位的英文显示（按 id 映射）：内置单位文案来自 config/convert.json
-   （中文种子数据），英文界面在这里换显示；自定义单位查不到映射，保持用户
-   原文 —— 用户自己起的名字本就该由用户自己负责语言。 */
-const I18N_UNITS_EN = {
-  photo:           { label: "phone photos",            note: "~3.5 MB per photo (iPhone/Android)" },
-  song:            { label: "MP3 songs",               note: "~8 MB per song at 320 kbps" },
-  doc:             { label: "office documents",        note: "~256 KB per doc (Word/Excel/PDF)" },
-  movie1080:       { label: "1080p movies",            note: "~2 GB per movie (streaming quality)" },
-  movie4k:         { label: "4K movies",               note: "~20 GB per movie (Blu-ray disc grade)" },
-  game:            { label: "AAA games",               note: "~48 GB per title (recent AAA installs)" },
-  hour_video:      { label: "hours of 1080p video",    note: "~3 GB per hour" },
-  installer:       { label: "installers",              note: "~512 MB per installer" },
-  gb:              { label: "GB",                      note: "Conversion base" },
-  hour_4k_netflix: { label: "hours of 4K streaming",   note: "~7 GB per hour (example: 1/3 of a 4K movie, shows expressions)" }
-};
-function uEn(u, field) {
-  if (i18nLocale() !== "en") return u[field];
-  const m = I18N_UNITS_EN[String(u.id || "").toLowerCase()];
-  if (!m) return u[field];
-  if (m[field] != null) return m[field];
-  // 英文的 label 本身就是复数名词 —— plural 缺省时直接用 label
-  if (field === "plural" && m.label != null) return m.label;
-  return u[field];
-}
-function i18nLocale() {
-  try {
-    const v = localStorage.getItem("oc-lang");
-    if (v === "en" || v === "zh") return v;
-  } catch (e) {}
-  // auto：浏览器语言 zh 开头用中文（即源码默认），其余一律英文
-  return (navigator.language || "").toLowerCase().indexOf("zh") === 0 ? "zh" : "en";
-}
-
-/** 后端 ?lang= 参数的统一取值（后端只认 "en"/"zh" 两个值）。
-    此前这个三元在 10 处 fetch 里各写一遍，口径漂移的风险就在那里。 */
-function langParam() {
-  return i18nLocale() === "en" ? "en" : "zh";
-}
 
 /** fetch + JSON 解析的统一入口。网络异常仍由调用方 try/catch 处理 ——
     这里只收拢「取回再 .json()」这段样板，不吞错误。 */
@@ -7999,80 +7187,6 @@ function _startReconnect() {
     }
   }, 2000);
 }
-/* 首次应用时把原文缓存到元素上（__i18n），切回中文直接还原，
-   不会与动态渲染互相踩 —— applyI18n 只碰带 data-i18n* 的元素。 */
-function applyI18n() {
-  const en = i18nLocale() === "en";
-  // 同步 <html lang>：屏幕阅读器、浏览器翻译与拼写检查都读它
-  document.documentElement.lang = en ? "en" : "zh-CN";
-  document.querySelectorAll("[data-i18n],[data-i18n-ph],[data-i18n-title],[data-i18n-html]").forEach(el => {
-    let o = el.__i18n;
-    if (!o) {
-      o = el.__i18n = {
-        text: el.textContent,
-        ph: el.getAttribute("placeholder"),
-        title: el.getAttribute("title"),
-        html: el.getAttribute("data-i18n-html") !== null ? el.innerHTML : undefined
-      };
-    }
-    const k = el.getAttribute("data-i18n");
-    if (k !== null) el.textContent = (en && I18N_EN[k]) || o.text;
-    // HTML 词条（内置常量，无用户输入）：像「说明」面板带 <code> 的段落
-    if (o.html !== undefined)
-      el.innerHTML = (en && I18N_EN[el.getAttribute("data-i18n-html")]) || o.html;
-    const kp = el.getAttribute("data-i18n-ph");
-    if (kp !== null) el.setAttribute("placeholder", (en && I18N_EN[kp]) || o.ph || "");
-    const kt = el.getAttribute("data-i18n-title");
-    if (kt !== null) el.setAttribute("title", (en && I18N_EN[kt]) || o.title || "");
-  });
-  const seg = $("langSeg");
-  if (seg) {
-    try {
-      const cur = localStorage.getItem("oc-lang") || "auto";
-      seg.querySelectorAll("button").forEach(b =>
-        b.classList.toggle("on", b.dataset.l === cur));
-    } catch (e) {}
-  }
-}
-function setLang(l) {
-  try { localStorage.setItem("oc-lang", l); } catch (e) {}
-  applyI18n();
-  applyDense();     // 密度按钮文案随语言切换
-  initPanelNav();   // 侧栏目录条取的是面板标题文本，翻译切换后重建一次
-  // 2026-11-24 修复：先清跨语言缓存再重画。旧顺序是「先用旧数据同步重画
-  // → 再清缓存异步重拉」——重画列表里的 renderSteamPage/renderChart 等
-  // 会用旧语言的负载把 DOM 写一遍，而 loadSteam(true)（Steam 清单重算
-  // 需数秒）完成前旧语言的 DOM 一直是最终态——游戏名在英文界面显示中文、
-  // 中文界面显示英文即由此而来。清缓存后重画落到 loading 空态，新语言
-  // 数据到达后由 loadSteam/renderChart 各自补画。
-  STEAM = null; GAMES = null;
-  // 动态渲染的文案（徽章、提示、磁盘概览、统计）按新语言重画；
-  // 各渲染器只碰自己的 DOM，失败静默忽略不影响其余部分。
-  // 未列出的：renderSteam/renderOtherPlatforms 由 renderSteamPage 覆盖；
-  // renderViewNav 无动态文案；renderSubdirList 需要行参数（子树弹窗内
-  // 行内文案，重开即新语言），不能无参调用。
-  ["renderChart", "renderDisk", "renderCumulative", "renderUnits",
-   "renderRules", "renderPresets", "renderPacks", "renderSteamPage",
-   "renderGuide", "drawDiskTrend", "renderDrives",
-   "renderConvToggle", "renderSchedule", "renderHistory", "renderOverview",
-   "renderAI", "renderCustomLibs", "renderSchSummary", "renderBfRows",
-   "renderFsGroups", "renderTrendBanner", "checkOrphanBanner"].forEach(fn => {
-    try { if (typeof window[fn] === "function") window[fn](); } catch (e) {}
-  });
-  // 后端返回的长文本（释义/建议）随请求的 lang 走：缓存已清，这里重拉，
-  // Steam/游戏面板与目标列表才会用新语言的文案
-  (async () => {
-    try { await loadState(); } catch (e) {}
-    try { await loadSteam(true); renderSteamPage(); } catch (e) {}
-  })();
-}
-function initLang() {
-  const seg = $("langSeg");
-  if (seg) seg.querySelectorAll("button").forEach(b =>
-    b.addEventListener("click", () => setLang(b.dataset.l)));
-  applyI18n();
-  applyDense();   // 恢复上次的行密度偏好（#39）
-}
 
 /* ==================== 启动 ==================== */
 (async () => {
@@ -8084,22 +7198,26 @@ function initLang() {
   // 先用默认盘拉一次，拿到盘符列表后决定起始盘，再正式加载。
   // 起始盘优先级：上次用的盘（还在）> 数据盘（非系统盘）> 第一个盘 ——
   // 数据盘的内容才是清理主战场，系统盘小文件极多、扫描慢，不该是默认落点。
+  let savedDrive = "";
+  try {
+    const saved = localStorage.getItem("oc-drive");
+    if (saved && /^[A-Z]$/i.test(saved)) savedDrive = saved.toUpperCase();
+  } catch (e) {}
   await loadState();
-  let want = null;
-  try { want = localStorage.getItem("oc-drive"); } catch (e) {}
+  const prevDrive = drive, prevScope = scope;
   const have = d => (STATE.drives || []).some(x => x.letter === d);
-  if (!want || !have(want)) {
+  if (savedDrive && have(savedDrive)) {
+    drive = savedDrive;
+  } else {
     const data = (STATE.drives || []).find(d => !d.is_system);
-    want = data ? data.letter : ((STATE.drives || [])[0] || {}).letter || drive;
-  }
-  if (want && want !== drive && have(want)) {
-    drive = want;
-    await loadState();
+    drive = data ? data.letter : ((STATE.drives || [])[0] || {}).letter || drive;
   }
   // 首屏按盘型定默认范围：系统盘看全部，数据盘只看本盘专属项 ——
   // 免得 D/E 盘一上来就混着 C 盘的用户级缓存（pip / 浏览器缓存）。
   applyDefaultScope();
-  await loadState();
+  if (drive !== prevDrive || scope !== prevScope) {
+    await loadState();
+  }
   // Steam 数据是读本地清单（秒级），与扫描互不依赖，异步加载不阻塞首屏
   loadSteam();
   // 启动后台常规项扫描（供「可清理项」面板即用，不阻塞下面的全盘扫描）

@@ -2905,7 +2905,13 @@ def phase3_http() -> None:
 
 
         html = urllib.request.urlopen(base + "/", timeout=5).read().decode("utf-8")
+
         html += "\n" + urllib.request.urlopen(base + "/styles.css", timeout=5).read().decode("utf-8")
+
+        for _js_src in re.findall(r'<script\s+src="(/js/[^"]+\.js)"', html):
+
+            html += "\n" + urllib.request.urlopen(base + _js_src, timeout=5).read().decode("utf-8")
+
         html += "\n" + urllib.request.urlopen(base + "/app.js", timeout=5).read().decode("utf-8")
 
         check("首页返回 HTML", "<title>O-Cleaner · 磁盘清理助手</title>" in html)
@@ -3546,7 +3552,9 @@ def phase3_http() -> None:
 
               and "/__oc__/cover-placeholder" in _appsrc
 
-              and "只支持 PNG / JPEG / GIF / SVG" in _appsrc
+              and "只支持 PNG / JPEG / GIF" in _appsrc
+
+              and 'mime == "image/svg+xml"' in _appsrc
 
               and "cover-placeholder" in html
 
@@ -3742,9 +3750,7 @@ def phase3_http() -> None:
 
               "in_game_body" in html)
 
-        app_src = (HERE / "ocleaner" / "core.py").read_text(
-
-            encoding="utf-8")  # P2-1：实现主体在 ocleaner/core.py
+        app_src = _impl_src()
 
         check("快速扫描注入游戏本体（不受扫描深度限制）",
 
@@ -5379,13 +5385,17 @@ def phase4_repo() -> None:
 
     js_f = HERE / "web" / "app.js"
 
+    js_parts = sorted((HERE / "web" / "js").glob("*.js")) if (HERE / "web" / "js").is_dir() else []
+
     m_st = _re.search(r"<style>(.*?)</style>", html, _re.DOTALL)
 
     m_sc = _re.search(r"<script>(.*?)</script>", html, _re.DOTALL)
 
     st = css_f.read_text(encoding="utf-8") if css_f.exists() else (m_st.group(1) if m_st else "")
 
-    sc = js_f.read_text(encoding="utf-8") if js_f.exists() else (m_sc.group(1) if m_sc else "")
+    sc_files = [*js_parts, *([js_f] if js_f.exists() else [])]
+
+    sc = "\n".join(p.read_text(encoding="utf-8") for p in sc_files) if sc_files else (m_sc.group(1) if m_sc else "")
 
     check("index.html 的 <style> 与 <script> 块都能抽出来",
 
@@ -5397,13 +5407,23 @@ def phase4_repo() -> None:
 
           st.count("{") == st.count("}"), f"{st.count('{')}/{st.count('}')}")
 
+    _js_bal_bad = [f"{p.name}:{t.count('{')}/{t.count('}')}"
+
+                   for p in sc_files
+
+                   for t in [p.read_text(encoding="utf-8")]
+
+                   if t.count("{") != t.count("}")]
+
     check("index.html 的 <script> 花括号配平",
 
-          sc.count("{") == sc.count("}"), f"{sc.count('{')}/{sc.count('}')}")
+          sc.count("{") == sc.count("}") and not _js_bal_bad,
+
+          f"{sc.count('{')}/{sc.count('}')} {_js_bal_bad}")
 
     defined = set(_re.findall(r"(--[A-Za-z0-9_-]+)\s*:", st))
 
-    used = set(_re.findall(r"var\(\s*(--[A-Za-z0-9_-]+)\s*\)", html))
+    used = set(_re.findall(r"var\(\s*(--[A-Za-z0-9_-]+)\s*\)", html + "\n" + st + "\n" + sc))
 
     missing = sorted(used - defined)
 
@@ -6800,9 +6820,9 @@ def phase7_scoping_and_accel() -> None:
 
         _struct.pack_into("<I", rec, a + 4, 0x68)
 
-        _struct.pack_into("<H", rec, a + 0x14, 0x52)   # content offset
+        _struct.pack_into("<H", rec, a + 0x14, 0x18)   # content offset
 
-        c = a + 0x52
+        c = a + 0x18
 
         _struct.pack_into("<Q", rec, c, 5)             # parent = 根目录
 
@@ -6824,7 +6844,7 @@ def phase7_scoping_and_accel() -> None:
 
             rec[b + 8] = 1
 
-            _struct.pack_into("<Q", rec, b + 0x38, 777 << 20)  # real size
+            _struct.pack_into("<Q", rec, b + 0x30, 777 << 20)  # real size (NTFS +0x30)
 
             _struct.pack_into("<I", rec, 0xE8, 0xFFFFFFFF)
 
@@ -6836,7 +6856,7 @@ def phase7_scoping_and_accel() -> None:
 
             _struct.pack_into("<I", rec, b + 0x10, 0x10)
 
-            _struct.pack_into("<I", rec, 0xF8, 0xFFFFFFFF)
+            _struct.pack_into("<I", rec, 0xD0, 0xFFFFFFFF)
 
         return rec
 
@@ -6864,21 +6884,21 @@ def phase7_scoping_and_accel() -> None:
 
           str(app._mft_runlist(bytes(rl), 0)))
 
+    _rf = app._mft_parse_record(_mft_mk_record("file"), 1024)
+
     check("MFT 文件记录：fixup 换回 + 非驻留 $DATA 体积 + 名字惰性字节",
 
-          app._mft_parse_record(_mft_mk_record("file"), 1024)
+          _rf == (5, "游戏".encode("utf-16-le"), 777 << 20, False, 0),
 
-          == (5, "游戏".encode("utf-16-le"), 777 << 20, False, 0),
+          str(_rf))
 
-          str(app._mft_parse_record(_mft_mk_record("file"), 1024)))
+    _rd = app._mft_parse_record(_mft_mk_record("dir"), 1024)
 
     check("MFT 目录记录：$INDEX_ROOT 判定目录",
 
-          app._mft_parse_record(_mft_mk_record("dir"), 1024)
+          _rd == (5, "游戏".encode("utf-16-le"), 0, True, 0),
 
-          == (5, "游戏".encode("utf-16-le"), 0, True, 0),
-
-          str(app._mft_parse_record(_mft_mk_record("dir"), 1024)))
+          str(_rd))
 
     check("MFT 损坏记录返回 None（magic 不符/全零）",
 
@@ -6890,9 +6910,9 @@ def phase7_scoping_and_accel() -> None:
 
     # mtime 解析（#51 大文件「只看近期」的数据源）：$STANDARD_INFORMATION
 
-    # 修改时间在内容 +8；属性布局互不重叠 —— STD_INFO(0x38,len 0x28) →
+    # 修改时间在内容 +8；属性布局互不重叠 —— STD_INFO(0x38,len 0x48) →
 
-    # FILE_NAME(0x60,len 0x98，含 2 字符名) → DATA(0xF8,len 0x48)。
+    # FILE_NAME(0x80,len 0x68，含 2 字符名) → DATA(0xE8,len 0x48)。
 
     def _mft_mk_record_si(mtime_val: int):
 
@@ -6908,7 +6928,7 @@ def phase7_scoping_and_accel() -> None:
 
         _struct.pack_into("<H", rec, 0x16, 1)
 
-        _struct.pack_into("<I", rec, 0x18, 0x140)
+        _struct.pack_into("<I", rec, 0x18, 0x138)
 
         _struct.pack_into("<H", rec, 0x30, 0xAAAA)
 
@@ -6924,7 +6944,7 @@ def phase7_scoping_and_accel() -> None:
 
         _struct.pack_into("<I", rec, a, 0x10)
 
-        _struct.pack_into("<I", rec, a + 4, 0x28)
+        _struct.pack_into("<I", rec, a + 4, 0x48)
 
         _struct.pack_into("<I", rec, a + 0x10, 0x18)   # content size
 
@@ -6932,15 +6952,15 @@ def phase7_scoping_and_accel() -> None:
 
         _struct.pack_into("<Q", rec, a + 0x20, mtime_val)  # content+8 = mtime
 
-        b = 0x60                                   # $FILE_NAME（驻留）
+        b = 0x80                                   # $FILE_NAME（驻留）
 
         _struct.pack_into("<I", rec, b, 0x30)
 
-        _struct.pack_into("<I", rec, b + 4, 0x98)
+        _struct.pack_into("<I", rec, b + 4, 0x68)
 
-        _struct.pack_into("<H", rec, b + 0x14, 0x52)
+        _struct.pack_into("<H", rec, b + 0x14, 0x18)
 
-        c = b + 0x52
+        c = b + 0x18
 
         _struct.pack_into("<Q", rec, c, 5)         # parent = 根
 
@@ -6952,7 +6972,7 @@ def phase7_scoping_and_accel() -> None:
 
         rec[c + 0x42:c + 0x42 + len(nm)] = nm
 
-        d = b + 0x98                               # $DATA（非驻留）
+        d = b + 0x68                               # $DATA（非驻留）
 
         _struct.pack_into("<I", rec, d, 0x80)
 
@@ -6960,7 +6980,7 @@ def phase7_scoping_and_accel() -> None:
 
         rec[d + 8] = 1
 
-        _struct.pack_into("<Q", rec, d + 0x38, 5 << 20)
+        _struct.pack_into("<Q", rec, d + 0x30, 5 << 20)
 
         _struct.pack_into("<I", rec, d + 0x48, 0xFFFFFFFF)
 
@@ -6968,19 +6988,17 @@ def phase7_scoping_and_accel() -> None:
 
 
 
-    _si = _mft_mk_record_si(133000000000000000)
+    _si_res = app._mft_parse_at(_mft_mk_record_si(133000000000000000), 0, 1024, True)
 
     check("MFT mtime：with_mtime=True 解析出 $STANDARD_INFORMATION 修改时间",
 
-          app._mft_parse_at(_si, 0, 1024, True)
+          _si_res == (5, "片".encode("utf-16-le"), 5 << 20, False, 133000000000000000),
 
-          == (5, "片".encode("utf-16-le"), 5 << 20, False, 133000000000000000),
-
-          str(app._mft_parse_at(_si, 0, 1024, True)))
+          str(_si_res))
 
     check("MFT mtime：默认不解析（目录树路径不付这笔开销）",
 
-          app._mft_parse_record(_si, 1024)[4] == 0)
+          app._mft_parse_record(_mft_mk_record_si(133000000000000000), 1024)[4] == 0)
 
 
 

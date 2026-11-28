@@ -1,16 +1,28 @@
 # 死代码审计（只读，照 HANDOFF §46 流程：先审计→人工核实→才删）。
-# 用法: python tools/audit_dead.py   已知限制: 重复类选择器不排除 @media 覆盖，需人工确认。
-# 只读死代码审计 v3：裸词保守判定（宁漏报不误删）
-import re, collections
+# 用法: python tools/audit_dead.py [--strict-i18n]
+import argparse
+import collections
+import glob
+import os
+import re
+import sys
+from pathlib import Path
 
-h = open("web/index.html", encoding="utf-8").read()
+ROOT = Path(__file__).resolve().parent.parent
+ap = argparse.ArgumentParser(description="前端静态审计（CSS/DOM/i18n/CSS变量）")
+ap.add_argument("--strict-i18n", action="store_true",
+                help="存在 t() / data-i18n 缺失 EN 词条时返回退出码 1")
+args = ap.parse_args()
+
+h = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
 styles = re.findall(r"<style[^>]*>(.*?)</style>", h, re.S)
 scripts = re.findall(r"<script[^>]*>(.*?)</script>", h, re.S)
-import os
-if os.path.isfile("web/styles.css"):
-    styles.append(open("web/styles.css", encoding="utf-8").read())
-if os.path.isfile("web/app.js"):
-    scripts.append(open("web/app.js", encoding="utf-8").read())
+if (ROOT / "web" / "styles.css").is_file():
+    styles.append((ROOT / "web" / "styles.css").read_text(encoding="utf-8"))
+for js_p in sorted((ROOT / "web" / "js").glob("*.js")):
+    scripts.append(js_p.read_text(encoding="utf-8"))
+if (ROOT / "web" / "app.js").is_file():
+    scripts.append((ROOT / "web" / "app.js").read_text(encoding="utf-8"))
 st = "\n".join(styles)
 sc = "\n".join(scripts)
 rest = h
@@ -45,11 +57,11 @@ for j, ch in enumerate(sc[i:], start=i):
     elif ch == "}":
         depth -= 1
         if depth == 0: break
-en_keys = set(re.findall(r'"([a-z]+\.[\w.]+)":', sc[i:j]))
-used = set(re.findall(r't\("(\w+\.[\w.]+)"', sc))
-used |= set(re.findall(r'data-i18n(?:-html|-ph|-title)?="(\w+\.[\w.]+)"', rest))
+en_keys = set(re.findall(r'"([a-zA-Z][\w.]*)"\s*:', sc[i:j]))
+used = set(re.findall(r'(?<![A-Za-z0-9_.$])t\(\s*["\']([^"\']+)["\']', sc))
+used |= set(re.findall(r'data-i18n(?:-html|-ph|-title)?="([^"]+)"', rest))
 # 动态拼接键：报告但不判死（人工确认）
-dyn = re.findall(r't\("([\w.]+)\s*\+', sc)
+dyn = re.findall(r'(?<![A-Za-z0-9_.$])t\(\s*["\']([\w.]+)\s*\+', sc)
 # 已知间接使用（t(变量) 形式，键名以字面量出现在同文件其它调用里，
 # 如 showCleanResult 的 head("cr.onceHead", ...)）：
 INDIRECT = {"cr.onceHead", "cr.regenHead", "cr.unkHead"}
@@ -66,3 +78,5 @@ undef = sorted(u for u in var_use - var_def)
 unused = sorted(d for d in var_def - var_use)
 print("使用了但未定义:", undef if undef else "无")
 print("定义了但未使用:", unused if unused else "无")
+if args.strict_i18n and (missing or (INDIRECT - en_keys)):
+    sys.exit(1)

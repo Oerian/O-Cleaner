@@ -2051,11 +2051,15 @@ class CDP {
       const other = dv.dataset.l;
       dv.click();
       // 等到重扫真正结束（按钮恢复可用），否则读到的是上一轮的结果
+      const waitFull = ${rankingReady ? "true" : "false"};
       for (let i = 0; i < 60; i++) {
         await new Promise(r => setTimeout(r, 1000));
         const btn = document.querySelector('#btnScan');
+        const fullBtn = document.querySelector('#btnFullScan');
         const on = document.querySelector('.drv.on');
-        if (on && on.dataset.l === other && btn && !btn.disabled) break;
+        const scanDone = on && on.dataset.l === other && btn && !btn.disabled;
+        const fullDone = !waitFull || !fullBtn || !fullBtn.disabled || i >= 20;
+        if (scanDone && fullDone) break;
       }
       const sel = document.querySelector('#scopeSel');
       // 卡片已移除：改从 STATE（页面顶层 let，evaluate 同 realm 可读）

@@ -26,6 +26,9 @@
 *.yml   text eol=crlf
 *.yaml  text eol=crlf
 *.js    text eol=crlf
+*.css   text eol=crlf
+*.c     text eol=crlf
+*.rc    text eol=crlf
 
 # 模板文件（如 tools/local-cases.json.example）：后缀不是 .json，
 # 上面的规则匹配不到它；内容与正式文件同源，行尾一并钉死。

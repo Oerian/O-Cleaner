@@ -67,8 +67,10 @@ cd /d "你的 O-Cleaner 目录"
 python -X utf8 tools\lint_rules.py --strict      # 规则与资源包门禁
 python -X utf8 tools\_lint_selftest.py           # 验证上一道门禁确实能检出缺陷
 python -X utf8 tools\guard_matrix.py             # 删除护栏 50 项对抗矩阵 + 规则单元自检
-python -X utf8 tools\unit_test.py                # 49 项纯逻辑快速单测（2 秒内跑完，无磁盘写副作用）
-python -X utf8 tools\selftest.py                 # 590+ 项全量自测（含真实删除与 HTTP 端到端）
+python -X utf8 tools\unit_test.py                # 85+ 项纯逻辑快速单测（2 秒内跑完，无磁盘写副作用）
+python -X utf8 tools\check_undefined.py          # 跨模块 _core.X 引用与 AST F821 检查
+python -X utf8 tools\audit_dead.py --strict-i18n # 前端 CSS/DOM/CSS变量/全量双语键校验
+python -X utf8 tools\selftest.py                 # 全量端到端自测（含真实删除与 HTTP 端到端）
 ```
 
 还有一道浏览器检查，需要先启动服务（用系统已装的 Edge/Chrome，无需额外安装）：
@@ -87,10 +89,10 @@ node tools\cdp_check.js http://127.0.0.1:8770
 
 界面采用**顶栏 + 左右双栏独立滚动 + 常驻底栏**设计：
 - **顶栏**：右侧是盘符卡片（点击切盘），中间是功能视图导航、主题切换（`亮 / 暗 / 随`）与界面语言切换（`A / 中 / EN`）。
-- **左侧主区（`#leftcol`）**：自上而下依次为工具栏（重新扫描、全盘扫描、引擎偏好、扫描层数、大文件排行、重复大文件、下载整理、紧凑模式、全选/全不选、清理范围、自定义目录）、**磁盘概览**（含容量条、150px 占比环及环右侧三页签**组件图表坞**）以及当前功能视图（**占用排行** 或 **游戏占用概览**）。
-- **右侧栏（`aside`）**：运行环境自检、一键预设、资源包、AI 助手、累积清理与换算、自定义规则（含 GitHub Gist 云端同步与数据包导入导出）、定时自动清理、最近清理记录与说明（共 9 个可折叠面板）。
+- **左侧主区（`#leftcol`）**：自上而下依次为工具栏（重新扫描、全盘扫描、引擎偏好、扫描层数、大文件排行、重复大文件、下载整理、系统瘦身、紧凑模式、全选/全不选、清理范围、自定义目录）、**磁盘概览**（含容量条、150px 占比环及环右侧三页签**组件图表坞**）以及当前功能视图（**占用排行** / **游戏占用概览** / **分析中心**）。
+- **右侧栏（`aside`）**：运行环境自检、一键预设、AI 助手、累积清理与换算、规则 · 预设 · 资源包（含自定义规则、自定义分组、社区资源包、GitHub Gist 云同步与导入导出）、定时自动清理、最近清理记录与说明迁移（共 8 个可折叠面板）。
 
-两个功能页常驻在顶部导航条里：**扫描概览** 与 **游戏占用概览**，
+三个功能页常驻在顶部导航条里：**扫描概览**、**游戏占用概览** 与 **分析中心**，
 点按钮即切换，当前页高亮；不需要在多层按钮里找入口。
 右侧栏每个折叠面板可点标题展开 / 收起（折叠状态本机记忆）；
 侧栏顶部有一条吸顶的**面板目录条**，列出全部面板标题，点击任意一项会自动展开并滚动到那个面板——
@@ -657,20 +659,34 @@ O-Cleaner\
 ├─ 启动 O-Cleaner.bat      双击启动（含 Python 3.8+ 运行时校验）
 ├─ app.py                  启动入口与向后兼容符号导出层
 ├─ ps_scripts.py           PowerShell 脚本模板常量
-├─ ocleaner\               核心业务标准库包
-│   ├─ __init__.py         包导出声明
-│   ├─ core.py             扫描引擎、识别规则与 HTTP 路由主实现
-│   ├─ store.py            原子写（_atomic_write）、带缓存 JSON 读取与进程内/跨进程锁
-│   ├─ deleter.py          三态删除（rm_tree_strict）、占用预检、重解析点保护与中断恢复
+├─ ocleaner\               核心业务标准库包（17 模块，架构详见 ARCHITECTURE.md）
+│   ├─ __init__.py         包导出与 17 模块清单
+│   ├─ runtime.py          无环运行时地基（路径常量 / APP_VERSION / _CLEAN_LOCK / try_op_lock）
+│   ├─ core.py             扫描编排、识别规则、sys_slim 与 re-export 兼容门面
+│   ├─ server.py           HTTP 路由层（/__oc__/* 路由 / 入口守卫 / 统一并发锁 / /js/*.js 静态服务）
+│   ├─ analysis.py         分析中心域（大文件 / 重复文件 / 毒瘤清除 / 搬家 / 专清 / 下载 / 快照 / 趋势）
+│   ├─ engines.py          三引擎择快、自研 MFT 直读桥接与 WinVerifyTrust 原生验签
+│   ├─ mft_fast.c          MFT 双缓冲读盘与目录聚合 C 加速源码（ABI v5）
+│   ├─ guard.py            九层删除护栏、重解析点复检与程序本体/档案保护
+│   ├─ deleter.py          锁定预检、三态原子删除（rm_tree_strict）、回收站与重启删除
+│   ├─ recycle.py          回收站容量探测、$I/$R 解析、原位还原与按原始路径精准清空
+│   ├─ locks.py            CreateFileW 占用探测、候选进程推断与 Fail-Closed 停止
+│   ├─ tray.py             空闲端口探测、Edge --app 窗口与纯 ctypes 系统托盘
+│   ├─ store.py            原子写（flush+fsync）、深拷贝 mtime 缓存、RLock 与跨进程锁
+│   ├─ receipts.py         清理历史与 data/receipts/ 可检索审计回执
+│   ├─ scheduler.py        定时自动清理后台调度器
 │   ├─ measure.py          进程内 os.scandir 测量原语（免 PowerShell 冷启动）
-│   ├─ credentials.py      Windows DPAPI 凭据加密（防拷机泄露密钥）
+│   ├─ credentials.py      Windows DPAPI 凭据加密（Fail-Closed，防拷机泄露密钥）
 │   ├─ games.py            Steam / Epic / GOG 游戏库发现、残留检测与体积趋势
-│   └─ integrations.py     自有 AI 助手、GitHub Gist 云同步与 GitHub Releases 更新检查
+│   └─ integrations.py     自有 AI、GitHub Gist 同步、自更新、资源包目录与脱敏社区上传
 ├─ README.md               项目简介
 ├─ docs\
 │   ├─ USAGE.md            本文件（完整使用指南）
 │   ├─ USAGE-en.md         英文完整使用指南
-│   ├─ ROADMAP.md          近期 / 中期 / 远期路线图
+│   ├─ ARCHITECTURE.md     系统分层架构与模块职责详解
+│   ├─ ROADMAP.md          长期发展规划（v2.19 -> v3.0+）
+│   ├─ SECURITY.md         安全模型、护栏矩阵与信任边界
+│   ├─ CONTRIBUTING.md     贡献规范与质量门禁
 │   ├─ CUSTOMIZE.md        自定义数据包格式规范
 │   └─ DEV-PLAYBOOK.md     开发与测试工作规范
 ├─ config\
@@ -693,13 +709,19 @@ O-Cleaner\
 │   ├─ index.json          包清单（「从 GitHub 检查更新」按它逐个下载）
 │   └─ *.json              内置 5 组资源包：windows-system / games-platform / games-titles / apps-common / explanations
 ├─ web\
-│   └─ index.html          界面（HTML + CSS + JS + 双语词典全在这一个文件里）
+│   ├─ index.html          前端 DOM 骨架（3 视图 + 8 折叠面板）
+│   ├─ styles.css          主题 CSS 变量与响应式双栏布局样式
+│   ├─ js\i18n.js          中英文词典（I18N_EN / I18N_UNITS_EN）与双语渲染原语
+│   └─ app.js              主应用逻辑（视图导航 / 占用排行 / 分析中心）
 ├─ tools\
 │   ├─ lint_rules.py       规则与资源包 linter（发布/贡献前的安全闸门）
 │   ├─ _lint_selftest.py   linter 自身的反向缺陷注入自测（63 项）
 │   ├─ guard_matrix.py     删除护栏 50 项对抗矩阵 + 规则单元自检
-│   ├─ unit_test.py        快速纯逻辑单元测试（49 项，2 秒内跑完）
-│   ├─ selftest.py         全量功能自测（590+ 项断言，含真实删除与 HTTP 端到端）
+│   ├─ check_undefined.py  跨模块 _core.X 引用 + AST F821 裸名检查
+│   ├─ audit_dead.py       前端 CSS / DOM / CSS 变量 / i18n 严格审计
+│   ├─ packs_ci_validate.py 社区资源包索引与 SHA-256 校验
+│   ├─ unit_test.py        快速纯逻辑单元测试（85+ 项，2 秒内跑完）
+│   ├─ selftest.py         全量功能自测（含真实删除与 HTTP 端到端）
 │   ├─ cdp_check.js        真实浏览器渲染检查（140+ 项断言，用系统 Edge/Chrome，零安装）
 │   ├─ doctor.py           新设备环境自检
 │   ├─ fix-encoding.ps1    编码与换行契约的唯一规范化工具
@@ -768,7 +790,8 @@ linter 会做八项检查：结构校验、资源包结构、语义自相矛盾�
 - **毒瘤清除**：360 全家桶/腾讯/2345/金山等 15 款签名扫描（覆盖 HKLM/HKCU 卸载项与全部盘符残留目录）；两段式清除（先官方卸载程序，再残留目录入回收站与 Uninstall 白名单键清扫），支持重新扫描。
 - **重复大文件**：全文件 SHA-256 证实的互为副本按组展示（组级排行行 + 可展开副本明细），勾选副本移入回收站（保留基准自动锁定，跨目录组需确认冗余）。
 - **下载整理**：按类型勾选移入回收站清理旧安装包；「一键按类型归档」仅归档顶层文件不嵌套已有子目录且支持一键撤销；子文件夹行内可直接定位到资源管理器。
-- **分析中心**：第三功能视图，七项专项工具（大文件排行/重复大文件/应用专清/毒瘤清除/磁盘快照/下载整理/磁盘迁移）面板化统一呈现，扫描概览同款排行行风格。
+- **分析中心**：第三功能视图，8 项专项工具（大文件排行 / 重复大文件 / 应用专清 / 毒瘤清除 / 磁盘快照 / 下载整理 / 磁盘迁移 / 系统瘦身）面板化统一呈现，扫描概览同款排行行风格。
+- **系统瘦身（官方组件）**：在分析中心提供 Windows 官方组件安全瘦身入口，集成 `DISM /StartComponentCleanup`、`powercfg -h on/off` 休眠开关与传递优化下载缓存清理。
 - **命令行**：`python app.py --auto-clean --drive C` 无头单次安全清理（配任务计划程序）；`pythonw app.py --tray` 托盘常驻；`python app.py --app` Edge 无边框窗口。
 
 ## 十二、安全设计
