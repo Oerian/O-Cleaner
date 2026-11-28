@@ -242,7 +242,7 @@ BROWSER_CACHE_DIRS = {
     "cachestorage", "scriptcache", "jscache", "blob_storage",
 }
 ZONE_CACHE_EXEMPT = ALLOWED_CONTAINER_NAMES | BROWSER_CACHE_DIRS | {
-    "inetcache", "dxcache", "glcache", "d3dscache", "explorer",
+    "inetcache", "dxcache", "glcache", "d3dscache",
     "deliveryoptimization", "wer", "tempstate", "webcache",
 }
 
@@ -297,14 +297,8 @@ def check_deletable(path: str, kind: str = "tree",
     # 空路径必须显式拒绝：os.path.abspath("") 会返回**当前工作目录**，
     # 于是空串会伪装成一个合法目录并通过后续检查（对抗性审查发现的漏点）。
     raw = str(path).strip()
-    if not raw:
-        return False, "拒绝：路径为空"
-    # 同样的问题也发生在「盘符相对路径」上：abspath("E:") 得到的是
-    # **E 盘上的当前工作目录**（在本机即仓库自身 E:\O-Cleaner），
-    # 而不是盘符根；"..\Windows"、"/etc" 之类也会被 abspath 归一化到 CWD 之下。
-    # 这类输入在归一化前必须卡死，否则它会伪装成一个合法目录通过后续全部检查。
-    if not os.path.isabs(raw):
-        return False, "拒绝：路径必须是绝对路径"
+    if not raw or len(raw) < 3 or not raw[0].isalpha() or raw[1] != ":" or raw[2] not in ("\\", "/"):
+        return False, "拒绝：路径必须是完整的盘符绝对路径"
     # 8.3 短名展开要在归一化之前做：C:\PROGRA~1\... 的段名是 PROGRA~1，
     # 不展开就绕过了整张名单（Windows 每个目录都有这种短名别名）。
     raw = _core._long_path(raw)
@@ -329,6 +323,17 @@ def check_deletable(path: str, kind: str = "tree",
     if not parts:
         return False, "拒绝：不允许清理盘符根目录"
 
+    # junction / 符号链接前置复检（必须在任何早期 return True 之前执行）：
+    # strict=True 防止目标不可解析或权限拒绝时静默返回原路径而 fail-open。
+    try:
+        real = os.path.realpath(norm, strict=True)
+    except OSError:
+        return False, "拒绝：无法解析目标真实路径（可能为悬空链接或权限受限）"
+    if os.path.normpath(real).lower() != low:
+        ok_r, why_r = check_deletable(real, kind, allow_user_data)
+        if not ok_r:
+            return False, why_r
+
     # 保留设备名（2026-10-21 护栏升级）：CON / NUL / COM1 这类名字在 Win32
     # 层是设备而不是文件。路径里出现它们时，os.remove / rmtree 打到的是设备
     # 句柄 —— 表现为无提示失败，极端情况下会写坏设备流。直接拒绝。
@@ -338,43 +343,58 @@ def check_deletable(path: str, kind: str = "tree",
 
     # 回收站目标（kind="recyclebin"）只允许精确指向「盘根的 $Recycle.Bin」——
     # 这是应用自己的「清空回收站」清理项，勾选后走 Clear-RecycleBin。
-    # 它本来会被下面的 $Recycle.Bin 保护规则拦死，导致这条链路不可达
-    # （2026-10-15 端到端实测发现）。其余任何路径照常走保护链，不受影响。
     if kind == "recyclebin" and len(parts) == 1 and parts[0].lower() == "$recycle.bin":
         return True, ""
 
     if len(parts) == 1 and parts[0].lower() in PROTECTED_AT_DRIVE_ROOT:
         return False, f"拒绝：{parts[0]} 属于受保护的系统目录"
 
+    if len(parts) == 2 and parts[0].lower() == "users":
+        return False, f"拒绝：{parts[0]}\\{parts[1]} 属于用户主目录根"
+
     fatal = {"system32", "syswow64", "winsxs", "installer", "servicing",
-             "assembly", "system volume information", "boot"}
+             "assembly", "system volume information", "boot",
+             "windowsapps", "common files", "fonts"}
     for p in parts:
         if p.lower() in fatal:
             return False, f"拒绝：路径中包含受保护的 {p}"
+
+    if parts[0].lower() == "windows" and len(parts) >= 2:
+        sub_low = tuple(p.lower() for p in parts[1:])
+        win_safe = (
+            ("temp",),
+            ("logs",),
+            ("prefetch",),
+            ("minidump",),
+            ("livekernelreports",),
+            ("softwaredistribution", "download"),
+            ("serviceprofiles", "networkservice", "appdata", "local",
+             "microsoft", "windows", "deliveryoptimization", "cache"),
+        )
+        if not any(sub_low[:len(w)] == w for w in win_safe):
+            return False, f"拒绝：Windows 系统子路径 {'\\'.join(parts[1:])} 受系统保护"
 
     leaf = parts[-1].lower()
     if leaf in PROTECTED_DIR_NAMES and leaf not in ALLOWED_CONTAINER_NAMES:
         return False, f"拒绝：{parts[-1]} 属于受保护的目录"
 
     # 显式选择个人/程序数据目录时不提前 return：必须继续走完 home、
-    # BASE_DIR 自保护与 realpath 重解析点复检，最后统一返回 (True, optin_note)。
+    # BASE_DIR 自保护，最后统一返回 (True, optin_note)。
     optin_note = ""
 
-    # 受保护域（2026-10-21 护栏升级）：整目录删除默认拒绝，需显式勾选。
-    # 上面两条规则只比对**末级段名 / Users 一级位置**，保护住的是树根；
-    # 用户在实际界面上勾的是下钻之后的子目录（Documents\Adobe 这种），
-    # 那正是上次真实事故走的缝。这里按**子树继承**兜住。
-    # 豁免：本身是缓存/临时/日志容器，或是某个容器目录的直接子项 ——
-    # 这类东西删了会自动重建，正是清理工具该干的活。
     zone = _guarded_zone(parts)
     if zone:
-        # 缓存豁免（ZONE_CACHE_EXEMPT）：路径中任何一段是已知缓存目录名，就按
-        # 「派生数据区」处理，不锁。为什么看整条链而不只看末级/父级：
-        # `%LOCALAPPDATA%\Temp\<某个包>\node_modules` 这种目标，末级和父级都
-        # 不是缓存名，但它明明就在 Temp 里 —— 只看一层会把这类正常清理项误拦
-        # （CI 首次跑全量时就是这么红的）。
         _ex = ZONE_CACHE_EXEMPT
-        _is_cache = any(p.lower() in _ex for p in parts)
+        # 仅在非个人数据区（appdata/programdata/programfiles）对第 3 段起匹配缓存豁免；
+        # Explorer 仅限 kind="files"（缩略图/图标缓存）豁免。
+        scan_parts = parts[2:] if parts[0].lower() == "users" else parts[1:]
+        _is_explorer_files = (
+            kind == "files"
+            and [p.lower() for p in parts[-5:]] == ["appdata", "local", "microsoft", "windows", "explorer"]
+        )
+        _is_cache = _is_explorer_files or (
+            zone != "user" and any(p.lower() in _ex for p in scan_parts)
+        )
         if not _is_cache:
             if allow_user_data:
                 optin_note = optin_note or f"用户已明确选择：{_ZONE_LABEL[zone]}"
@@ -436,37 +456,24 @@ def check_deletable(path: str, kind: str = "tree",
                     f"拒绝：{parts[-1]} 是已安装程序（{parts[i]}）自带的目录，"
                     "会随程序卸载一起清理，不能单独删除")
 
-    home = os.path.expanduser("~").lower()
-    if low in (home, os.path.join(home, "appdata").lower()):
-        return False, "拒绝：不允许清理用户主目录"
+    home = os.path.expanduser("~").lower().rstrip("\\")
+    if low in (home, os.path.join(home, "appdata").lower()) or home.startswith(low.rstrip("\\") + "\\"):
+        return False, "拒绝：不允许清理用户主目录或其父目录"
 
-    # 仓库自身与仓库内数据（history.json / config/ 等）此前只靠「没被推荐」
-    # 兜底，没有硬护栏 —— 在这里显式拒绝。清理工具不该有能力删掉自己。
+    # 仓库自身及其祖先目录、迁移后的数据目录均受硬保护。
     try:
-        base_low = str(_core.BASE_DIR).lower()
-        if low == base_low or low.startswith(base_low.rstrip("\\") + "\\"):
+        base_low = str(_core.BASE_DIR).lower().rstrip("\\")
+        if (low == base_low or low.startswith(base_low + "\\")
+                or base_low.startswith(low.rstrip("\\") + "\\")):
+            return False, "拒绝：目标是 O-Cleaner 自身或其数据目录"
+        data_low = str(_core.DATA_DIR).lower().rstrip("\\")
+        if low == data_low or low.startswith(data_low + "\\"):
             return False, "拒绝：目标是 O-Cleaner 自身或其数据目录"
     except Exception:
         pass
 
-    # junction / 符号链接防护（2026-10-20 审计）：以上全部规则都基于路径
-    # **字符串分段名**，而一个指向受保护目录的 junction（如 D:\cache-link
-    # → C:\Windows）段名是自选的，不会命中任何名单；Windows 上 Python 的
-    # islink() 对 junction 返回 False，shutil.rmtree 会穿过去删真实目标。
-    # 因此对真实存在的目标解析真实路径，并对解析结果重新执行同一套检查 ——
-    # 只会让护栏**更严**（多拒绝），符合「宁可少推荐，也不误删」的取向。
-    try:
-        real = os.path.realpath(norm)
-    except OSError:
-        real = norm
     if os.path.normpath(real).lower() != low:
-        # allow_user_data 要透传，否则「用户显式选了一个普通目录、但它是
-        # 指向自己 Documents 的符号链接」会被重新判死；
-        # 反过来 junction 指向 C:\Windows 时，递归后仍然命中系统目录规则。
-        ok_r, why_r = check_deletable(real, kind, allow_user_data)
-        if not ok_r:
-            return False, why_r
-        return True, optin_note or why_r
+        return True, optin_note
 
     # 不可读时不在这里判定拒绝，交由上层报「需要管理员权限」，
     # 这样 C:\\Windows\\Temp 能给出可读提示而不是硬性拒绝

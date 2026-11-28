@@ -392,7 +392,10 @@ def _epic_game_from_manifest(d: dict) -> dict | None:
     if str(d.get("CatalogNamespace") or "").lower() == "ue":
         return None
     loc = str(d.get("InstallLocation") or "").strip()
-    if len(loc) < 4 or loc[1] != ":":
+    if len(loc) < 4 or not loc[0].isalpha() or loc[1] != ":" or loc[2] not in ("\\", "/"):
+        return None
+    norm_loc = os.path.normpath(loc)
+    if len(norm_loc) <= 3:
         return None
     try:
         size = int(d.get("InstallSize") or 0)
@@ -474,10 +477,13 @@ def _gog_game_from_values(game_id: str, vals: dict) -> dict | None:
     注册表路径走不到，解析逻辑照样被钉死。
     """
     path = str(vals.get("path") or "").strip()
-    if len(path) < 4 or path[1] != ":":
+    if len(path) < 4 or not path[0].isalpha() or path[1] != ":" or path[2] not in ("\\", "/"):
+        return None
+    norm_path = os.path.normpath(path)
+    if len(norm_path) <= 3:
         return None
     name = str(vals.get("gameName") or "").strip() or f"GOG 游戏 {game_id}"
-    return {"appid": str(game_id), "name": name, "path": os.path.normpath(path)}
+    return {"appid": str(game_id), "name": name, "path": norm_path}
 
 def discover_gog() -> dict:
     """发现 GOG Galaxy 已安装游戏。数据来自注册表
@@ -581,8 +587,9 @@ def platform_install_roots() -> dict[str, set[str]]:
                     continue
                 g = _epic_game_from_manifest(d)
                 if g and os.path.isdir(g["path"]):
-                    roots["epic"].add(os.path.normpath(
-                        os.path.dirname(g["path"])).lower())
+                    par = os.path.normpath(os.path.dirname(g["path"])).lower()
+                    if len(par) > 3:
+                        roots["epic"].add(par)
         except OSError:
             pass
         roots["epic"].add(r"c:\program files\epic games")
@@ -602,26 +609,37 @@ def platform_install_roots() -> dict[str, set[str]]:
                         except OSError:
                             continue
                         p = str(p or "").strip()
-                        if len(p) >= 4 and os.path.isdir(p):
-                            roots["gog"].add(os.path.normpath(
-                                os.path.dirname(os.path.normpath(p))).lower())
+                        if (len(p) >= 4 and p[0].isalpha() and p[1] == ":"
+                                and p[2] in ("\\", "/") and os.path.isdir(p)):
+                            par = os.path.normpath(os.path.dirname(os.path.normpath(p))).lower()
+                            if len(par) > 3:
+                                roots["gog"].add(par)
                 finally:
                     winreg.CloseKey(k)
         except (ImportError, OSError):
             pass
         roots["gog"].add(r"c:\gog games")
         roots["gog"].add(r"c:\program files (x86)\gog galaxy\games")
-    _ORPHAN_ROOTS_CACHE["key"] = key
     _ORPHAN_ROOTS_CACHE["roots"] = roots
+    _ORPHAN_ROOTS_CACHE["key"] = key
     return roots
 
 def _platform_orphans(plat: str, known_paths: list[str]) -> list[dict]:
-    """平台安装根下的直接子目录中，不在该平台记录里的 = 疑似残留。"""
+    """平台安装根下的直接子目录中，不在已知游戏库记录里的 = 疑似残留。"""
     roots = platform_install_roots().get(plat) or set()
     known = {os.path.normpath(p).lower() for p in known_paths if p}
+    try:
+        for lib in load_game_libs():
+            lp = str((lib or {}).get("path") or "").strip()
+            if lp:
+                known.add(os.path.normpath(lp).lower())
+    except Exception:
+        pass
     out: list[dict] = []
     seen: set[str] = set()
     for root in sorted(roots):
+        if not root or len(root) <= 3:
+            continue
         try:
             with os.scandir(root) as it:
                 for e in it:
@@ -717,9 +735,10 @@ def _gamelib_children(path: str) -> list[dict]:
     没有就 scandir：目录给不出体积（标 approx，size 0），文件有精确大小。"""
     letter = os.path.splitdrive(path)[0].rstrip(":").upper()
     tbl = _core._wiz_table(letter)
+    dirs_tbl = (tbl.get("dirs") or {}) if isinstance(tbl, dict) else {}
     out: list[dict] = []
-    if tbl:
-        for k in _core._wiztree_children(tbl, path, limit=60):
+    if dirs_tbl:
+        for k in _core._wiztree_children(dirs_tbl, path, limit=60):
             out.append({"name": k["name"], "path": k["path"],
                         "size": int(k.get("size") or 0), "type": "dir",
                         "approx": False})
@@ -756,12 +775,13 @@ def gamelib_snapshot(path: str) -> dict:
             return c
     letter = os.path.splitdrive(path)[0].rstrip(":").upper()
     tbl = _core._wiz_table(letter)
+    dirs_tbl = (tbl.get("dirs") or {}) if isinstance(tbl, dict) else {}
     size: int | None = None
     partial = False
-    if tbl:
-        size = tbl.get(key)
+    if dirs_tbl:
+        size = dirs_tbl.get(key)
         if size is None:
-            size = tbl.get(key + "\\")
+            size = dirs_tbl.get(key + "\\")
         if size is not None:
             size = int(size)
     if size is None:

@@ -27,6 +27,7 @@ O-Cleaner —— 磁盘清理助手（本地 WebUI，Python 标准库实现，�
 from __future__ import annotations
 
 import argparse
+import ast
 import ctypes
 import fnmatch
 import hashlib
@@ -91,7 +92,9 @@ from ocleaner.integrations import (_sync_cfg, _sync_save_cfg,  # noqa: F401 re-e
                               load_ai_config, save_ai_config,  # noqa: F401 re-export
                               ai_public_config, ai_list_models, ai_chat,  # noqa: F401 re-export
                               ai_test, ai_explain, ai_explain_batch, ai_plan,  # noqa: F401 re-export
-                              app_update_check, _dpapi_migrate_plaintext,  # noqa: F401 re-export
+                              app_update_check, packs_catalog,  # noqa: F401 re-export
+                              community_upload, app_self_update,  # noqa: F401 re-export
+                              _dpapi_migrate_plaintext,  # noqa: F401 re-export
                               _AI_DEFAULTS)  # ai/config 路由过滤用  # noqa: F401 re-export
   # noqa: F401 re-export
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -128,42 +131,32 @@ DATA_DIR = Path(os.environ.get("OC_DATA_DIR") or _argv_data_dir() or _read_saved
 _DATA_DIR_WRITABLE: bool | None = None
 CONFIG_DIR = DATA_DIR / "config"
 WEB_DIR = BASE_DIR / "web"
+_CLEAN_LOCK = threading.Lock()
 
-# 版本号只在这里定义一次。
-# 此前它同时散落在三处（这里的 server_version、WizTree 下载的 User-Agent、
-# config/drives.json 的 app.version），2026-10-12 升 v2.3 时漏改了后两处，
-# 结果界面显示的仍是 2.2。收敛成一个常量后，drives.json 与打包脚本由自测断言
-# 强制保持一致（见 tools/selftest.py 的「版本号三处一致」）。
+
+def _cfg_or_bundled(name: str) -> Path:
+    """优先读 DATA_DIR/config/<name>，迁移后缺失则回退仓库内置 config/<name>。"""
+    p = CONFIG_DIR / name
+    return p if p.exists() else (BASE_DIR / "config" / name)
+
+
 APP_VERSION = "2.18"
 APP_UA = f"O-Cleaner/{APP_VERSION}"
 
-TARGETS_PATH = CONFIG_DIR / "targets.json"
-DRIVES_PATH = CONFIG_DIR / "drives.json"
+TARGETS_PATH = _cfg_or_bundled("targets.json")
+DRIVES_PATH = _cfg_or_bundled("drives.json")
 CONVERT_PATH = CONFIG_DIR / "convert.json"
-FILETYPES_PATH = CONFIG_DIR / "filetypes.json"
+FILETYPES_PATH = _cfg_or_bundled("filetypes.json")
 CUSTOM_PATH = CONFIG_DIR / "custom-rules.json"
-# 用户自定义聚合组：把占用树里任意路径归拢进自己命名的组（如「游戏」「工作」）。
-# 纯显示层组织，不影响识别与清理判定；只存本机、不进版本库、不进分发包。
 FS_GROUPS_PATH = CONFIG_DIR / "fs-groups.json"
-# 用户自定义游戏库：游戏占用概览里手动添加的库/游戏目录（名称 + 路径）。
-# 只读展示（量体积、列子项），不参与任何清理判定；只存本机、不进版本库。
-# 用户自定义释义 / 结论覆盖：按清理项改写说明文案或翻转「可清理」结论。
-# 用户显式操作的最后一手，优先级高于资源包与内置知识库；
-# 只存本机、不进版本库、不进分发包，见 .gitignore。
 OVERRIDES_PATH = CONFIG_DIR / "custom-overrides.json"
-# 游戏中文名映射：纯显示用，不参与任何清理判断
-# 内置知识库的英文文案（i18n L3）：随仓库分发、进版本库。
-# 英文界面请求接口时带 lang=en，后端在响应出口按 rule_id 覆盖
-# what/advice/tip 与置信度标签；缺键回落中文。只影响显示，不影响判定。
-KB_EN_PATH = CONFIG_DIR / "kb-en.json"
-# 资源包：随仓库分发的内置包 + 用户自己导入的包（后者不进版本库）
+KB_EN_PATH = _cfg_or_bundled("kb-en.json")
 PACKS_DIR = BASE_DIR / "packs"
 USER_PACKS_DIR = CONFIG_DIR / "packs-user"
 PACKS_STATE_PATH = CONFIG_DIR / "packs-state.json"
-# AI 设置（含密钥）。只存本机、不进版本库，见 .gitignore。
 AI_CONFIG_PATH = CONFIG_DIR / "ai.json"
 GAMELIBS_PATH = CONFIG_DIR / "game-libs.json"
-GAMENAMES_PATH = CONFIG_DIR / "game-names.json"
+GAMENAMES_PATH = _cfg_or_bundled("game-names.json")
 _SYNC_CFG_PATH = CONFIG_DIR / "sync.json"
 # 运行数据目录（2026-10-29 起）：history/schedule/趋势/回执/删除中断日志/锁文件
 # 全部收进 data/ 子目录，程序根目录不再散落一堆 json。旧版把这类文件直接
@@ -443,15 +436,40 @@ def sys_slim_status() -> dict:
     }
 
 
+def _sys32_exe(name: str) -> str:
+    """解析 %SystemRoot%\\System32（WOW64 下优先 Sysnative）下的官方系统工具绝对路径。"""
+    win = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    sysnative = os.path.join(win, "Sysnative", name)
+    if os.path.isfile(sysnative):
+        return sysnative
+    return os.path.join(win, "System32", name)
+
+
+def _decode_win_output(raw: bytes) -> str:
+    """解码 Windows 原生命令输出：优先 UTF-8，回退 OEM/MBCS。"""
+    if not raw:
+        return ""
+    try:
+        return raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        for enc in ("oem", "mbcs", "gbk"):
+            try:
+                return raw.decode(enc).strip()
+            except (LookupError, UnicodeDecodeError):
+                continue
+        return raw.decode("utf-8", "replace").strip()
+
+
 def sys_slim_run(action: str) -> dict:
     """执行白名单内的 Windows 官方组件维护命令（绝不直接硬删系统目录）。"""
     act = str(action or "").strip()
     cmds = {
-        "dism_cleanup": (["Dism.exe", "/Online", "/Cleanup-Image", "/StartComponentCleanup"], 300),
-        "hiber_off": (["powercfg.exe", "/h", "off"], 30),
-        "hiber_on": (["powercfg.exe", "/h", "on"], 30),
-        "do_cache": (["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                      "Delete-DeliveryOptimizationCache -Force"], 60),
+        "dism_cleanup": ([_sys32_exe("Dism.exe"), "/Online", "/Cleanup-Image", "/StartComponentCleanup"], 1200),
+        "hiber_off": ([_sys32_exe("powercfg.exe"), "/h", "off"], 30),
+        "hiber_on": ([_sys32_exe("powercfg.exe"), "/h", "on"], 30),
+        "do_cache": ([_sys32_exe("WindowsPowerShell\\v1.0\\powershell.exe"),
+                      "-NoProfile", "-NonInteractive", "-Command",
+                      PS_UTF8_PREAMBLE + "Delete-DeliveryOptimizationCache -Force -ErrorAction Stop"], 60),
     }
     if act not in cmds:
         return {"ok": False, "error": f"不支持的操作：{act}"}
@@ -459,35 +477,44 @@ def sys_slim_run(action: str) -> dict:
         return {"ok": False, "error": "仅支持 Windows"}
     if not is_admin():
         return {"ok": False, "error": "需要管理员权限，请先点击顶部「一键提权重启」"}
+    if not _CLEAN_LOCK.acquire(blocking=False):
+        return {"ok": False, "error": "已有清理或维护任务在执行，请等待完成"}
 
-    sys_drv = (os.environ.get("SystemDrive") or "C:").rstrip("\\/")
-    hiber_p = Path(sys_drv + "\\hiberfil.sys")
-    before_sz = 0
-    if act == "hiber_off":
-        try:
-            if hiber_p.exists():
-                before_sz = hiber_p.stat().st_size
-        except OSError:
-            pass
-
-    cmd, tmo = cmds[act]
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=tmo,
-                           creationflags=CREATE_NO_WINDOW)
-        out = ((r.stdout or b"") + b"\n" + (r.stderr or b"")).decode("utf-8", "replace").strip()
-        if r.returncode != 0:
+        sys_drv = (os.environ.get("SystemDrive") or "C:").rstrip("\\/")
+        hiber_p = Path(sys_drv + "\\hiberfil.sys")
+        before_sz = 0
+        if act == "hiber_off":
+            try:
+                if hiber_p.exists():
+                    before_sz = hiber_p.stat().st_size
+            except OSError:
+                pass
+
+        cmd, tmo = cmds[act]
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             creationflags=CREATE_NO_WINDOW)
+        try:
+            raw_out, raw_err = p.communicate(timeout=tmo)
+        except subprocess.TimeoutExpired:
+            _kill_ps_tree(p)
+            return {"ok": False, "action": act, "error": f"执行超时（>{tmo} 秒）"}
+        out_s = _decode_win_output(raw_out or b"")
+        err_s = _decode_win_output(raw_err or b"")
+        out = "\n".join(x for x in (out_s, err_s) if x).strip()
+        if p.returncode != 0:
             return {"ok": False, "action": act,
-                    "error": out[:300] or f"命令退出码 {r.returncode}"}
+                    "error": out[:300] or f"命令退出码 {p.returncode}"}
         freed = 0
         if act == "hiber_off" and before_sz > 0 and not hiber_p.exists():
             freed = before_sz
         return {"ok": True, "action": act, "freed": freed,
                 "freed_h": human(freed) if freed else "",
                 "output": out[:400]}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "action": act, "error": f"执行超时（>{tmo} 秒）"}
     except OSError as exc:
         return {"ok": False, "action": act, "error": str(exc)}
+    finally:
+        _CLEAN_LOCK.release()
 
 
 def data_dir_writable() -> bool:
@@ -581,7 +608,16 @@ def _kill_ps_tree(p) -> None:
         pass
 
 
-def run_ps(script: str, timeout: int = 300):
+def _ps_sq(s: str) -> str:
+    """转义 PowerShell 单引号字面量中的全部 5 种单引号字符（含 Unicode 弯引号）。"""
+    out = str(s)
+    for ch in ("'", "\u2018", "\u2019", "\u201a", "\u201b"):
+        out = out.replace(ch, ch + ch)
+    return out
+
+
+def run_ps(script: str, timeout: int = 300,
+           extra_env: dict[str, str] | None = None):
     """执行一段 PowerShell，原样返回其输出的 JSON，不做类型强制。
 
     输出单个对象是 dict、数组是 list；调用方取字段前先确认类型，
@@ -592,6 +628,8 @@ def run_ps(script: str, timeout: int = 300):
     env = dict(os.environ)
     # 固定子进程输出编码，不依赖父控制台的 chcp，否则报错信息会乱码
     env["PYTHONIOENCODING"] = "utf-8"
+    if extra_env:
+        env.update(extra_env)
     kwargs: dict = {"env": env, "stdout": subprocess.PIPE,
                     "stderr": subprocess.PIPE}
     if IS_WINDOWS:
@@ -724,9 +762,11 @@ def measure_target(t: dict, drive: str | None = None) -> dict:
 def _measure_existing(t: dict, path: str, drive: str | None) -> dict:
     kind = t.get("kind", "tree")
     if kind == "recyclebin":
-        letter = expand(str(t.get("drive_letter") or ""), drive).rstrip(":") \
-            or (drive or "").rstrip(":")
-        r = run_ps(PS_RECYCLE.replace("__DRIVE__", letter.replace("'", "''")))
+        letter = (expand(str(t.get("drive_letter") or ""), drive).rstrip(":")
+                  or (drive or "").rstrip(":")).upper()
+        if not re.fullmatch(r"[A-Z]", letter):
+            return {"size": 0, "files": 0, "error": "无效盘符"}
+        r = run_ps(PS_RECYCLE.replace("__DRIVE__", letter))
         if "error" in r:
             return {"size": 0, "files": 0, "error": r["error"]}
         if r.get("denied"):
@@ -1393,6 +1433,7 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
                                      "parse_s": mft_info["secs"],
                                      "engine": "mft"}
             _eng_speed_record(letter, "mft", mft_info.get("secs") or 0)
+            _save_scan_snapshot(letter)
             return True
         except Exception as e:
             table = None
@@ -1432,8 +1473,8 @@ def _scan_overview_impl(drive: str, max_depth: int = DISK_TREE_MAX_DEPTH) -> dic
         except OSError:
             prog_file = ""
         script = (PS_TREE_WALK
-                  .replace("__ROOT__", root.replace("'", "''"))
-                  .replace("__PROGFILE__", prog_file.replace("'", "''"))
+                  .replace("__ROOT__", _ps_sq(root))
+                  .replace("__PROGFILE__", _ps_sq(prog_file))
                   .replace("__MINCHILD__", str(DISK_TREE_MIN_CHILD_MB * 1024 * 1024))
                   .replace("__RATIO__", repr(DISK_TREE_MIN_DESCEND_RATIO))
                   .replace("__FLOOR__", str(DISK_TREE_MIN_DESCEND_FLOOR))
@@ -2565,7 +2606,9 @@ def identify(name: str, path: str, kind: str) -> dict:
         if hit.get("category"):
             out["category"] = str(hit["category"])
         out["risk"] = str(hit.get("risk") or "中")
-        out["cleanable"] = bool(hit.get("cleanable"))
+        # 外部资源包不能越权改写可清理结论：若内置知识库未识别，
+        # 一律保持 cleanable=False，仅提供身份与说明（见 packs 设计契约）。
+        out["cleanable"] = False
         out["rule_id"] = f"{hit['_pack']}:{hit.get('id') or name}"
         out["confidence"] = "medium"
         out["confidence_label"] = f"中（来自资源包 {hit['_pack']}）"
@@ -2880,21 +2923,45 @@ _FOF_NOERRORUI = 0x400
 
 
 def _recycle_capacity_bytes(drive_root: str) -> int:
-    """该盘回收站的容量上限（字节）。注册表 MaxCapacity 缺失时按盘容量 5% 估。"""
+    """该盘回收站的剩余可用容量（字节）。NukeOnDelete=1 或非固定盘返回 0。"""
     import winreg
     import ctypes
     try:
-        guid_buf = ctypes.create_unicode_buffer(100)
-        # 路径必须是「X:\」形式，反斜杠结尾
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
         root = drive_root if drive_root.endswith("\\") else drive_root + "\\"
-        if ctypes.windll.kernel32.GetVolumeNameForVolumeMountPointW(
+        # 仅固定本地磁盘（DRIVE_FIXED == 3）有完整回收站语义；U 盘/网络盘会静默永久删除
+        if k32.GetDriveTypeW(ctypes.c_wchar_p(root)) != 3:
+            return 0
+        guid_buf = ctypes.create_unicode_buffer(100)
+        if k32.GetVolumeNameForVolumeMountPointW(
                 ctypes.c_wchar_p(root), guid_buf, 100):
+            vol_raw = guid_buf.value.rstrip("\\")
+            m_guid = re.search(r"(\{[0-9a-fA-F-]+\})", vol_raw)
+            vol_guid = m_guid.group(1) if m_guid else vol_raw
             key = (r"Software\Microsoft\Windows\CurrentVersion\Explorer"
-                   r"\BitBucket\Volume") + "\\" + guid_buf.value.rstrip("\\")
+                   r"\BitBucket\Volume") + "\\" + vol_guid
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+                try:
+                    nuke, _ = winreg.QueryValueEx(k, "NukeOnDelete")
+                    if int(nuke) != 0:
+                        return 0
+                except OSError:
+                    pass
                 mb, _ = winreg.QueryValueEx(k, "MaxCapacity")
                 if isinstance(mb, int) and mb > 0:
-                    return mb * 1024 * 1024
+                    cap = mb * 1024 * 1024
+                    try:
+                        class _SHQUERYRBINFO(ctypes.Structure):
+                            _fields_ = [("cbSize", ctypes.c_uint32),
+                                        ("i64Size", ctypes.c_int64),
+                                        ("i64NumItems", ctypes.c_int64)]
+                        s32 = ctypes.WinDLL("shell32", use_last_error=True)
+                        info = _SHQUERYRBINFO(cbSize=ctypes.sizeof(_SHQUERYRBINFO))
+                        if s32.SHQueryRecycleBinW(ctypes.c_wchar_p(root), ctypes.byref(info)) == 0:
+                            return max(0, cap - max(0, info.i64Size))
+                    except Exception:
+                        pass
+                    return cap
     except OSError:
         pass
     try:
@@ -3045,21 +3112,24 @@ def purge_recycle_paths(paths: list) -> dict:
         wanted.append(os.path.normpath(p).lower())
     wanted = list(dict.fromkeys(wanted))[:200]
     results, freed_total, matched_total = [], 0, 0
+    by_letter: dict[str, list[dict]] = {}
     for w in wanted:
         letter = w[:1].upper()
-        entries = _recycle_entries(letter)
+        if letter not in by_letter:
+            by_letter[letter] = _recycle_entries(letter)
+        entries = by_letter[letter]
         hits = [e for e in entries if e["orig"] == w]
         freed = 0
         for e in hits:
             sz = e["size"] or _size_of(e["r"])
-            ok_i = rm(e["i"])
             ok_r = True
-            if os.path.exists(e["r"]):
+            if os.path.lexists(e["r"]):
                 ok_r = rm(e["r"])
+            ok_i = rm(e["i"]) if ok_r else False
             if ok_i and ok_r:
                 freed += sz
                 matched_total += 1
-            # 失败项不计量、如实跳过：$I/$R 任一删除失败都不会计入释放量
+            # 失败项不计量、如实跳过：$R 必须先删掉，否则先删 $I 会遗留不可见孤儿文件
         if not hits:
             results.append({"path": w, "matched": 0,
                             "note": "回收站里没有这个路径的条目（可能已被清空）"})
@@ -3255,15 +3325,24 @@ def _purge_recycle_bin(letter: str) -> dict:
     的内容，其他 SID 会 PermissionError（管理员运行时可一并清掉）。
     desktop.ini 等结构文件不动。
     返回 deleted/failed/freed/fail_notes。"""
-    root = os.path.join(letter + ":", "$Recycle.Bin")
+    root = os.path.join(f"{letter.upper()}:\\", "$Recycle.Bin")
     out = {"deleted": 0, "failed": 0, "freed": 0, "fail_notes": []}
     if not os.path.isdir(root):
         return out
 
     def _rm_any(p: str) -> None:
         """删一个 $I/$R 条目（可能是文件也可能是目录），失败抛 OSError。"""
-        if os.path.isdir(p) and not os.path.islink(p):
-            shutil.rmtree(p)
+        if os.path.islink(p) or _is_reparse_dir(p):
+            os.rmdir(p) if os.path.isdir(p) else os.remove(p)
+        elif os.path.isdir(p):
+            def _onerr(func, fp, _exc):
+                if not os.path.islink(fp) and not _is_reparse_dir(fp):
+                    os.chmod(fp, stat.S_IWRITE)
+                func(fp)
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(p, onexc=_onerr)
+            else:
+                shutil.rmtree(p, onerror=_onerr)
         else:
             os.chmod(p, stat.S_IWRITE)
             os.remove(p)
@@ -3407,20 +3486,23 @@ def clean_target(t: dict, only_paths: list | None = None,
                     result["skipped"].append(os.path.basename(p))
             result["after"] = max(0, before - result["freed"])
         else:
-            d = expand(str(t.get("drive_letter") or ""), drive).rstrip(":") or letter
-            purged = _purge_recycle_bin(d)
+            d = (expand(str(t.get("drive_letter") or ""), drive).rstrip(":")
+                 or letter).upper()
+            purged = _purge_recycle_bin(d) if re.fullmatch(r"[A-Z]", d) else {
+                "deleted": 0, "failed": 0, "freed": 0, "fail_notes": []}
             result["deleted"] = purged["deleted"]
             result["freed"] = purged["freed"]
-            if purged["failed"]:
+            if purged["failed"] and re.fullmatch(r"[A-Z]", d):
                 # 兜底：Clear-RecycleBin 对系统盘有效（直删被拒的条目可能被
                 # 它清掉）；非系统盘它无效但无害。只在没有直删成果时才计入
                 # 它的成败，避免统计口径混乱。
-                run_ps("Clear-RecycleBin -DriveLetter "
-                       + d.replace("'", "''") + " -Force -ErrorAction SilentlyContinue")
+                m_pre_ps = measure_target(t, drive)
+                run_ps(f"Clear-RecycleBin -DriveLetter {d} -Force -ErrorAction SilentlyContinue")
                 m2 = measure_target(t, drive)
-                if m2.get("size", 0) < m.get("size", 0):
-                    result["freed"] += m.get("size", 0) - m2.get("size", 0)
-                    purged["failed"] = 0
+                if m2.get("size", 0) < m_pre_ps.get("size", 0):
+                    result["freed"] += m_pre_ps.get("size", 0) - m2.get("size", 0)
+                    if m2.get("size", 0) == 0:
+                        purged["failed"] = 0
             if purged["failed"]:
                 result["failed"] = purged["failed"]
                 result["partial_notes"].append(
@@ -3666,11 +3748,9 @@ def find_lock_holders(paths: list) -> dict:
     candidates: list[dict] = []
     ps_error = None
     if clean and IS_WINDOWS:
-        literal = ",".join("'" + p.replace("'", "''") + "'" for p in clean)
-        script = (PS_LOCK_HOLDERS
-                  .replace("__TARGETS__", literal)
-                  .replace("__LIMIT__", str(LOCK_RAW_ROW_LIMIT)))
-        r = run_ps(script, timeout=60)
+        script = PS_LOCK_HOLDERS.replace("__LIMIT__", str(LOCK_RAW_ROW_LIMIT))
+        r = run_ps(script, timeout=60,
+                   extra_env={"OC_TARGETS_JSON": json.dumps(clean, ensure_ascii=False)})
         if isinstance(r, dict) and "error" in r:
             ps_error = str(r["error"])
         else:
@@ -3752,6 +3832,9 @@ def stop_lock_processes(pids: list) -> dict:
             skipped.append({"pid": pid, "name": "", "reason": "系统或本工具自身进程禁止结束"})
             continue
         pname = _pid_process_name(pid)
+        if not pname:
+            skipped.append({"pid": pid, "name": "", "reason": "无法确认进程名，出于安全拒绝结束"})
+            continue
         if pname.lower() in _PROTECTED_PROCESS_NAMES:
             skipped.append({"pid": pid, "name": pname, "reason": "受保护的系统关键进程禁止结束"})
             continue
@@ -3995,7 +4078,7 @@ def build_targets(drive: str | None, custom_path: str | None = None) -> list[dic
         def _is_excluded(t: dict) -> bool:
             if (user_ov.get(_override_key(t)) or {}).get("excluded"):
                 return True
-            low = os.path.normpath(t.get("path", "")).lower()
+            low = os.path.normpath(expand(t.get("path", ""), drive)).lower()
             return (user_ov.get(low) or {}).get("excluded") is True
         out = [t for t in out if not _is_excluded(t)]
     for t in out:
@@ -4081,6 +4164,35 @@ def discover_junk_folders(root: str) -> list[dict]:
 #  单位换算
 # ======================================================================
 
+def _safe_eval_unit_expr(expr: str, resolve_fn) -> float:
+    """用 ast.parse 白名单求值单位换算表达式（禁止 eval/任意代码执行）。"""
+    import operator as _op
+    bin_ops = {
+        ast.Add: _op.add, ast.Sub: _op.sub,
+        ast.Mult: _op.mul, ast.Div: _op.truediv,
+    }
+    un_ops = {ast.UAdd: _op.pos, ast.USub: _op.neg}
+
+    def _eval_node(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return _eval_node(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+        if isinstance(node, ast.Name):
+            return float(resolve_fn(node.id))
+        if isinstance(node, ast.BinOp) and type(node.op) in bin_ops:
+            rval = _eval_node(node.right)
+            if isinstance(node.op, ast.Div) and rval == 0:
+                return 0.0
+            return float(bin_ops[type(node.op)](_eval_node(node.left), rval))
+        if isinstance(node, ast.UnaryOp) and type(node.op) in un_ops:
+            return float(un_ops[type(node.op)](_eval_node(node.operand)))
+        raise ValueError("unsupported expr node")
+
+    tree = ast.parse(expr, mode="eval")
+    return _eval_node(tree)
+
+
 def resolve_units(units: list[dict]) -> list[dict]:
     """解析 bytes_per_unit，支持 '1/3 * movie4k' 这类引用其它单位的表达式。"""
     by_id = {u.get("id"): u for u in units if u.get("id")}
@@ -4098,11 +4210,9 @@ def resolve_units(units: list[dict]) -> list[dict]:
             out = float(val)
         elif isinstance(val, str):
             expr = val.strip()
-            for other_id in by_id:
-                if other_id != uid and other_id in expr:
-                    expr = expr.replace(other_id, repr(resolve(other_id, chain + (uid,))))
             try:
-                out = float(eval(expr, {"__builtins__": {}}, {}))  # noqa: S307 本地配置表达式
+                out = _safe_eval_unit_expr(
+                    expr, lambda other_id: resolve(other_id, chain + (uid,)))
             except Exception:
                 out = 0.0
         resolved[uid] = out
@@ -4319,6 +4429,16 @@ def pack_validate(data) -> tuple[bool, str]:
             return False, f"entries[{i}] 缺少 match.any 或 match.all"
         if not str(e.get("title") or "").strip():
             return False, f"entries[{i}] 缺少 title"
+        for tok in (*_as_list(m.get("any")), *_as_list(m.get("all"))):
+            ts = str(tok or "").strip()
+            if ts.startswith("re:"):
+                pat = ts[3:]
+                if len(pat) > 200:
+                    return False, f"entries[{i}] 正则表达式过长（上限 200 字符）"
+                try:
+                    re.compile(pat)
+                except re.error as exc:
+                    return False, f"entries[{i}] 正则语法无效：{exc}"
     return True, f"{len(ents)} 条"
 
 
@@ -4560,7 +4680,7 @@ def _is_unsafe_remote(u: str) -> str:
         return "只支持 http/https 地址"
     if sp.username or sp.password:
         return "地址里不能带账号密码"
-    host = (sp.hostname or "").strip().lower()
+    host = (sp.hostname or "").strip().lower().rstrip(".")
     if not host:
         return "地址缺少主机名"
     blocked_hosts = {"metadata.google.internal", "metadata", "instance-data"}
@@ -4569,45 +4689,79 @@ def _is_unsafe_remote(u: str) -> str:
     # 回环与「未指定」地址：本机工具没有理由通过 HTTP 抓自己
     if host in ("localhost", "localhost.localdomain", "::1", "0.0.0.0", "[::1]"):
         return "拒绝访问本机回环地址"
-    try:
-        ip = ipaddress.ip_address(host)
-        if ip.is_loopback or ip.is_unspecified or ip.is_link_local:
+    def _bad_ip(ip_obj) -> str:
+        if ip_obj.is_loopback or ip_obj.is_unspecified or ip_obj.is_link_local or ip_obj.is_multicast:
             return "拒绝访问回环/链路本地地址"
+        return ""
+    try:
+        return _bad_ip(ipaddress.ip_address(host))
     except ValueError:
-        pass          # 不是 IP 字面量，是域名，放行
+        # 域名：解析 A/AAAA 防止 nip.io 等映射到 127.0.0.1 / 169.254.169.254
+        try:
+            infos = socket.getaddrinfo(host, sp.port or (443 if sp.scheme.lower() == "https" else 80))
+            for info in infos:
+                addr = info[4][0].split("%")[0]
+                msg = _bad_ip(ipaddress.ip_address(addr))
+                if msg:
+                    return msg
+        except OSError:
+            pass
     return ""
 
 
-def _authenticode_status(path: str) -> str:
-    """返回 exe 的 Authenticode 签名校验状态（Valid / NotSigned / …）。
-
-    外部审计 P1-3：WizTree 便携包下载解压后会以当前进程权限（往往是
-    管理员）直接执行 —— 此前只查 zip 头与体积，被篡改的包会被照跑。
-    官方发行版带 Antibody Software 的有效签名，签名不对即拒绝执行。
-    """
+def _authenticode_info(path: str) -> tuple[str, str]:
+    """返回 exe 的 (Authenticode 状态, 签名者 Subject)。"""
     try:
-        out = run_ps("(Get-AuthenticodeSignature -LiteralPath "
-                     + json.dumps(str(path)) + ").Status.ToString()")
-        return str(out or "").strip().strip('"') or "Unknown"
+        res = run_ps(
+            "$sig = Get-AuthenticodeSignature -LiteralPath $env:OC_SIG_PATH;"
+            "[pscustomobject]@{status=($sig.Status.ToString());"
+            "subject=($sig.SignerCertificate.Subject)} | ConvertTo-Json -Compress",
+            timeout=20,
+            extra_env={"OC_SIG_PATH": str(path)},
+        )
+        if isinstance(res, dict) and not res.get("error"):
+            return (str(res.get("status") or "Unknown"),
+                    str(res.get("subject") or ""))
     except Exception:
-        return "Unknown"
+        pass
+    return "Unknown", ""
 
 
-def fetch_json(url: str, timeout: int = 20):
-    """取一个 JSON。协议与目标限制见 _is_unsafe_remote（入口强制校验）。"""
+def _authenticode_status(path: str) -> str:
+    """返回 exe 的 Authenticode 签名校验状态（Valid / NotSigned / …）。"""
+    st, _subj = _authenticode_info(path)
+    return st
+
+
+def fetch_json(url: str, timeout: int = 20, max_bytes: int = 16 * 1024 * 1024):
+    """取一个 JSON。协议与目标限制见 _is_unsafe_remote（含重定向复检与体积上限）。"""
+    import urllib.request as _ur
     u = str(url or "").strip()
     if not re.match(r"^https?://", u, re.I):
         return None, "只支持 http/https 地址"
-    # 外部审计 P1-3：docstring 声称有目标限制但此前并未实现 ——
-    # /packs/update 允许请求体写入 remote 后直接 fetch，构成 SSRF 面。
-    # 这里统一收口：回环/链路本地/云元数据一律拒绝。
     unsafe = _is_unsafe_remote(u)
     if unsafe:
         return None, f"拒绝访问该地址：{unsafe}"
+
+    class _SafeRedirect(_ur.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            bad = _is_unsafe_remote(newurl)
+            if bad:
+                raise ValueError(f"重定向目标被拒绝：{bad}")
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
     try:
         req = _UrlRequest(u, headers={"User-Agent": APP_UA})
-        with _urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8", "replace")), ""
+        opener = _ur.build_opener(_SafeRedirect) if _urlopen is _ur.urlopen else None
+        ctx = opener.open(req, timeout=timeout) if opener else _urlopen(req, timeout=timeout)
+        with ctx as r:
+            try:
+                raw = r.read(max_bytes + 1)
+            except TypeError:
+                raw = r.read()
+            if len(raw) > max_bytes:
+                return None, f"下载失败：响应体超过上限（{max_bytes // (1024 * 1024)} MB）"
+            return json.loads(raw.decode("utf-8", "replace")), ""
     except Exception as e:
         return None, f"下载失败：{e}"
 
@@ -4668,9 +4822,9 @@ def packs_update_from_remote() -> dict:
 # 已迁至 ocleaner/analysis.py；下方四个签名库 / 搬家记录路径常量依赖
 # CONFIG_DIR（--data-dir 重定向），留在本模块，迁出侧经 `_core.` 引用。
 
-BLOATWARE_BUILTIN_PATH = CONFIG_DIR / "bloatware-builtin.json"
+BLOATWARE_BUILTIN_PATH = _cfg_or_bundled("bloatware-builtin.json")
 BLOATWARE_CFG_PATH = CONFIG_DIR / "bloatware.json"
-APPCLEAN_CFG_PATH = CONFIG_DIR / "appclean.json"
+APPCLEAN_CFG_PATH = _cfg_or_bundled("appclean.json")
 MOVED_JUNCTIONS_PATH = CONFIG_DIR / "moved-junctions.json"
 
 # ---- 毒瘤清除 / Junction 搬家 / 应用专清 / 重复检测 / 下载建议已迁出 ----
@@ -4879,6 +5033,29 @@ def _tray_worker(url: str) -> None:
         user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT,
                                           wintypes.WPARAM, wintypes.LPARAM]
         user32.DefWindowProcW.restype = ctypes.c_longlong
+        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+        user32.LoadIconW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR]
+        user32.LoadIconW.restype = wintypes.HICON
+        user32.CreatePopupMenu.argtypes = []
+        user32.CreatePopupMenu.restype = wintypes.HMENU
+        user32.AppendMenuW.argtypes = [wintypes.HMENU, wintypes.UINT, ctypes.c_size_t, wintypes.LPCWSTR]
+        user32.AppendMenuW.restype = wintypes.BOOL
+        user32.TrackPopupMenu.argtypes = [
+            wintypes.HMENU, wintypes.UINT, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, wintypes.HWND, ctypes.c_void_p]
+        user32.TrackPopupMenu.restype = wintypes.BOOL
+        user32.DestroyMenu.argtypes = [wintypes.HMENU]
+        user32.DestroyMenu.restype = wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.PostMessageW.restype = wintypes.BOOL
+        user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, ctypes.c_void_p]
+        user32.CreateWindowExW.restype = wintypes.HWND
 
         WM_USER_TRAY = 0x0400 + 1          # 托盘回调消息
         IDM_OPEN, IDM_CLEAN, IDM_QUIT = 1001, 1002, 1003
@@ -4918,9 +5095,26 @@ def _tray_worker(url: str) -> None:
                     user32.AppendMenuW(hmenu, 0, IDM_QUIT, "退出")
                     pos = wintypes.POINT()
                     user32.GetCursorPos(ctypes.byref(pos))
-                    user32.TrackPopupMenu(
-                        hmenu, 0x0080, pos.x, pos.y, 0, hwnd, None)  # TPM_RIGHTBUTTON|RETURNCMD 关闭
+                    # TPM_RIGHTBUTTON (0x0002) | TPM_NONOTIFY (0x0080) | TPM_RETURNCMD (0x0100)
+                    cmd_id = user32.TrackPopupMenu(
+                        hmenu, 0x0182, pos.x, pos.y, 0, hwnd, None)
+                    user32.PostMessageW(hwnd, 0, 0, 0)
                     user32.DestroyMenu(hmenu)
+                    if cmd_id == IDM_OPEN:
+                        webbrowser.open(url)
+                    elif cmd_id == IDM_CLEAN:
+                        import threading as _t
+                        sys_drv = (os.environ.get("SystemDrive") or "C:").rstrip(":\\/")
+                        _t.Thread(target=run_auto_clean, args=(sys_drv,),
+                                  daemon=True).start()
+                        nid = NOTIFYICONDATAW(
+                            cbSize=ctypes.sizeof(NOTIFYICONDATAW), hWnd=hwnd,
+                            uID=nid_cb, uFlags=0x10, szInfo="安全清理已在后台开始"
+                            "（只清 safe 预设安全项）",
+                            szInfoTitle="O-Cleaner")
+                        shell32.Shell_NotifyIconW(1, ctypes.byref(nid))
+                    elif cmd_id == IDM_QUIT:
+                        user32.PostQuitMessage(0)
             elif msg == 0x0111:                            # WM_COMMAND
                 if wparam & 0xFFFF == IDM_OPEN:
                     webbrowser.open(url)
@@ -4988,36 +5182,44 @@ def _tray_worker(url: str) -> None:
 def run_auto_clean(drive: str) -> dict:
     """无头单次清理（v2.15 CLI Automation，配任务计划程序用）。
 
-    「safe 预设」的定义即：只清 cleanable=True 的目标（知识库判定
-    「建议清理」的才入选，建议保留/未识别一律不碰），高风险项一律入
-    回收站（可恢复），全程记历史与回执。输出 JSON 摘要供上层调度。
+    严格按「safe 预设」执行：仅选无风险内置目标，排除回收站、需要提权项、
+    自动发现目录及用户标为保留的项，全程持全局清理锁并记历史与回执。
     """
     drive = (drive or "C").rstrip(":").upper()
-    targets = [t for t in build_targets(drive)
-               if t.get("cleanable") is not False]
-    targets, _merged = dedup_nested_targets(targets)
-    results = []
-    for t in targets:
-        try:
-            results.append(clean_target(t, None, drive, trash=True))
-        except Exception as exc:  # noqa: BLE001
-            results.append(_error_result(t, drive, exc))
-    freed = sum(r.get("freed", 0) or 0 for r in results
-                if isinstance(r, dict))
-    failed = sum(r.get("failed", 0) or 0 for r in results
-                 if isinstance(r, dict))
+    if not _CLEAN_LOCK.acquire(blocking=False):
+        return {"drive": drive, "ok": False, "error": "已有清理任务在执行"}
     try:
-        append_history({
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "drive": drive,
-            "trigger": f"自动安全清理（{drive}:）",
-            "results": results, "freed": freed, "failed": failed,
-            "targets": len(targets), "freed_h": human(freed),
-        })
-    except Exception:  # noqa: BLE001
-        traceback.print_exc()
-    return {"drive": drive, "targets": len(targets),
-            "freed": freed, "freed_h": human(freed), "results": results}
+        all_t = build_targets(drive)
+        safe_t = _apply_preset_to_targets(all_t, "safe")
+        targets = [t for t in safe_t
+                   if t.get("cleanable") is not False
+                   and not t.get("discovered")
+                   and t.get("kind") != "recyclebin"]
+        targets, _merged = dedup_nested_targets(targets)
+        results = []
+        for t in targets:
+            try:
+                results.append(clean_target(t, None, drive, trash=True))
+            except Exception as exc:  # noqa: BLE001
+                results.append(_error_result(t, drive, exc))
+        freed = sum(r.get("freed", 0) or 0 for r in results
+                    if isinstance(r, dict))
+        failed = sum(r.get("failed", 0) or 0 for r in results
+                     if isinstance(r, dict))
+        try:
+            append_history({
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "drive": drive,
+                "trigger": f"自动安全清理（{drive}:）",
+                "results": results, "freed": freed, "failed": failed,
+                "targets": len(targets), "freed_h": human(freed),
+            })
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        return {"drive": drive, "targets": len(targets),
+                "freed": freed, "freed_h": human(freed), "results": results}
+    finally:
+        _CLEAN_LOCK.release()
 
 
 def main() -> None:

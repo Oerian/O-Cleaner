@@ -1,18 +1,20 @@
 """O-Cleaner 后端包（P2-1 巨石拆分，2026-11-05 起，2026-11-21 更新）。
 
-模块清单与职责（共 12 模块）：
+模块清单与职责（共 13 模块）：
 - core.py         实现主体（扫描编排 / 识别 / 服务启动与托盘）
 - analysis.py     分析中心域（大文件排行 / 重复检测 / 毒瘤清除 / Junction
                   搬家 / 应用专清 / 下载整理 / 快照对比 / 实时搜索 / 趋势预测）
 - server.py       HTTP 路由层（/__oc__/* 全部路由 / 入口守卫 / Handler）
 - engines.py      扫描引擎（自研 NTFS MFT 直读 / WizTree 加速与验签）
 - guard.py        九层删除护栏链 / 受保护域 / 安装目录与浏览器档案判定
-- deleter.py      三态删除 / 锁定预检 / 回收站 / 中断恢复
-- store.py        原子写 / JSON 缓存 / RLock / 跨进程文件锁
+- deleter.py      三态删除 / 锁定预检 / 回收站 / 重启删除 / 中断恢复
+- store.py        原子写 / JSON 缓存 / RLock / 跨进程文件锁 / 数据迁移与备份
+- receipts.py     清理历史与可检索审计回执
+- scheduler.py    定时自动清理调度器
 - measure.py      os.scandir 测量原语（tree / glob / dir_kind / tree_size）
 - credentials.py  Windows DPAPI 凭据加密
 - games.py        Steam / Epic / GOG 发现、游戏库、趋势
-- integrations.py Gist 云同步 / 自有 AI 接入 / 版本更新检查
+- integrations.py Gist 云同步 / 自有 AI 接入 / 版本自更新 / 社区目录与上传
 
 兼容契约：根 app.py 全量 re-export core；子模块对 core 侧符号经
 `_core.` 惰性引用（selftest 的 monkeypatch 落在 core 命名空间）；

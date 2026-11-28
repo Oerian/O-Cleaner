@@ -406,7 +406,10 @@ def _detect_local_env() -> tuple[set[str], list[str]]:
     labels: list[str] = ["Windows"]
     try:
         games = _core.discover_games()
-        if games.get("steam") or games.get("epic") or games.get("gog"):
+        plats = games.get("platforms") or {}
+        if games.get("found") or any(
+                isinstance(plats.get(p), dict) and plats[p].get("found")
+                for p in ("steam", "epic", "gog")):
             tags.add("games")
             labels.append("游戏平台")
     except Exception:
@@ -430,13 +433,9 @@ def packs_catalog() -> dict:
     """拉取社区资源包目录并按本机环境自动标注推荐度。"""
     env_tags, env_labels = _detect_local_env()
     remote = str(_core.load_packs_state().get("remote") or _core.DEFAULT_PACKS_REMOTE).rstrip("/")
-    idx_data = None
+    idx_data, _fetch_err = _core.fetch_json(remote + "/index.json", timeout=8)
     source = "remote"
-    try:
-        req = _core._UrlRequest(remote + "/index.json", headers={"User-Agent": _core.APP_UA})
-        with _core._urlopen(req, timeout=8) as resp:
-            idx_data = json.loads(resp.read().decode("utf-8", "replace"))
-    except Exception:
+    if not isinstance(idx_data, dict):
         source = "local"
         try:
             idx_data = json.loads((_core.BASE_DIR / "packs" / "index.json").read_text(encoding="utf-8"))
@@ -484,77 +483,128 @@ def app_self_update() -> dict:
     """从 GitHub Releases 下载最新版并校验 SHA256SUMS.txt，保留 data/ 与 config/ 覆盖代码文件。"""
     import hashlib
     import io
+    import os
+    import stat as _stat
     import zipfile
+    from pathlib import Path
+    from urllib.parse import urlsplit
 
-    info = app_update_check()
-    if not info.get("ok"):
-        return info
-    if not info.get("newer"):
-        return {"ok": False, "error": "当前已是最新版本，无需升级"}
-
-    url = f"https://api.github.com/repos/{_APP_REPO}/releases/latest"
+    if not _core._CLEAN_LOCK.acquire(blocking=False):
+        return {"ok": False, "error": "已有清理或维护任务在执行，请等待完成后再升级"}
     try:
-        req = _core._UrlRequest(url, headers={"User-Agent": _core.APP_UA})
-        with _core._urlopen(req, timeout=15) as r:
-            rel = json.loads(r.read().decode("utf-8", "replace"))
-    except Exception as exc:
-        return {"ok": False, "error": f"获取发布清单失败：{exc}"}
+        url = f"https://api.github.com/repos/{_APP_REPO}/releases/latest"
+        try:
+            req = _core._UrlRequest(url, headers={"User-Agent": _core.APP_UA})
+            with _core._urlopen(req, timeout=15) as r:
+                rel = json.loads(r.read().decode("utf-8", "replace"))
+        except Exception as exc:
+            return {"ok": False, "error": f"获取发布清单失败：{exc}"}
 
-    assets = {str(a.get("name") or ""): str(a.get("browser_download_url") or "")
-              for a in (rel.get("assets") or []) if isinstance(a, dict)}
-    is_embed = (_core.BASE_DIR / "python").is_dir()
-    target_name = next((n for n in assets if is_embed and n.endswith("-win64-embed.zip")), "")
-    if not target_name:
-        target_name = next((n for n in assets if n.endswith(".zip") and "embed" not in n), "")
-    if not target_name or not assets.get(target_name):
-        return {"ok": False, "error": "未找到匹配的发布压缩包"}
+        tag = str(rel.get("tag_name") or "").strip()
+        latest = _version_tuple(tag.lstrip("vV"))
+        cur = _version_tuple(_core.APP_VERSION)
+        if not (latest and cur and latest > cur):
+            return {"ok": False, "error": "当前已是最新版本，无需升级"}
 
-    sums_url = assets.get("SHA256SUMS.txt")
-    if not sums_url:
-        return {"ok": False, "error": "发布页缺少 SHA256SUMS.txt 校验文件，已中止升级"}
-    try:
-        req_s = _core._UrlRequest(sums_url, headers={"User-Agent": _core.APP_UA})
-        with _core._urlopen(req_s, timeout=15) as rs:
-            sums_txt = rs.read().decode("utf-8", "replace")
-        expected_hash = ""
-        for line in sums_txt.splitlines():
-            parts = line.strip().split()
-            if len(parts) >= 2 and parts[-1] == target_name:
-                expected_hash = parts[0].lower()
-                break
-        if not expected_hash:
-            return {"ok": False, "error": f"SHA256SUMS.txt 中未找到 {target_name}"}
-        req_z = _core._UrlRequest(assets[target_name], headers={"User-Agent": _core.APP_UA})
-        with _core._urlopen(req_z, timeout=120) as rz:
-            zip_bytes = rz.read()
-    except Exception as exc:
-        return {"ok": False, "error": f"下载升级包失败：{exc}"}
+        def _is_gh_asset(u: str) -> bool:
+            sp = urlsplit(str(u or "").strip())
+            host = (sp.hostname or "").lower()
+            return sp.scheme.lower() == "https" and (
+                host == "github.com" or host.endswith(".githubusercontent.com"))
 
-    actual_hash = hashlib.sha256(zip_bytes).hexdigest().lower()
-    if actual_hash != expected_hash:
-        return {"ok": False, "error": f"SHA-256 校验失败（预期 {expected_hash[:12]}，实际 {actual_hash[:12]}）"}
+        assets = {str(a.get("name") or ""): str(a.get("browser_download_url") or "")
+                  for a in (rel.get("assets") or []) if isinstance(a, dict)}
+        is_embed = (_core.BASE_DIR / "python").is_dir()
+        target_name = next((n for n in assets if is_embed and n.endswith("-win64-embed.zip")), "")
+        if not target_name:
+            target_name = next((n for n in assets if n.endswith(".zip") and "embed" not in n), "")
+        if not target_name or not assets.get(target_name) or not _is_gh_asset(assets[target_name]):
+            return {"ok": False, "error": "未找到匹配的官方发布压缩包"}
 
-    allowed_prefixes = ("O-Cleaner/app.py", "O-Cleaner/ps_scripts.py",
-                        "O-Cleaner/ocleaner/", "O-Cleaner/web/",
-                        "O-Cleaner/packs/", "O-Cleaner/README.md")
-    updated = 0
-    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
-        for zi in zf.infolist():
-            if zi.is_dir():
-                continue
-            name = zi.filename.replace("\\", "/")
-            if not any(name == p or name.startswith(p) for p in allowed_prefixes):
-                continue
-            rel_path = name[len("O-Cleaner/"):]
-            if ".." in rel_path.split("/"):
-                continue
-            dst = (_core.BASE_DIR / rel_path).resolve()
-            if not str(dst).startswith(str(_core.BASE_DIR.resolve())):
-                continue
+        sums_url = assets.get("SHA256SUMS.txt")
+        if not sums_url or not _is_gh_asset(sums_url):
+            return {"ok": False, "error": "发布页缺少官方 SHA256SUMS.txt 校验文件，已中止升级"}
+        max_zip = 128 * 1024 * 1024
+        try:
+            req_s = _core._UrlRequest(sums_url, headers={"User-Agent": _core.APP_UA})
+            with _core._urlopen(req_s, timeout=15) as rs:
+                sums_txt = rs.read(256 * 1024).decode("utf-8", "replace")
+            expected_hash = ""
+            for line in sums_txt.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2 and parts[-1].lstrip("*") == target_name:
+                    expected_hash = parts[0].lower()
+                    break
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+                return {"ok": False, "error": f"SHA256SUMS.txt 中未找到有效的 {target_name} 校验值"}
+            req_z = _core._UrlRequest(assets[target_name], headers={"User-Agent": _core.APP_UA})
+            with _core._urlopen(req_z, timeout=120) as rz:
+                zip_bytes = rz.read(max_zip + 1)
+            if len(zip_bytes) > max_zip:
+                return {"ok": False, "error": "升级包体积超过 128 MB 上限，已中止"}
+        except Exception as exc:
+            return {"ok": False, "error": f"下载升级包失败：{exc}"}
+
+        actual_hash = hashlib.sha256(zip_bytes).hexdigest().lower()
+        if actual_hash != expected_hash:
+            return {"ok": False, "error": f"SHA-256 校验失败（预期 {expected_hash[:12]}，实际 {actual_hash[:12]}）"}
+
+        exact_files = {"O-Cleaner/app.py", "O-Cleaner/ps_scripts.py",
+                       "O-Cleaner/README.md", "O-Cleaner/CHANGELOG.md"}
+        dir_prefixes = ("O-Cleaner/ocleaner/", "O-Cleaner/web/", "O-Cleaner/packs/")
+        base_resolved = _core.BASE_DIR.resolve()
+        staged: list[tuple[Path, bytes]] = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+                for zi in zf.infolist():
+                    if zi.is_dir() or _stat.S_ISLNK((zi.external_attr or 0) >> 16):
+                        continue
+                    name = zi.filename.replace("\\", "/")
+                    if ":" in name:
+                        continue
+                    if not (name in exact_files or any(name.startswith(p) for p in dir_prefixes)):
+                        continue
+                    rel_path = name[len("O-Cleaner/"):]
+                    parts = rel_path.split("/")
+                    if any(p in ("", ".", "..") for p in parts):
+                        continue
+                    dst = (base_resolved / rel_path).resolve()
+                    try:
+                        in_base = dst.is_relative_to(base_resolved)
+                    except AttributeError:
+                        in_base = os.path.commonpath([str(base_resolved), str(dst)]) == str(base_resolved)
+                    if not in_base:
+                        continue
+                    staged.append((dst, zf.read(zi.filename)))
+        except (zipfile.BadZipFile, OSError) as exc:
+            return {"ok": False, "error": f"解析升级包失败：{exc}"}
+
+        if not staged:
+            return {"ok": False, "error": "升级包内未包含可更新的程序文件"}
+
+        updated = 0
+        for dst, content in staged:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(zf.read(zi.filename))
+            tmp = dst.with_name(f".{dst.name}.{os.getpid()}.upd")
+            tmp.write_bytes(content)
+            try:
+                os.replace(tmp, dst)
+            except PermissionError:
+                # Windows 下已加载的 DLL（如 mft_fast.dll）无法直接覆盖，先改名占位再落新文件
+                old_bak = dst.with_name(f"{dst.name}.old")
+                try:
+                    if old_bak.exists():
+                        old_bak.unlink()
+                    if dst.exists():
+                        os.rename(dst, old_bak)
+                    os.replace(tmp, dst)
+                except OSError as exc:
+                    tmp.unlink(missing_ok=True)
+                    return {"ok": False, "error": f"写入 {dst.name} 失败：{exc}"}
             updated += 1
-    return {"ok": True, "version": info.get("latest"), "updated_files": updated, "need_restart": True}
+        return {"ok": True, "version": tag or None, "updated_files": updated, "need_restart": True}
+    finally:
+        _core._CLEAN_LOCK.release()
 
 def ai_chat(messages: list[dict], timeout: int | None = None) -> tuple[bool, str]:
     """调用用户自己的 Chat Completions 接口。返回 (成功, 文本或错误)。"""
@@ -568,7 +618,7 @@ def ai_chat(messages: list[dict], timeout: int | None = None) -> tuple[bool, str
         return False, "未填写模型名"
     body = json.dumps({
         "model": cfg["model"], "messages": messages,
-        "temperature": float(cfg.get("temperature") or 0.2), "stream": False,
+        "temperature": float(0.2 if cfg.get("temperature") is None else cfg.get("temperature")), "stream": False,
     }, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json",
                "User-Agent": _core.APP_UA}
@@ -709,7 +759,7 @@ def ai_explain_batch(payload: dict) -> dict:
                 "category": str(row.get("category") or "未知")[:20],
                 "what": str(row.get("what") or "")[:200],
                 "rebuild": str(row.get("rebuild") or "不确定")[:20],
-                "cleanable": bool(row.get("cleanable", False)),
+                "cleanable": row.get("cleanable") is True,
                 "advice": str(row.get("advice") or "")[:200],
                 "source": "ai",
             }
@@ -759,7 +809,9 @@ def ai_plan(payload: dict) -> dict:
     known = {c["id"]: c for c in cands}
     picks, dropped = [], []
     for p in _core._as_list(parsed.get("picks")):
-        pid = str((p or {}).get("id") or "")
+        if not isinstance(p, dict):
+            continue
+        pid = str(p.get("id") or "")
         if pid in known:
             picks.append({"id": pid, "reason": str((p or {}).get("reason") or ""),
                           "label": known[pid].get("label") or pid,

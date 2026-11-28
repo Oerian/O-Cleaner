@@ -208,7 +208,7 @@ Get-ChildItem -LiteralPath $root -Recurse -Force -File -ErrorAction SilentlyCont
     }
   }
 if ($progFile) { try { [IO.File]::WriteAllText($progFile, [string]$script:found) } catch {} }
-$out | ConvertTo-Json -Compress -Depth 2
+if ($out.Count -eq 0) { '[]' } else { $out | ConvertTo-Json -Compress -Depth 2 }
 """
 
 
@@ -230,10 +230,13 @@ foreach ($root in ($roots | Select-Object -Unique)) {
     if (-not (Test-Path -LiteralPath $root)) { continue }
     $libPaths = @($root)
     $vdf = Join-Path $root 'steamapps\libraryfolders.vdf'
+    if (-not (Test-Path -LiteralPath $vdf)) { $vdf = Join-Path $root 'config\libraryfolders.vdf' }
     if (Test-Path -LiteralPath $vdf) {
-        $txt = Get-Content -LiteralPath $vdf -Raw -ErrorAction SilentlyContinue
-        foreach ($m in [regex]::Matches($txt, '"path"\s+"([^"]+)"')) {
-            $libPaths += ($m.Groups[1].Value -replace '\\\\', '\')
+        $txt = Get-Content -LiteralPath $vdf -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($txt) {
+            foreach ($m in [regex]::Matches($txt, '"path"\s+"([^"]+)"')) {
+                $libPaths += ($m.Groups[1].Value -replace '\\\\', '\')
+            }
         }
     }
     foreach ($lp in ($libPaths | Select-Object -Unique)) {
@@ -272,23 +275,27 @@ foreach ($p in $paths) {
 """
 
 PS_LOCK_HOLDERS = r"""
-$targets = @(__TARGETS__)
+$targets = @()
+if ($env:OC_TARGETS_JSON) {
+    try { $targets = @($env:OC_TARGETS_JSON | ConvertFrom-Json) } catch { $targets = @() }
+}
 $rows = New-Object System.Collections.ArrayList
 foreach ($pr in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
-    # 跳过扫描者自己：本脚本把目标路径当作字面量写在命令行里，
-    # 不排除的话 powershell.exe 一定会「命令行里含这个完整路径」命中自己，
-    # 既制造假候选、又把真正的候选挤到后面。
     if ($pr.ProcessId -eq $PID) { continue }
     $exe = $pr.ExecutablePath
     $cmd = $pr.CommandLine
     if ([string]::IsNullOrEmpty($exe) -and [string]::IsNullOrEmpty($cmd)) { continue }
     foreach ($t in $targets) {
-        $dir = [System.IO.Path]::GetDirectoryName($t)
-        $nm  = [System.IO.Path]::GetFileName($t)
+        if ([string]::IsNullOrEmpty($t)) { continue }
+        $dir = ''; $nm = ''
+        try {
+            $dir = [System.IO.Path]::GetDirectoryName($t)
+            $nm  = [System.IO.Path]::GetFileName($t)
+        } catch { continue }
         $why = ''
         $strong = $false
         if (-not [string]::IsNullOrEmpty($exe) -and -not [string]::IsNullOrEmpty($dir)) {
-            $pfx = $dir.ToLower() + [System.IO.Path]::DirectorySeparatorChar
+            $pfx = $dir.ToLower().TrimEnd('\') + [System.IO.Path]::DirectorySeparatorChar
             if ($exe.ToLower().StartsWith($pfx)) {
                 $strong = $true; $why = '程序本体就在这个目录下'
             }

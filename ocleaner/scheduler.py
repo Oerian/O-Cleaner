@@ -93,7 +93,10 @@ def _apply_preset_to_targets(targets: list[dict], preset_id: str) -> list[dict]:
         # 而定时任务会照这个范围真删。返回空集，由调用方如实报告。
         return []
     ids = set(_resolve_preset(targets, preset))
-    return [t for t in targets if t["id"] in ids]
+    return [t for t in targets
+            if t["id"] in ids
+            and t.get("cleanable") is not False
+            and not t.get("discovered")]
 
 
 def _scheduler_loop() -> None:
@@ -114,49 +117,59 @@ def _scheduler_loop() -> None:
 
 
 def _run_scheduled(s: dict) -> None:
-    drive = (s.get("drive") or "C").rstrip(":").upper()
-    entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-             "drive": drive,
-             "trigger": f"定时自动清理（{drive}:）",
-             "results": [], "freed": 0, "failed": 0, "targets": 0}
+    if not _core._CLEAN_LOCK.acquire(blocking=False):
+        return
     try:
-        targets = _core.build_targets(drive)
-        selected = _apply_preset_to_targets(targets, s.get("preset") or "safe")
-        if not selected:
-            # 预设找不到 / 展开为空：不清理，只记一条可读的原因。
-            # 以前这里会静默跑空并推进 next_run，用户永远不知道定时任务没生效。
-            entry["results"].append({
-                "id": "-", "label": f"预设「{s.get('preset')}」不存在或没有匹配项",
-                "path": "", "drive": drive, "freed": 0, "deleted": 0,
-                "failed": 0, "skipped": [], "before": 0, "after": 0,
-                "seconds": 0.0, "renews": None,
-                "error": "本次未执行任何清理（预设无效），请检查定时清理设置",
-            })
-        entry["targets"] = len(selected)
-        for t in selected:
+        with _core._cross_process_lock("schedule"):
+            cur0 = schedule_state()
+            if not cur0.get("enabled"):
+                return
+            nxt0 = float(cur0.get("next_run") or 0)
+            if not nxt0 or time.time() < nxt0:
+                return
+            drive = str(cur0.get("drive") or s.get("drive") or "C").rstrip(":").upper()
+            if not drive or len(drive) != 1 or not drive.isalpha():
+                drive = "C"
+            entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                     "drive": drive,
+                     "trigger": f"定时自动清理（{drive}:）",
+                     "results": [], "freed": 0, "failed": 0, "targets": 0}
             try:
-                r = _core.clean_target(t, drive=drive)
-            except Exception as exc:  # noqa: BLE001
-                traceback.print_exc()
-                r = _error_result(t, drive, exc)
-            entry["results"].append(r)
-            entry["freed"] += r["freed"]
-            entry["failed"] += r["failed"]
+                targets = _core.build_targets(drive)
+                selected = _apply_preset_to_targets(targets, cur0.get("preset") or "safe")
+                selected, _merged = _core.dedup_nested_targets(selected)
+                if not selected:
+                    entry["results"].append({
+                        "id": "-", "label": f"预设「{cur0.get('preset')}」不存在或没有匹配项",
+                        "path": "", "drive": drive, "freed": 0, "deleted": 0,
+                        "failed": 0, "skipped": [], "before": 0, "after": 0,
+                        "seconds": 0.0, "renews": None,
+                        "error": "本次未执行任何清理（预设无效），请检查定时清理设置",
+                    })
+                entry["targets"] = len(selected)
+                for t in selected:
+                    try:
+                        r = _core.clean_target(t, drive=drive)
+                    except Exception as exc:  # noqa: BLE001
+                        traceback.print_exc()
+                        r = _error_result(t, drive, exc)
+                    entry["results"].append(r)
+                    entry["freed"] += r["freed"]
+                    entry["failed"] += r["failed"]
+            finally:
+                entry["freed_h"] = _core.human(entry["freed"])
+                _core.append_history(entry)
+                with _core._lock:
+                    cur = schedule_state()
+                    cur.pop("last_summary", None)
+                    now = time.time()
+                    hrs = _schedule_run_interval(cur)
+                    cur["interval_hours"] = hrs
+                    cur["last_run"] = now
+                    cur["next_run"] = (now + hrs * 3600) if cur.get("enabled") else 0
+                    _core._atomic_write(_core.SCHEDULE_PATH, cur)
     finally:
-        # 无论本轮成功、失败还是抛异常，next_run 都必须推进 ——
-        # 否则守护线程 30 秒后会认为「又到期了」并再删一次。历史上
-        # interval_hours 被写成非法值时，这里抛 ValueError 导致 next_run
-        # 停在过去，实测在 2 分钟内连续触发了 6 次真实清理。
-        entry["freed_h"] = _core.human(entry["freed"])
-        _core.append_history(entry)
-        with _core._lock:
-            cur = schedule_state()          # 锁内重读，别用过期的快照
-            now = time.time()
-            hrs = _schedule_run_interval(cur)
-            cur["interval_hours"] = hrs     # 顺手把非法值就地修正
-            cur["last_run"] = now
-            cur["next_run"] = now + hrs * 3600
-            _core._atomic_write(_core.SCHEDULE_PATH, cur)
+        _core._CLEAN_LOCK.release()
 
 
 def _error_result(t: dict, drive: str | None, exc: Exception) -> dict:

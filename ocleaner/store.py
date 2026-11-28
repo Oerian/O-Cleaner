@@ -13,7 +13,6 @@ core 在自身初始化早期 import 本模块，本模块在**调用期**才访
 """
 
 from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
-import base64
 import io
 import json
 import os
@@ -292,6 +291,8 @@ def _import_bundle(body: dict) -> dict:
         if entry is None:
             rep["overrides_skipped"].append(f"「{k}」没有可用的字段")
             continue
+        if _is_path_key:
+            k = os.path.normpath(k).lower()
         data["targets"][k] = entry
         rep["overrides_applied"] += 1
     _core.save_overrides(data)
@@ -378,17 +379,22 @@ def _iter_portable_files(data_dir: Path):
     upacks = cfg_dir / "packs-user"
     if upacks.is_dir():
         for fp in upacks.rglob("*"):
-            if fp.is_file():
+            if fp.is_file() and not fp.is_symlink():
                 rel = fp.relative_to(data_dir).as_posix()
                 yield rel, fp
     rt_dir = data_dir / "data"
     if rt_dir.is_dir():
         for fp in rt_dir.rglob("*"):
-            if not fp.is_file():
-                continue
-            if fp.name.startswith(".oc-") and fp.name.endswith(".lock"):
+            if not fp.is_file() or fp.is_symlink():
                 continue
             rel = fp.relative_to(data_dir).as_posix()
+            rel_low = rel.lower()
+            if fp.name.startswith(".oc-") and fp.name.endswith(".lock"):
+                continue
+            if rel_low == "data/pending-deletes.json" or rel_low == "data/cover-placeholder.img":
+                continue
+            if rel_low.startswith("data/app-profile/"):
+                continue
             yield rel, fp
 
 
@@ -404,8 +410,35 @@ def export_full_backup() -> bytes:
     return buf.getvalue()
 
 
+def _is_safe_backup_rel(rel: str) -> str | None:
+    """校验备份 ZIP 条目相对路径是否属于严格白名单，返回规范路径或 None。"""
+    from pathlib import PurePosixPath
+    raw = str(rel or "").replace("\\", "/").lstrip("/")
+    if not raw or ":" in raw:
+        return None
+    parts = raw.split("/")
+    if any(p in ("", ".", "..") or p.endswith((".", " ")) for p in parts):
+        return None
+    norm = PurePosixPath(*parts).as_posix()
+    low = norm.lower()
+    allowed_cfg = {f"config/{f.lower()}" for f in _BACKUP_CFG_FILES}
+    if low in allowed_cfg:
+        return f"config/{next(f for f in _BACKUP_CFG_FILES if f.lower() == parts[1].lower())}"
+    if len(parts) == 3 and parts[0].lower() == "config" and parts[1].lower() == "packs-user":
+        if re.fullmatch(r"[A-Za-z0-9._-]{2,64}\.json", parts[2]) and parts[2].lower() != "index.json":
+            return f"config/packs-user/{parts[2]}"
+        return None
+    if low in ("data/history.json", "data/disk-trend.json", "data/game-history.json", "data/schedule.json"):
+        return f"data/{parts[1].lower()}"
+    if len(parts) == 3 and parts[0].lower() == "data" and parts[1].lower() in ("receipts", "snapshots"):
+        if re.fullmatch(r"[A-Za-z0-9._-]{1,80}\.json", parts[2]):
+            return f"data/{parts[1].lower()}/{parts[2]}"
+    return None
+
+
 def import_full_backup(raw_bytes: bytes) -> dict:
-    """从备份 zip 还原配置与运行数据到当前 DATA_DIR（拒绝路径穿越与密钥覆盖）。"""
+    """从备份 zip 还原配置与运行数据到当前 DATA_DIR（严格白名单 + 防 Zip Bomb + 防路径穿越）。"""
+    import stat as _stat
     if not raw_bytes:
         raise ValueError("备份文件为空")
     try:
@@ -413,27 +446,46 @@ def import_full_backup(raw_bytes: bytes) -> dict:
     except zipfile.BadZipFile as exc:
         raise ValueError(f"不是合法的 ZIP 备份文件：{exc}") from exc
     copied = 0
+    total_read = 0
+    max_file_bytes = 16 * 1024 * 1024
+    max_total_bytes = 64 * 1024 * 1024
+    max_entries = 500
+    base_resolved = _core.DATA_DIR.resolve()
     with zf:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            rel = info.filename.replace("\\", "/").lstrip("/")
-            if ".." in rel.split("/") or ":" in rel:
-                continue
-            if not (rel.startswith("config/") or rel.startswith("data/")):
-                continue
-            if rel in ("config/ai.json", "config/sync.json"):
-                continue
-            if info.file_size > 32 * 1024 * 1024:
-                continue
-            dst = (_core.DATA_DIR / rel).resolve()
-            if not str(dst).startswith(str(_core.DATA_DIR.resolve())):
-                continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            with zf.open(info, "r") as src_f:
-                dst.write_bytes(src_f.read())
-            copied += 1
-    _cache.clear()
+        infos = zf.infolist()
+        if len(infos) > 2000:
+            raise ValueError("备份文件条目过多，已拒绝导入")
+        with _lock, _cross_process_lock("backup"):
+            for info in infos:
+                if info.is_dir():
+                    continue
+                if _stat.S_ISLNK((info.external_attr or 0) >> 16):
+                    continue
+                safe_rel = _is_safe_backup_rel(info.filename)
+                if not safe_rel:
+                    continue
+                if copied >= max_entries:
+                    break
+                dst = (base_resolved / safe_rel).resolve()
+                try:
+                    in_base = dst.is_relative_to(base_resolved)
+                except AttributeError:
+                    in_base = os.path.commonpath([str(base_resolved), str(dst)]) == str(base_resolved)
+                if not in_base:
+                    continue
+                with zf.open(info, "r") as src_f:
+                    chunk = src_f.read(max_file_bytes + 1)
+                if len(chunk) > max_file_bytes:
+                    raise ValueError(f"备份条目 {safe_rel} 超过单文件体积上限")
+                total_read += len(chunk)
+                if total_read > max_total_bytes:
+                    raise ValueError("备份解压总体积超过上限，已中止")
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
+                tmp.write_bytes(chunk)
+                os.replace(tmp, dst)
+                copied += 1
+            _cache.clear()
     return {"ok": True, "files": copied}
 
 
@@ -450,11 +502,18 @@ def migrate_data_dir(target_dir: str, reset: bool = False) -> dict:
                 "copied": 0, "need_restart": True}
 
     raw = str(target_dir or "").strip()
-    if not raw or not os.path.isabs(raw):
-        raise ValueError("请输入完整的绝对目录路径（例如 D:\\O-Cleaner-Data）")
+    if not raw or not re.match(r"^[A-Za-z]:\\", raw):
+        raise ValueError("请输入完整的本地盘符绝对目录路径（例如 D:\\O-Cleaner-Data）")
     dst = Path(raw).resolve()
     if len(dst.parts) <= 1:
         raise ValueError("不能直接使用盘符根目录，请指定子目录（例如 D:\\O-Cleaner-Data）")
+    cur_data = _core.DATA_DIR.resolve()
+    try:
+        in_cur = dst.is_relative_to(cur_data)
+    except AttributeError:
+        in_cur = os.path.commonpath([str(cur_data), str(dst)]) == str(cur_data)
+    if dst != cur_data and in_cur:
+        raise ValueError("目标目录不能位于当前数据目录内部")
     try:
         dst.mkdir(parents=True, exist_ok=True)
         probe = dst / f".oc_probe_{os.getpid()}"
@@ -464,12 +523,24 @@ def migrate_data_dir(target_dir: str, reset: bool = False) -> dict:
         raise ValueError(f"目标目录不可写：{exc}") from exc
 
     copied = 0
-    if dst != _core.DATA_DIR.resolve():
-        for rel, fp in _iter_portable_files(_core.DATA_DIR):
-            out = dst / rel
-            out.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(fp, out)
-            copied += 1
-    ptr.write_text(str(dst), encoding="utf-8")
+    if dst != cur_data:
+        with _lock:
+            files_to_copy = list(_iter_portable_files(_core.DATA_DIR))
+            for extra_name in ("moved-junctions.json", "bloatware.json",
+                               "ai.json", "sync.json", "engine_speed.json"):
+                efp = _core.DATA_DIR / "config" / extra_name
+                if efp.is_file() and not efp.is_symlink():
+                    files_to_copy.append((f"config/{extra_name}", efp))
+            for rel, fp in files_to_copy:
+                out = dst / rel
+                out.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(fp, out)
+                    copied += 1
+                except OSError as exc:
+                    raise ValueError(f"迁移文件失败（{rel}）：{exc}") from exc
+    tmp_ptr = ptr.with_name(f".ocleaner-data-dir.{os.getpid()}.tmp")
+    tmp_ptr.write_text(str(dst), encoding="utf-8")
+    os.replace(tmp_ptr, ptr)
     return {"ok": True, "data_dir": str(dst),
             "copied": copied, "need_restart": True}

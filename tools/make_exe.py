@@ -81,11 +81,19 @@ README_RUN = """\ufeffO-Cleaner 免安装版（内嵌 Python 运行时）
 """.replace("\n", "\r\n")
 
 
+EMBED_SHA256 = "f6cca216a359be84797cabb54149ce5e062afb16cc7567eb7fc51cacb2d86b65"
+
+
 def ensure_embed_zip() -> Path:
-    """拿一份官方 embeddable zip：有缓存用缓存，没有就下载并验明正身。"""
+    """拿一份官方 embeddable zip：有缓存用缓存，没有就下载并校验 SHA-256。"""
+    import hashlib
     if EMBED_CACHE.exists():
-        print(f"  运行时缓存命中: {EMBED_CACHE.name}")
-        return EMBED_CACHE
+        actual = hashlib.sha256(EMBED_CACHE.read_bytes()).hexdigest().lower()
+        if actual == EMBED_SHA256:
+            print(f"  运行时缓存命中: {EMBED_CACHE.name}")
+            return EMBED_CACHE
+        print(f"  [警告] 运行时缓存校验不匹配，重新下载: {EMBED_CACHE.name}")
+        EMBED_CACHE.unlink(missing_ok=True)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     print(f"  下载官方 embeddable 运行时: {EMBED_URL}")
 
@@ -97,6 +105,10 @@ def ensure_embed_zip() -> Path:
     tmp = EMBED_CACHE.with_suffix(".zip.part")
     try:
         urllib.request.urlretrieve(EMBED_URL, tmp, _progress)
+        actual = hashlib.sha256(tmp.read_bytes()).hexdigest().lower()
+        if actual != EMBED_SHA256:
+            tmp.unlink(missing_ok=True)
+            fail(f"运行时 SHA-256 校验失败（预期 {EMBED_SHA256[:12]}，实际 {actual[:12]}）")
     except Exception as e:  # noqa: BLE001
         fail(f"下载失败：{e}\n  可手动下载后放到 {EMBED_CACHE}")
     os.replace(tmp, EMBED_CACHE)

@@ -31,11 +31,20 @@ def _dpapi_protect(plain: str) -> str:
             _fields_ = [("cbData", wintypes.DWORD),
                         ("pbData", ctypes.POINTER(ctypes.c_char))]
 
+        c32 = ctypes.WinDLL("crypt32", use_last_error=True)
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        c32.CryptProtectData.argtypes = [
+            ctypes.POINTER(_BLOB), wintypes.LPCWSTR, ctypes.POINTER(_BLOB),
+            ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(_BLOB)]
+        c32.CryptProtectData.restype = wintypes.BOOL
+        k32.LocalFree.argtypes = [ctypes.c_void_p]
+        k32.LocalFree.restype = ctypes.c_void_p
+
         raw = plain.encode("utf-8")
         buf = ctypes.create_string_buffer(raw, len(raw))
         in_blob = _BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
         out_blob = _BLOB()
-        if not ctypes.windll.crypt32.CryptProtectData(
+        if not c32.CryptProtectData(
                 ctypes.byref(in_blob), None, None, None, None, 0x01,
                 ctypes.byref(out_blob)):
             return plain
@@ -43,7 +52,9 @@ def _dpapi_protect(plain: str) -> str:
             enc = ctypes.string_at(out_blob.pbData, out_blob.cbData)
             return "dpapi:" + base64.b64encode(enc).decode("ascii")
         finally:
-            ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+            ctypes.memset(buf, 0, len(raw))
+            if out_blob.pbData:
+                k32.LocalFree(out_blob.pbData)
     except Exception:
         return plain
 
@@ -63,17 +74,29 @@ def _dpapi_unprotect(stored: str) -> str:
             _fields_ = [("cbData", wintypes.DWORD),
                         ("pbData", ctypes.POINTER(ctypes.c_char))]
 
+        c32 = ctypes.WinDLL("crypt32", use_last_error=True)
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        c32.CryptUnprotectData.argtypes = [
+            ctypes.POINTER(_BLOB), ctypes.c_void_p, ctypes.POINTER(_BLOB),
+            ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(_BLOB)]
+        c32.CryptUnprotectData.restype = wintypes.BOOL
+        k32.LocalFree.argtypes = [ctypes.c_void_p]
+        k32.LocalFree.restype = ctypes.c_void_p
+
         raw = base64.b64decode(stored[6:])
         buf = ctypes.create_string_buffer(raw, len(raw))
         in_blob = _BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
         out_blob = _BLOB()
-        if not ctypes.windll.crypt32.CryptUnprotectData(
+        if not c32.CryptUnprotectData(
                 ctypes.byref(in_blob), None, None, None, None, 0x01,
                 ctypes.byref(out_blob)):
             return ""
         try:
             return ctypes.string_at(out_blob.pbData, out_blob.cbData).decode("utf-8")
         finally:
-            ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+            if out_blob.pbData:
+                if out_blob.cbData:
+                    ctypes.memset(out_blob.pbData, 0, out_blob.cbData)
+                k32.LocalFree(out_blob.pbData)
     except Exception:
         return ""

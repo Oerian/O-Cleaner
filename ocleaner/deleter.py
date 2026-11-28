@@ -14,6 +14,7 @@ selftest 的 monkeypatch 落在 core 命名空间（core.X = stub），本模块
 
 from __future__ import annotations  # S-01: 3.8/3.9 下 PEP 585/604 注解求值会崩
 import os
+import secrets
 import shutil
 import sys
 import time
@@ -28,16 +29,16 @@ def _is_reparse_dir(p: str) -> bool:
     """目录型重解析点（NTFS Junction / 目录符号链接）。
 
     外部审计 P1-2：待删目录内部的嵌套链接若被当成普通目录走
-    rename + rmtree，存在穿透隐患。防御纵深：枚举子项时遇到重解析点
-    只摘挂载点本身（os.rmdir 不跟随），绝不进入其目标。CPython 3.8+
-    的 shutil.rmtree 虽已不跟随 junction，这里显式兜住所有下游路径。
+    rename + rmtree，存在穿透隐患。必须同时具备目录属性与重解析点属性，
+    避免把 OneDrive 云文件 / WOF 压缩普通文件误判为目录链接。
     """
     try:
         st = os.lstat(p)
     except OSError:
         return False
-    return bool(getattr(st, "st_file_attributes", 0)
-                & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    attrs = getattr(st, "st_file_attributes", 0)
+    return bool(attrs & stat.FILE_ATTRIBUTE_DIRECTORY) and bool(
+        attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
 def _long_path(p: str) -> str:
     """把 8.3 短名（PROGRA~1）展开成长名，失败时原样返回。
@@ -63,32 +64,40 @@ def _long_path(p: str) -> str:
 
 def rm(path: str) -> bool:
     """删除单个文件或目录（Junction/符号链接只摘挂载点），失败返回 False。"""
+    def _is_link_dir(p: str) -> bool:
+        try:
+            st = os.lstat(p)
+            attrs = getattr(st, "st_file_attributes", 0)
+            return bool(attrs & stat.FILE_ATTRIBUTE_DIRECTORY) or stat.S_ISDIR(st.st_mode)
+        except OSError:
+            return os.path.isdir(p)
+
     try:
         if os.path.islink(path) or _is_reparse_dir(path):
-            if os.path.isdir(path):
+            if _is_link_dir(path):
                 os.rmdir(path)
             else:
                 os.remove(path)
             return True
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
-            return not os.path.exists(path)
+            return not os.path.lexists(path)
         os.remove(path)
         return True
     except FileNotFoundError:
         return True
     except (PermissionError, OSError):
         try:
-            os.chmod(path, 0o700)
             if os.path.islink(path) or _is_reparse_dir(path):
-                if os.path.isdir(path):
+                if _is_link_dir(path):
                     os.rmdir(path)
                 else:
                     os.remove(path)
                 return True
+            os.chmod(path, 0o700)
             if os.path.isdir(path):
                 shutil.rmtree(path, ignore_errors=True)
-                return not os.path.exists(path)
+                return not os.path.lexists(path)
             os.remove(path)
             return True
         except Exception:
@@ -103,7 +112,8 @@ def _precheck_locked_files(path: str) -> list[str]:
     """
     locked: list[str] = []
     probed = 0
-    for root, _dirs, files in os.walk(path):
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if not _is_reparse_dir(os.path.join(root, d))]
         files.sort(key=lambda n: 0 if n.lower().endswith((".exe", ".dll")) else 1)
         for f in files:
             if probed >= _core._LOCK_PRECHECK_BUDGET or len(locked) >= _core._LOCK_PRECHECK_REPORT_MAX:
@@ -157,7 +167,11 @@ def rm_tree_strict(path: str) -> tuple[bool, bool, str]:
     Adobe.oc-deleting-05462600」。下次启动时按日志改回原名
     （见 recover_pending_deletes）。
     """
-    staging = path.rstrip("\\/") + f".oc-deleting-{time.time_ns() % 10**8:08d}"
+    if _is_reparse_dir(path) or os.path.islink(path):
+        if rm(path):
+            return True, False, ""
+        return False, False, "目录链接无法移除"
+    staging = path.rstrip("\\/") + f".oc-deleting-{os.getpid()}-{secrets.token_hex(4)}"
     _journal_stage(path, staging)
     try:
         os.rename(path, staging)
@@ -169,7 +183,11 @@ def rm_tree_strict(path: str) -> tuple[bool, bool, str]:
 
     def _onerr(func, p, _excinfo):
         try:
-            os.chmod(p, 0o700)
+            if func not in (os.remove, os.unlink, os.rmdir):
+                errs.append(p)
+                return
+            if not os.path.islink(p) and not _is_reparse_dir(p):
+                os.chmod(p, 0o700)
             func(p)
         except Exception:
             errs.append(p)
@@ -181,7 +199,7 @@ def rm_tree_strict(path: str) -> tuple[bool, bool, str]:
             shutil.rmtree(staging, onerror=_onerr)
     except Exception:
         pass
-    if not errs and not os.path.exists(staging):
+    if not errs and not os.path.lexists(staging):
         _journal_done(staging)
         return True, False, ""
     # 部分残留：日志保留，下次启动会把剩下的内容改回原名交还给用户
@@ -220,41 +238,42 @@ def _journal_done(staging: str) -> None:
 def recover_pending_deletes() -> list[dict]:
     """启动时把上次中断留下的暂存目录改回原名。
 
-    只在「暂存存在、原名不存在」时动手 —— 两个都在说明用户自己新建了同名
-    目录，这时候贸然覆盖就是第二次伤害。
+    只在「暂存存在、原名不存在」且两者确属同父目录 .oc-deleting-* 暂存时动手。
     """
     out: list[dict] = []
-    try:
-        data = _load_json(_core.PENDING_DELETES_PATH, [], use_cache=False)
-    except Exception:
-        return out
-    if not isinstance(data, list) or not data:
-        return out
-    keep: list = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        orig, stage = str(item.get("original") or ""), str(item.get("staging") or "")
-        if not orig or not stage:
-            continue
+    with _lock:
         try:
-            if os.path.exists(stage) and not os.path.exists(orig):
-                os.rename(stage, orig)
-                out.append({"restored": orig, "from": stage})
+            data = _load_json(_core.PENDING_DELETES_PATH, [], use_cache=False)
+        except Exception:
+            return out
+        if not isinstance(data, list) or not data:
+            return out
+        keep: list = []
+        for item in data:
+            if not isinstance(item, dict):
                 continue
-            if os.path.exists(stage) and os.path.exists(orig):
-                # 两个都在：保留暂存，但不再自动处理，交给用户
+            orig, stage = str(item.get("original") or ""), str(item.get("staging") or "")
+            if not orig or not stage:
+                continue
+            if (os.path.dirname(orig).lower() != os.path.dirname(stage).lower()
+                    or not os.path.basename(stage).startswith(os.path.basename(orig.rstrip("\\/")) + ".oc-deleting-")):
+                continue
+            try:
+                if os.path.lexists(stage) and not os.path.lexists(orig):
+                    os.rename(stage, orig)
+                    out.append({"restored": orig, "from": stage})
+                    continue
+                if os.path.lexists(stage) and os.path.lexists(orig):
+                    keep.append(item)
+                    out.append({"skipped": orig, "reason": "原路径已被占用"})
+                    continue
+            except OSError as exc:
                 keep.append(item)
-                out.append({"skipped": orig, "reason": "原路径已被占用"})
-                continue
-            # 暂存不存在 = 上次已删干净，登记作废
-        except OSError as exc:
-            keep.append(item)
-            out.append({"failed": orig, "error": str(exc)})
-    try:
-        _atomic_write(_core.PENDING_DELETES_PATH, keep)
-    except Exception:
-        pass
+                out.append({"failed": orig, "error": str(exc)})
+        try:
+            _atomic_write(_core.PENDING_DELETES_PATH, keep)
+        except Exception:
+            pass
     return out
 
 
@@ -262,7 +281,7 @@ def schedule_delete_on_reboot(paths: list[str]) -> dict:
     """用 MoveFileExW(MOVEFILE_DELAY_UNTIL_REBOOT) 把顽固占用文件登记为下次重启时删除。
 
     仅支持 Windows 且需要管理员权限（写 HKLM Session Manager\\PendingFileRenameOperations）；
-    每个路径均先经过 check_deletable(allow_user_data=True) 完整护栏。
+    每个路径均解析真实路径并经过完整护栏校验。
     """
     if not _core.IS_WINDOWS:
         return {"ok": False, "error": "重启删除仅支持 Windows",
@@ -271,7 +290,8 @@ def schedule_delete_on_reboot(paths: list[str]) -> dict:
         return {"ok": False, "error": "标记重启删除需要管理员权限，请先一键提权重启",
                 "scheduled": [], "skipped": [], "failed": []}
     MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
-    move_ex = ctypes.windll.kernel32.MoveFileExW
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    move_ex = k32.MoveFileExW
     move_ex.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
     move_ex.restype = wintypes.BOOL
 
@@ -281,20 +301,33 @@ def schedule_delete_on_reboot(paths: list[str]) -> dict:
     seen: set[str] = set()
     for raw in list(paths or [])[:50]:
         p = str(raw or "").strip()
-        if not p or p in seen:
+        if not p:
             continue
-        seen.add(p)
+        norm_key = os.path.normpath(p).lower()
+        if norm_key in seen:
+            continue
+        seen.add(norm_key)
         ok, reason = _core.check_deletable(p, allow_user_data=True)
         if not ok:
             skipped.append({"path": p, "reason": reason})
             continue
-        if _is_reparse_dir(p) or not os.path.isfile(p):
+        try:
+            real = os.path.realpath(p, strict=True)
+        except OSError:
+            skipped.append({"path": p, "reason": "无法解析真实路径"})
+            continue
+        if _is_reparse_dir(p) or os.path.islink(p) or not os.path.isfile(real):
             skipped.append({"path": p, "reason": "仅支持普通文件"})
             continue
-        if move_ex(p, None, MOVEFILE_DELAY_UNTIL_REBOOT):
-            scheduled.append(p)
+        if os.path.normpath(real).lower() != norm_key:
+            ok2, reason2 = _core.check_deletable(real, allow_user_data=True)
+            if not ok2:
+                skipped.append({"path": p, "reason": reason2})
+                continue
+        if move_ex(real, None, MOVEFILE_DELAY_UNTIL_REBOOT):
+            scheduled.append(real)
         else:
-            err_code = ctypes.GetLastError()
-            failed.append({"path": p, "error": f"WinError {err_code}"})
+            err_code = ctypes.get_last_error()
+            failed.append({"path": real, "error": f"WinError {err_code}"})
     return {"ok": True, "scheduled": scheduled,
             "skipped": skipped, "failed": failed}

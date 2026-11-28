@@ -9,6 +9,7 @@ receipts/
 pending-deletes.json
 config/custom-rules.json
 config/custom-overrides.json
+config/bloatware.json
 # 用户自定义聚合组（占用树自由归组，本机数据）
 config/fs-groups.json
 # 资源包的启用状态与远端地址（本机选择，不该跟着仓库走）

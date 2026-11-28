@@ -545,20 +545,22 @@ def main() -> int:
           f"{cat.get('env')} count={len(cat.get('items') or [])}")
 
     # 兼容 v1 字符串数组 index.json（远程 packs 仓库格式）
-    import io as _io
     orig_uopen = app._urlopen
+    orig_lps = app.load_packs_state
     try:
         class _FakeResp:
             def __enter__(self): return self
             def __exit__(self, *a): pass
             def read(self): return b'{"packs":["windows-system.json","apps-common.json"]}'
         app._urlopen = lambda *a, **kw: _FakeResp()
+        app.load_packs_state = lambda: {"disabled": [], "remote": app.DEFAULT_PACKS_REMOTE}
         cat_str = _integ.packs_catalog()
         check("社区资源包目录：兼容纯字符串数组 index.json",
               cat_str.get("ok") and len(cat_str.get("items") or []) == 2,
               f"{cat_str}")
     finally:
         app._urlopen = orig_uopen
+        app.load_packs_state = orig_lps
 
     # ---------- Windows 官方组件安全瘦身 ----------
     ss_st = app.sys_slim_status()
@@ -574,6 +576,38 @@ def main() -> int:
         check("官方组件瘦身：非管理员拒绝执行", not no_adm.get("ok"), f"{no_adm}")
     finally:
         app.is_admin = orig_adm2
+
+    # ---------- 安全加固与审计回归用例 ----------
+    _ru = app.resolve_units([
+        {"id": "a", "bytes_per_unit": 100},
+        {"id": "b", "bytes_per_unit": "2 * a"},
+        {"id": "evil", "bytes_per_unit": "().__class__.__bases__[0]"},
+    ])
+    _ru_map = {x["id"]: x["bytes"] for x in _ru}
+    check("resolve_units：合法表达式正常求值", _ru_map.get("b") == 200.0, f"{_ru_map}")
+    check("resolve_units：拒绝非算术 AST 逃逸表达式", _ru_map.get("evil") == 0.0, f"{_ru_map}")
+    check("护栏加固：拒绝 Windows\\explorer.exe",
+          not app.check_deletable(r"C:\Windows\explorer.exe", "files", True)[0])
+    check("护栏加固：拒绝 Windows\\SystemApps",
+          not app.check_deletable(r"C:\Windows\SystemApps", "tree", False)[0])
+    check("护栏加固：localhost 尾点 SSRF 拒绝",
+          bool(app._is_unsafe_remote("http://localhost.:8770/__oc__/state")))
+    _zbuf = _io_zip = None
+    import io as _zio, zipfile as _zzf
+    _zb = _zio.BytesIO()
+    with _zzf.ZipFile(_zb, "w") as _zz:
+        _zz.writestr("config/AI.json", "{}")
+        _zz.writestr("config/targets.json", "{}")
+        _zz.writestr("data/pending-deletes.json", "[]")
+    _orig_dd = app.DATA_DIR
+    try:
+        with tempfile.TemporaryDirectory() as _td2:
+            app.DATA_DIR = Path(_td2)
+            _ib = app.import_full_backup(_zb.getvalue())
+            check("备份导入白名单：拒绝大小写绕过 ai.json 与内置 targets.json/pending-deletes.json",
+                  _ib.get("files") == 0, f"{_ib}")
+    finally:
+        app.DATA_DIR = _orig_dd
 
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"

@@ -108,28 +108,23 @@ def snapshot_diff(letter: str, days: int = 7) -> dict:
         return {"error": "还没有历史快照（先做一次全盘扫描，明天再来对比）",
                 "diff": []}
     dates = sorted(snaps, reverse=True)
-    latest = snaps[dates[0]]
-    target = (dates[0] - timedelta(days=max(1, days)))
-    past_date = min(dates, key=lambda d: abs((d - target).days))
-    if past_date == dates[0]:
+    if len(dates) < 2:
         return {"error": "只有一份快照（今天），还没法对比；明天再来看",
                 "diff": []}
+    latest = snaps[dates[0]]
+    target = (dates[0] - timedelta(days=max(1, days)))
+    past_date = min(dates[1:], key=lambda d: abs((d - target).days))
     past = snaps[past_date]
     now_map = {d["path"]: d["size"] for d in latest.get("dirs", [])}
     then_map = {d["path"]: d["size"] for d in past.get("dirs", [])}
-    # 新增文件：
-    # 当前快照有、对比基线没有的文件，按体积降序。基线快照若太老没有
-    # 文件清单（files 字段是 2026-11-10 起才落盘的），则如实标注不可比。
     cur_files = {f0["path"]: f0["size"] for f0 in latest.get("files", [])}
     past_files = {f0["path"]: f0["size"] for f0 in past.get("files", [])}
     files_available = bool(latest.get("files")) and bool(past.get("files"))
-    # 截断线过滤：体积低于基线截断线的文件无法确认「当时是否存在」，
-    # 保守排除（宁少报不误报）。基线不足 300 个文件（截断线为 0=全量
-    # 覆盖）时不过滤。
     past_cutoff = past.get("files_cutoff") or 0
-    new_files = [{"path": p0, "size": s0}
-                 for p0, s0 in cur_files.items()
-                 if p0 not in past_files and s0 >= past_cutoff]
+    new_files = ([{"path": p0, "size": s0}
+                  for p0, s0 in cur_files.items()
+                  if p0 not in past_files and s0 >= past_cutoff]
+                 if files_available else [])
     new_files.sort(key=lambda x: -x["size"])
     # 高频回涨（v2.15 方向二补完）：沿时间线统计每个目录「较上次增长」
     # 的次数，≥3 次标记 hot —— 清理后反复回涨的缓存目录值得进定时清理。
@@ -359,9 +354,9 @@ def big_files(drive: str, limit: int = BIG_FILES_LIMIT) -> dict:
                 except OSError:
                     pass
             script = (_core.PS_BIG_FILES
-                      .replace("__ROOT__", root.replace("'", "''"))
+                      .replace("__ROOT__", _core._ps_sq(root))
                       .replace("__FLOOR__", str(BIG_FILES_FLOOR_PS))
-                      .replace("__PROGFILE__", prog_file.replace("'", "''")))
+                      .replace("__PROGFILE__", _core._ps_sq(prog_file)))
             _core.prog_set("walk", "正在全盘遍历大文件（未装 WizTree，耗时更长）",
                      10, indeterminate=True)
             stop = threading.Event()
@@ -654,14 +649,19 @@ def bloatware_sweep(reg_key: str, dirs: list) -> dict:
             hive = (winreg.HKEY_LOCAL_MACHINE if hprefix == "HKLM"
                     else winreg.HKEY_CURRENT_USER)
             parent_sub, _, leaf_key = sub_path.rpartition("\\")
+            def _reg_delete_tree(root_h, sub: str) -> None:
+                with winreg.OpenKey(root_h, sub, 0,
+                                    winreg.KEY_ENUMERATE_SUB_KEYS | winreg.DELETE) as cur_k:
+                    while True:
+                        try:
+                            child = winreg.EnumKey(cur_k, 0)
+                        except OSError:
+                            break
+                        _reg_delete_tree(root_h, sub + "\\" + child)
+                winreg.DeleteKey(root_h, sub)
             try:
-                with winreg.OpenKey(
-                    hive, parent_sub, 0,
-                    winreg.KEY_SET_VALUE | winreg.KEY_ENUMERATE_SUB_KEYS
-                    | winreg.DELETE
-                ) as k:
-                    winreg.DeleteKey(k, leaf_key)
-                    reg_done += 1
+                _reg_delete_tree(hive, sub_path)
+                reg_done += 1
             except OSError as exc:
                 reg_error = f"注册表键删除失败（可能需要管理员权限）：{exc}"
     all_ok = all(r.get("ok") for r in results) and not reg_error
@@ -687,6 +687,8 @@ def junction_move(src: str, dst: str, merge: bool = False,
     dst = os.path.normpath(os.path.expandvars(dst))
     if not os.path.isabs(src) or not os.path.isdir(src):
         return {"error": "源目录无效"}
+    if os.path.islink(src) or _core._is_reparse_dir(src):
+        return {"error": "源目录本身已经是 Junction 或符号链接，无需再次搬家"}
     if not os.path.isabs(dst) or not os.path.splitdrive(dst)[0]:
         return {"error": "目标路径无效"}
     if os.path.normcase(src) == os.path.normcase(dst):
@@ -700,36 +702,59 @@ def junction_move(src: str, dst: str, merge: bool = False,
     ok, why = _core.check_deletable(src)
     if not ok:
         return {"error": why or "护栏拦截"}
+    for _r, _ds, _fs in os.walk(src):
+        for _d in _ds:
+            if _core._is_reparse_dir(os.path.join(_r, _d)):
+                return {"error": f"源目录内包含嵌套 Junction/符号链接（{_d}），为防丢失链接结构已中止搬家"}
     locked = _core._precheck_locked_files(src)
     if locked:
         return {"error": "源目录存在被占用的文件，搬家已中止",
                 "locked": locked[:10]}
+    src_est_bytes = 0
+    for _r, _ds, _fs in os.walk(src):
+        for _f in _fs:
+            try:
+                src_est_bytes += os.path.getsize(os.path.join(_r, _f))
+            except OSError:
+                pass
+    try:
+        dst_drive = os.path.splitdrive(dst)[0] + "\\"
+        if shutil.disk_usage(dst_drive).free < src_est_bytes + 16 * 1024 * 1024:
+            return {"error": f"目标盘 {dst_drive} 可用空间不足"}
+    except OSError:
+        pass
     # 1) 拷贝（支持合并 + 冲突自动重命名）
     file_count = [0]
     byte_count = [0]
+    dst_existed = os.path.exists(dst)
     try:
         Path(dst).mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return {"error": f"无法在目标位置创建目录（权限不足或路径非法）：{exc}"}
-    for root, dirs, files in os.walk(src):
-        rel = os.path.relpath(root, src)
-        target_root = os.path.normpath(
-            os.path.join(dst, rel)) if rel != "." else Path(dst)
-        os.makedirs(target_root, exist_ok=True)
-        for f in files:
-            s = os.path.join(root, f)
-            d = os.path.join(target_root, f)
-            if os.path.exists(d):
-                if not rename_conflict:
-                    return {"error": f"目标已存在同名文件：{d}"}
-                stem, ext = os.path.splitext(f)
-                k = 1
-                while os.path.exists(d):
-                    d = os.path.join(target_root, f"{stem}({k}){ext}")
-                    k += 1
-            shutil.copy2(s, d)
-            file_count[0] += 1
-            byte_count[0] += os.path.getsize(d)
+    try:
+        for root, dirs, files in os.walk(src):
+            rel = os.path.relpath(root, src)
+            target_root = os.path.normpath(
+                os.path.join(dst, rel)) if rel != "." else Path(dst)
+            os.makedirs(target_root, exist_ok=True)
+            for f in files:
+                s = os.path.join(root, f)
+                d = os.path.join(target_root, f)
+                if os.path.exists(d):
+                    if not rename_conflict:
+                        return {"error": f"目标已存在同名文件：{d}"}
+                    stem, ext = os.path.splitext(f)
+                    k = 1
+                    while os.path.exists(d):
+                        d = os.path.join(target_root, f"{stem}({k}){ext}")
+                        k += 1
+                shutil.copy2(s, d)
+                file_count[0] += 1
+                byte_count[0] += os.path.getsize(d)
+    except OSError as exc:
+        if not dst_existed:
+            _core.rm(dst)
+        return {"error": f"拷贝到目标盘失败（原目录未动）：{exc}"}
     # 2) 双向校验
     src_count = src_bytes = 0
     for root, _dirs, files in os.walk(src):
@@ -740,6 +765,8 @@ def junction_move(src: str, dst: str, merge: bool = False,
             except OSError:
                 pass
     if src_count != file_count[0] or src_bytes != byte_count[0]:
+        if not dst_existed:
+            _core.rm(dst)
         return {"error": f"拷贝校验不一致（源 {src_count} 文件/{src_bytes} 字节，"
                          f"目标 {file_count[0]} 文件/{byte_count[0]} 字节），"
                          "原目录未动，请检查目标盘空间"}
@@ -760,34 +787,40 @@ def junction_move(src: str, dst: str, merge: bool = False,
         if not isinstance(probe, list):
             raise RuntimeError("Junction 内容异常")
     except Exception as exc:  # noqa: BLE001
+        restored_ok = False
         try:
-            if not os.path.exists(src) and os.path.exists(backup):
+            if os.path.lexists(src) and (_core._is_reparse_dir(src) or os.path.islink(src)):
+                os.rmdir(src)
+            if not os.path.lexists(src) and os.path.exists(backup):
                 os.rename(backup, src)
+                restored_ok = True
         except OSError:
             pass
-        return {"error": f"Junction 建立失败，已还原原目录：{exc}"}
-    # 4) 删除暂存（走 _core.rm_tree_strict：断电可恢复）
-    full, _partial, note = _core.rm_tree_strict(backup)
-    if not full:
-        return {"ok": True, "note": f"搬家完成，但暂存目录删除不彻底（{note}）",
-                "src": src, "dst": str(dst)}
-    # 5) 记录（支持一键迁回）
+        if restored_ok:
+            return {"error": f"Junction 建立失败，已还原原目录：{exc}"}
+        return {"error": f"Junction 建立失败且未能自动还原，完整原数据位于 {backup}：{exc}"}
+    # 4) Junction 验证通过后立即落盘搬家记录（先于清备份，避免部分残留时丢失记录）
     try:
         with _core._lock:
             recs = _core._load_json(_core.MOVED_JUNCTIONS_PATH, [], use_cache=False)
             if not isinstance(recs, list):
                 recs = []
-            recs.insert(0, {"src": src, "dst": str(dst),
+            recs.insert(0, {"src": src, "dst": str(dst), "merged": bool(merge),
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
             _core._atomic_write(_core.MOVED_JUNCTIONS_PATH, recs[:50])
     except Exception:  # noqa: BLE001
         traceback.print_exc()
+    # 5) 删除暂存（走 _core.rm_tree_strict：断电可恢复）
+    full, _partial, note = _core.rm_tree_strict(backup)
+    if not full:
+        return {"ok": True, "note": f"搬家完成，但暂存目录删除不彻底（{note}）",
+                "src": src, "dst": str(dst)}
     return {"ok": True, "src": src, "dst": str(dst),
             "files": file_count[0], "bytes_h": _core.human(byte_count[0])}
 
 
 def junction_restore(src: str) -> dict:
-    """一键迁回：摘除 Junction，把真实目录从目标位置移回原位。"""
+    """一键迁回：先安全拷贝到同盘暂存并校验，再摘 Junction 原子改名迁回。"""
     src = os.path.normpath(os.path.expandvars(src))
     with _core._lock:
         recs = _core._load_json(_core.MOVED_JUNCTIONS_PATH, [], use_cache=False)
@@ -800,20 +833,68 @@ def junction_restore(src: str) -> dict:
         return {"error": f"目标目录已不存在：{dst}"}
     if not os.path.islink(src) and not _core._is_reparse_dir(src):
         return {"error": "源位置不是 Junction（可能已迁回）"}
-    os.rmdir(src)          # 摘 Junction：只删链接本身，绝不进目标
-    if os.path.exists(src):
-        return {"error": "Junction 摘除失败"}
     try:
-        shutil.move(dst, src)
-    except OSError as exc:
-        if not os.path.exists(src):
+        if os.path.normcase(os.path.realpath(src)) != os.path.normcase(os.path.realpath(dst)):
+            return {"error": "源 Junction 当前指向与记录不一致，出于安全中止迁回"}
+    except OSError:
+        return {"error": "无法验证源 Junction 指向"}
+    locked = _core._precheck_locked_files(dst)
+    if locked:
+        return {"error": "目标目录内存在被占用的文件，请先关闭相关程序后再迁回",
+                "locked": locked[:10]}
+    dst_count = dst_bytes = 0
+    for _r, _ds, _fs in os.walk(dst):
+        dst_count += len(_fs)
+        for _f in _fs:
             try:
-                _winapi = __import__("_winapi")
-                _winapi.CreateJunction(dst, src)
-                return {"error": f"迁回失败已重新挂回 Junction：{exc}"}
+                dst_bytes += os.path.getsize(os.path.join(_r, _f))
             except OSError:
                 pass
-        return {"error": f"迁回中途失败（源位置已存在部分文件，完整数据仍在 {dst}，请清理原位残留后重试）：{exc}"}
+    try:
+        src_drive = os.path.splitdrive(src)[0] + "\\"
+        if shutil.disk_usage(src_drive).free < dst_bytes + 16 * 1024 * 1024:
+            return {"error": f"原盘 {src_drive} 可用空间不足，无法迁回"}
+    except OSError:
+        pass
+
+    tmp_src = src.rstrip("\\/") + f".oc-restore-{os.getpid()}"
+    if os.path.lexists(tmp_src):
+        _core.rm(tmp_src)
+    copied_cnt = copied_bytes = 0
+    try:
+        os.makedirs(tmp_src, exist_ok=True)
+        for root, _dirs, files in os.walk(dst):
+            rel = os.path.relpath(root, dst)
+            troot = os.path.join(tmp_src, rel) if rel != "." else tmp_src
+            os.makedirs(troot, exist_ok=True)
+            for f in files:
+                sp = os.path.join(root, f)
+                dp = os.path.join(troot, f)
+                shutil.copy2(sp, dp)
+                copied_cnt += 1
+                copied_bytes += os.path.getsize(dp)
+        if copied_cnt != dst_count or copied_bytes != dst_bytes:
+            raise OSError("拷贝校验不一致")
+    except OSError as exc:
+        _core.rm(tmp_src)
+        return {"error": f"迁回拷贝阶段失败（原 Junction 与目标数据均完好）：{exc}"}
+
+    try:
+        os.rmdir(src)
+    except OSError as exc:
+        _core.rm(tmp_src)
+        return {"error": f"Junction 摘除失败：{exc}"}
+    try:
+        os.rename(tmp_src, src)
+    except OSError as exc:
+        try:
+            __import__("_winapi").CreateJunction(dst, src)
+        except OSError:
+            pass
+        return {"error": f"原子迁回改名失败（暂存位于 {tmp_src}，目标数据仍在 {dst}）：{exc}"}
+
+    if not rec.get("merged"):
+        _core.rm_tree_strict(dst)
     with _core._lock:
         cur_recs = _core._load_json(_core.MOVED_JUNCTIONS_PATH, [], use_cache=False)
         if not isinstance(cur_recs, list):
@@ -1005,9 +1086,21 @@ def dupfiles_scan(drive: str, floor_mb: int = DUP_FLOOR_MB) -> dict:
                 "groups": []}
     floor = max(1, int(floor_mb)) * 1024 * 1024
     by_size: dict[int, list] = {}
+    seen_inodes: set[tuple[int, int]] = set()
     for _parent, items in cached["table"]["files"].items():
         for name, sz, full in items:
             if sz >= floor:
+                try:
+                    st = os.lstat(full)
+                    if os.path.islink(full) or (getattr(st, "st_file_attributes", 0) & 0x400):
+                        continue
+                    if st.st_ino:
+                        ino_key = (st.st_dev, st.st_ino)
+                        if ino_key in seen_inodes:
+                            continue
+                        seen_inodes.add(ino_key)
+                except OSError:
+                    continue
                 by_size.setdefault(sz, []).append((full, name))
     cand = [(sz, fs) for sz, fs in by_size.items() if len(fs) >= 2]
     cand.sort(key=lambda x: -(x[0] * len(x[1])))
@@ -1275,22 +1368,29 @@ def downloads_archive_undo() -> dict:
         log = _core._load_json(_core.ARCHIVE_LOG_PATH, [], use_cache=False)
         if not isinstance(log, list) or not log:
             return {"error": "没有可撤销的归档记录"}
-        session = log.pop(0)
+        session = log[0]
         restored = 0
         errors = []
+        remaining = []
         for m in session.get("moves", []):
             try:
                 if not os.path.exists(m["to"]):
                     errors.append(f"{m['name']}：目标文件已不在")
                 elif os.path.exists(m["from"]):
                     errors.append(f"{m['name']}：原位置已存在同名项，未覆盖")
+                    remaining.append(m)
                 else:
                     shutil.move(m["to"], m["from"])
                     restored += 1
             except OSError as exc:
                 errors.append(f"{m['name']}：{exc}")
+                remaining.append(m)
+        if remaining:
+            session["moves"] = remaining
+        else:
+            log.pop(0)
         _core._atomic_write(_core.ARCHIVE_LOG_PATH, log)
-    return {"ok": True, "restored": restored, "errors": errors}
+    return {"ok": restored > 0 and not errors, "restored": restored, "errors": errors}
 
 # ======================================================================
 #  磁盘趋势预测：预计剩余可用天数 + 高频回涨预警（v2.18 Task 3）

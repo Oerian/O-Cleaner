@@ -3,6 +3,7 @@ const API = "";
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const safeHttpUrl = u => { const s = String(u || "").trim(); return /^https?:\/\//i.test(s) ? s : "#"; };
 const fmt = n => {
   if (n === null || n === undefined) return "—";
   const u = ["B","KB","MB","GB","TB"]; let i = 0;
@@ -14,7 +15,7 @@ const riskCls = r => ({"无":"b-none","低":"b-low","中":"b-mid","高":"b-high"
 let STATE = null, SCAN = {}, selected = new Set(), subSel = {},
     busy = false, drive = "C", customPath = "",
     /* 换算单位选定一次后记住（含「看全部」），刷新与重渲染都不再弹回 */
-    convOnly = (() => { try { const v = localStorage.getItem("oc-conv-only"); return v === null ? null : v; } catch (e) { return null; }})(),
+    convOnly = (() => { try { const v = localStorage.getItem("oc-conv-only"); return v || null; } catch (e) { return null; }})(),
     /* 明细图表 details 的展开状态跨重渲染保留：用户收起后就不再自动展开 */
     CUM_SUB_OPEN = false,
     /* 本次确认弹窗里是否包含「建议保留 / 未识别」项：决定请求是否带
@@ -139,7 +140,7 @@ function renderSchSummary() {
   let seen = "";
   try { seen = localStorage.getItem("oc-sch-seen") || ""; } catch (e) {}
   if (seen === s.time) { el.style.display = "none"; return; }
-  el.style.display = "block";
+  el.style.display = "flex";
   const failPart = s.failed > 0
     ? ` · <span style="color:var(--warn)">${t("sch.sumFailed","{n} 项失败").replace("{n}", s.failed)}</span>` : "";
   el.innerHTML = `
@@ -1835,7 +1836,7 @@ function renderCustomLibs() {
                   padding:3px 0 3px 14px;font-size:12px">
         <span style="overflow-wrap:anywhere">${esc(c.name)}${c.approx
           ? ` <span style="color:var(--dim2)">${t("cg.sizeUnknown","未测")}</span>` : ""}</span>
-        <span style="white-space:nowrap;color:var(--dim2)">${c.approx ? "" : esc(human(c.size))}</span>
+        <span style="white-space:nowrap;color:var(--dim2)">${c.approx ? "" : esc(fmt(c.size))}</span>
       </div>`).join("") || `<div class="empty" style="margin:0">${t("cg.noKids","没有扫到子项")}</div>`;
   }));
 }
@@ -2073,8 +2074,7 @@ function confirmDialog() {
     const isDup = _dupSelPaths.has(p);
     const isBf = _bfSelPaths.has(p);
     rows.push({ id: "path:" + p,
-                label: isDup ? (_dupSizes.get(p) || p)
-                  : isBf ? (_bfSizes.get(p) || p) : (n && n.name) || p,
+                label: (isDup || isBf) ? (p.split(/[\\/]/).pop() || p) : (n && n.name) || p,
                 risk: (n && n.risk) || "中",
                 size: isDup ? (_dupSizes.get(p) || 0)
                   : isBf ? (_bfSizes.get(p) || 0) : ((n && n.size) || 0),
@@ -2104,9 +2104,11 @@ function confirmDialog() {
   cleanRows = rows;
 
   const total = rows.reduce((a, r) => a + r.size, 0);
-  const risky = rows.filter(r => r.risk === "高" || r.risk === "中");
+  const isHighRisk = r => r === "高" || r === "High";
+  const isMidRisk = r => r === "中" || r === "Medium";
+  const risky = rows.filter(r => isHighRisk(r.risk) || isMidRisk(r.risk));
   // recycle:（游戏回收项）整目录删除、不支持进回收站，与 recycle-bin 一样排除
-  const trashable = rows.some(r => r.risk === "高"
+  const trashable = rows.some(r => isHighRisk(r.risk)
     && !r.id.startsWith("recycle-bin") && !r.id.startsWith("recycle:"));
   const admin = rows.filter(r => r.admin);
   const nonClean = rows.filter(r => r.nonClean);
@@ -2167,7 +2169,14 @@ function _focusSafeModalControl() {
   const safe = modal.querySelector(
     "#mCancel, #dgCancel, #dClose, #dClose2, #mDone, #ovCancel, "
     + "#grpClose, #bfClose, #dupClose, #dlClose");
-  if (safe && !safe.disabled) { safe.focus(); return; }
+  if (safe && !safe.disabled) {
+    if (safe.id === "mDone" && $("chkPurgeBin")?.checked) {
+      $("chkPurgeBin").focus();
+      return;
+    }
+    safe.focus();
+    return;
+  }
   const f = modal.querySelector(
     "input[type=text], textarea, select, button:not(.go):not(.res-err)");
   if (f) f.focus();
@@ -2311,8 +2320,8 @@ function openGroupMgrDialog(node) {
 
 async function doClean() {
   busy = true;
-  $("mGo").disabled = true; $("mCancel").disabled = true;
-  $("mGo").innerHTML = `<span class="spin"></span>${t("cc.cleaning","清理中")}`;
+  if ($("mGo")) { $("mGo").disabled = true; $("mGo").innerHTML = `<span class="spin"></span>${t("cc.cleaning","清理中")}`; }
+  if ($("mCancel")) $("mCancel").disabled = true;
   const only = {};
   for (const [id, map] of Object.entries(subSel)) {
     const list = Object.entries(map).filter(([, v]) => v).map(([k]) => k);
@@ -2320,38 +2329,60 @@ async function doClean() {
   }
   const t0 = Date.now();
   const trashBox = document.getElementById("mTrash");
-  // 大文件（排行勾选）是文件而非目录——clean 路由只收目录，
-  // 文件走 delete-paths 专用通道，先执行并 toast 结果。
-  const bfSel = [...selPaths].filter(p0 => _bfSelPaths.has(p0));
-  if (bfSel.length) {
+  const fileOnlySel = [...selPaths].filter(p0 => _bfSelPaths.has(p0) || _dupSelPaths.has(p0));
+  const dirSel = [...selPaths].filter(p0 => !_bfSelPaths.has(p0) && !_dupSelPaths.has(p0));
+  let fileDelRes = null;
+  if (fileOnlySel.length) {
     try {
       const br = await apiJSON(`${API}/__oc__/delete-paths`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paths: bfSel }) });
+        body: JSON.stringify({ paths: fileOnlySel }) });
+      fileDelRes = br;
       if (br.error) toast(br.error);
       else toast(t("bf.done", "已移入回收站 {n}/{total} 个大文件")
         .replace("{n}", br.done).replace("{total}", br.total));
-    } catch (e0) { toast(String(e0)); }
+    } catch (e0) {
+      fileDelRes = { error: String(e0), results: [] };
+      toast(String(e0));
+    }
   }
   _lastCleanReq = { ids: [...selected], paths: [...selPaths],
     only_paths: only, allow_non_cleanable: !!hasNonCleanSel,
     drive, custom_path: customPath };
   try {
-    const res = await fetch(`${API}/__oc__/clean?lang=${langParam()}`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: [...selected],
-                             paths: [...selPaths].filter(p0 => !_bfSelPaths.has(p0)),
-                             only_paths: only,
-                             allow_non_cleanable: !!hasNonCleanSel,
-                             drive, custom_path: customPath,
-                             trash: !!(trashBox && trashBox.checked) })
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
+    let data = { entry: { time: new Date().toISOString().slice(0, 19).replace("T", " "), drive, results: [], freed: 0, freed_h: "0 B", targets: 0 }, stats: STATE.stats, merged: [] };
+    if (selected.size > 0 || dirSel.length > 0) {
+      const res = await fetch(`${API}/__oc__/clean?lang=${langParam()}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [...selected],
+                               paths: dirSel,
+                               only_paths: only,
+                               allow_non_cleanable: !!hasNonCleanSel,
+                               drive, custom_path: customPath,
+                               trash: !!(trashBox && trashBox.checked) })
+      });
+      data = await res.json();
+      if (data.error) throw new Error(data.error);
+    }
     const e = data.entry;
+    if (fileDelRes && Array.isArray(fileDelRes.results)) {
+      for (const fr of fileDelRes.results) {
+        e.results.push({
+          id: "path:" + (fr.path || ""),
+          label: (fr.path || "").split(/[\\/]/).pop() || fr.path || "",
+          path: fr.path || "", drive,
+          freed: 0, deleted: fr.ok ? 1 : 0, failed: fr.ok ? 0 : 1,
+          skipped: [], renews: false, error: fr.error || "",
+          trash_paths: fr.ok ? [fr.path] : [],
+        });
+      }
+      if (fileDelRes.stats) data.stats = fileDelRes.stats;
+    }
     STATE.stats = data.stats;
     loadDiskTrend();           // 清理后空间变了，趋势里的「今天」要更新
     selPaths.clear();        // 已清理的路径勾选作废；树数字已过期，界面会提示
+    _bfSelPaths.clear();
+    _dupSelPaths.clear();
     FS_CACHE.delete(drive);  // 清理后磁盘内容变了，缓存的扫描结果一并作废
     // 包含关系去重的如实提示：外层项被跳过、只清了最小项
     if (Array.isArray(data.merged) && data.merged.length)
@@ -2542,6 +2573,7 @@ function showCleanResult(e, stats, t0, title) {
   const chkPurgeDef = $("chkPurgeBinDefault");
   const doneBtn = $("mDone");
   let binPurged = false;
+  let purging = false;
   const syncDoneText = () => {
     if (!doneBtn || !chkPurge) return;
     doneBtn.textContent = (!binPurged && chkPurge.checked)
@@ -2562,30 +2594,36 @@ function showCleanResult(e, stats, t0, title) {
     });
   }
   const runPurgeBin = async () => {
-    if (!eb || binPurged) return true;
+    if (!eb || binPurged || purging) return true;
+    purging = true;
     eb.disabled = true;
     eb.innerHTML = `<span class="spin"></span>${t("eb.emptying","清空中")}`;
     const pane = $("binPane");
     try {
-      const r = await fetch(`${API}/__oc__/recycle-purge`, {
+      const data = await apiJSON(`${API}/__oc__/recycle-purge`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ paths: trashPaths })
       });
-      const data = await r.json();
       if (data.error) throw new Error(data.error);
-      binPurged = true;
+      const matchedN = data.matched || 0;
+      if (matchedN > 0) binPurged = true;
       if (data.stats) STATE.stats = data.stats;
       loadDiskTrend();
       const missed = (data.results || []).filter(x => !x.matched && x.note);
       if (pane) pane.innerHTML = `<div style="margin-top:8px;font-size:12.5px${
-        missed.length ? ';color:var(--warn, #e0a040)' : ';color:var(--dim2)'}">${
-        t("eb.removed","已从回收站移除 {n} 项，额外释放 {v}。").replace("{n}", data.matched || 0).replace("{v}", fmt(data.freed || 0)) +
+        missed.length || !matchedN ? ';color:var(--warn, #e0a040)' : ';color:var(--dim2)'}">${
+        t("eb.removed","已从回收站移除 {n} 项，额外释放 {v}。").replace("{n}", matchedN).replace("{v}", fmt(data.freed || 0)) +
         t("eb.total","累计已释放 {n}。").replace("{n}", esc(STATE.stats?.total_freed_h || "0 B"))}${
         missed.length ? `<br>${esc(missed.map(x => x.note).slice(0, 3).join("；"))}` : ""}</div>`;
-      eb.style.display = "none";
-      if (chkPurge) chkPurge.disabled = true;
-      syncDoneText();
-      toast(t("eb.removedToast","所选项已从回收站移除"));
+      if (matchedN > 0) {
+        eb.style.display = "none";
+        if (chkPurge) chkPurge.disabled = true;
+        syncDoneText();
+        toast(t("eb.removedToast","所选项已从回收站移除"));
+      } else {
+        eb.disabled = false;
+        eb.textContent = t("eb.armLabel","清空这些项的回收站");
+      }
       return true;
     } catch (err) {
       eb.disabled = false;
@@ -2593,6 +2631,8 @@ function showCleanResult(e, stats, t0, title) {
       if (pane) pane.innerHTML = `<div style="margin-top:8px;font-size:12.5px;color:var(--warn, #e0a040)">${t("eb.fail","清空失败：{n}（可稍后重试）").replace("{n}", esc(err.message))}</div>`;
       toast(t("eb.failToast","回收站清空失败，详见弹窗说明"));
       return false;
+    } finally {
+      purging = false;
     }
   };
   if (eb) {
@@ -2708,7 +2748,7 @@ async function findLockHolders(bad, btn) {
         ${t("lk.disclaimer","※ 以上是<b>候选</b>，不是确证；<b>不要结束 System、explorer.exe 等系统进程</b>。多数程序一退出就自动解锁 —— 先在它们里面保存并退出，再回来重新清理即可。")}</div>`;
     const rbBtn = $("btnRebootDel");
     if (rbBtn) rbBtn.addEventListener("click", async () => {
-      const files = locked.map(x => String(x || "").trim()).filter(Boolean);
+      const files = locked.map(x => String((x && x.path) || "").trim()).filter(Boolean);
       if (!files.length) return;
       if (!confirm(t("lk.rebootConfirm", "确定将以下 {n} 个占用文件登记为「下次重启 Windows 时自动删除」？（需管理员权限）").replace("{n}", files.length))) return;
       rbBtn.disabled = true;
@@ -2742,8 +2782,14 @@ async function findLockHolders(bad, btn) {
         const sn = (sr.stopped || []).length;
         const fn = (sr.failed || []).length;
         toast(t("lk.stopDone","已停止 {s} 个进程（失败 {f} 个）").replace("{s}", sn).replace("{f}", fn));
-        if (sn > 0 && (selected.size + selPaths.size + recycleSel.size) > 0 && typeof doClean === "function") {
-          await doClean();
+        if (sn > 0 && _lastCleanReq) {
+          const req = _lastCleanReq;
+          const res = await apiJSON(`${API}/__oc__/clean?lang=${langParam()}`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(req)
+          });
+          if (res.error) throw new Error(res.error);
+          showCleanResult(res.entry, res.stats, Date.now(), t("clean.done","清理完成"));
         }
       } catch (e) {
         toast(t("lk.stopFail","停止进程失败：") + (e.message || String(e)));
@@ -2791,8 +2837,8 @@ const FS_CACHE_TTL = 10 * 60 * 1000;
 function setToolbars(visible, mode) {
   // mode: 'normal' 两个工具栏都显示；'compact' 只显示第一个
   // 第二栏用 .t2 标记类定位，不依赖「第二栏恰好是 DOM 顺序第二个」
-  const first = document.querySelector("main > .toolbar");
-  const second = document.querySelector("main > .toolbar.t2");
+  const first = document.querySelector("#leftcol > .toolbar");
+  const second = document.querySelector("#leftcol > .toolbar.t2");
   if (first) first.style.display = visible ? "flex" : "none";
   if (second) second.style.display = visible && mode !== "compact" ? "flex" : "none";
 }
@@ -2812,6 +2858,11 @@ let _steamPageKey = "";
 function switchView(name) {
   view = name;
   document.body.dataset.view = name;   // CSS 据此压掉游戏页的盘符卡选中高亮
+  if (name !== "analysis") {
+    const m = $("modal"), mask = $("mask");
+    if (m && mask && m.parentElement !== mask) mask.appendChild(m);
+    if (mask) mask.classList.remove("on");
+  }
   $("fullView").style.display = name === "full" ? "flex" : "none";
   $("steamView").style.display = name === "steam" ? "flex" : "none";
   $("analysisView").style.display = name === "analysis" ? "flex" : "none";
@@ -4782,9 +4833,10 @@ async function openDupFiles() {
     });
   } catch (e) {
     r = { error: String(e) };
+  } finally {
+    clearInterval(progTimer);
   }
   if (_anSeq !== anSeq) return;  // 用户已切走：旧结果作废，不覆盖新页签
-  clearInterval(progTimer);
   if (!r || r.error) {
     $("modal").innerHTML = `<h2>${t("dup.title", "重复大文件")}</h2>
       <div class="mbody"><div class="empty">${esc((r && r.error) || t("up.fail", "检查失败"))}</div>
@@ -4905,8 +4957,8 @@ async function openDupFiles() {
       w0.querySelectorAll(".dupChk").forEach(c => {
         if (c.disabled) return;
         c.checked = !!grp && Number(grp) >= minv;
-        if (c.checked) selPaths.add(c.dataset.p);
-        else selPaths.delete(c.dataset.p);
+        if (c.checked) { selPaths.add(c.dataset.p); _dupSelPaths.add(c.dataset.p); }
+        else { selPaths.delete(c.dataset.p); _dupSelPaths.delete(c.dataset.p); }
       });
     });
     updateFooter();
@@ -4940,8 +4992,8 @@ async function openDupFiles() {
       }
       for (const c of chks) {
         c.checked = (c !== keepChk);
-        if (c.checked) selPaths.add(c.dataset.p);
-        else selPaths.delete(c.dataset.p);
+        if (c.checked) { selPaths.add(c.dataset.p); _dupSelPaths.add(c.dataset.p); }
+        else { selPaths.delete(c.dataset.p); _dupSelPaths.delete(c.dataset.p); }
       }
     });
     updateFooter();
@@ -5111,30 +5163,36 @@ async function openSysSlim() {
       </div>
       <div id="slimMsg" style="margin-top:10px;font-size:12px;color:var(--dim2);line-height:1.6"></div>
     </div>`;
-  $("modal").querySelectorAll("[data-slim]").forEach(b => b.addEventListener("click", async () => {
+  const slimBtns = [...$("modal").querySelectorAll("[data-slim]")];
+  slimBtns.forEach(b => b.addEventListener("click", async () => {
     const act = b.dataset.slim;
     const msg = $("slimMsg");
     if (!confirm(t("slim.confirm", "确认执行该 Windows 官方维护操作？"))) return;
-    b.disabled = true;
+    slimBtns.forEach(x => { x.disabled = true; });
     msg.innerHTML = `<span class="spin"></span>${esc(t("slim.running", "正在执行官方命令，请勿关闭窗口…"))}`;
     try {
       const r = await apiJSON(`${API}/__oc__/sys-slim`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: act }),
       });
+      if (_anSeq !== anSeq) return;
       if (!r.ok) {
         msg.innerHTML = `<span class="res-err">${esc(r.error || "执行失败")}</span>`;
-        b.disabled = false;
+        slimBtns.forEach(x => { x.disabled = false; });
         return;
       }
       const note = r.freed_h
         ? t("slim.doneFreed", "执行完成，已释放 {v}。").replace("{v}", r.freed_h)
         : t("slim.done", "执行完成。");
       toast(note);
-      openSysSlim();
+      if (act === "hiber_off" || act === "hiber_on") {
+        try { await loadState(); } catch (_) {}
+      }
+      if (_anSeq === anSeq) openSysSlim();
     } catch (e) {
+      if (_anSeq !== anSeq) return;
       msg.innerHTML = `<span class="res-err">${esc(e && e.message || String(e))}</span>`;
-      b.disabled = false;
+      slimBtns.forEach(x => { x.disabled = false; });
     }
   }));
 }
@@ -5226,7 +5284,7 @@ async function openJunctionMove() {
             return `<label style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
               <span style="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:break-all">📁 ${esc(x0.p)}</span>
               <span class="vtrack" style="flex:0 0 24%"><i class="vfill" style="width:${w0}%"></i></span>
-              <span class="hint" style="flex:none">${human(x0.s || 0)}</span></label>`;
+              <span class="hint" style="flex:none">${fmt(x0.s || 0)}</span></label>`;
           }).join("");
         })()}</div>
         <div class="d"><label>${t("jm.drive", "目标盘：")}</label>
@@ -5290,29 +5348,29 @@ async function openJunctionMove() {
       <div class="d hint">${t("jm.warn", "过程：占用预检 → 整树拷贝 → 双向校验 → 建 Junction → 删暂存（断电可恢复）。可随时从搬家记录一键迁回。")}</div>
       <div style="text-align:right;padding-top:10px">
         <button class="go" id="jmGo">${t("jm.go", "开始搬家")}</button>
-        <button class="tiny" id="jmClose">${t("cc.close", "关闭")}</button></div></div>`;
+        <button class="tiny" id="jmClose">${t("cc.close", "关闭")}</button></div></div><div id="jmRecs"></div>`;
+  const anSeq = ++_anSeq;
   $("mask").classList.add("on");
   $("jmMode").addEventListener("change", () => {
     $("jmSameRow").style.display = $("jmMode").value === "same" ? "" : "none";
     $("jmCustomRow").style.display = $("jmMode").value === "custom" ? "" : "none";
   });
   $("jmClose").addEventListener("click", closeModal);
-  $("jmGo").addEventListener("click", async () => {
-  // 源盘联动：源路径的盘符与目标盘相同时自动跳到下一目标盘
   $("jmSrc").addEventListener("input", () => {
     const sDrv = ($("jmSrc").value.trim().match(/^([A-Za-z]):/) || [])[1];
     if (!sDrv) return;
     const sel = $("jmDrive");
     if (!sel) return;
-    const opt = [...sel.options].find(o0 => o0.value.toUpperCase() === sDrv.toUpperCase());
-    if (opt) { opt.disabled = true; }
-    else [...sel.options].forEach(o0 => { o0.disabled = false; });
+    [...sel.options].forEach(o0 => {
+      o0.disabled = o0.value.replace(/:$/, "").toUpperCase() === sDrv.toUpperCase();
+    });
     if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
       const first = [...sel.options].find(o0 => !o0.disabled);
       if (first) sel.value = first.value;
     }
   });
-  const src = $("jmSrc").value.trim();
+  $("jmGo").addEventListener("click", async () => {
+    const src = $("jmSrc").value.trim();
     if (!src) { toast(t("jm.needSrc", "请填源目录")); return; }
     const mode = $("jmMode").value;
     let dst;
@@ -5326,32 +5384,43 @@ async function openJunctionMove() {
     if (!dst) { toast(t("jm.needDst", "请填目标路径")); return; }
     const btn = $("jmGo");
     btn.disabled = true; btn.textContent = t("jm.working", "搬家中（拷贝→校验→建映射）…");
-    const r = await apiJSON(`${API}/__oc__/junction-move`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ src, dst, merge: $("jmMerge").checked }) });
-    if (r.error) {
-      toast(r.error + (r.locked ? "\n" + r.locked.join("\n") : ""));
-      btn.disabled = false; btn.textContent = t("jm.go", "开始搬家");
-      return;
+    try {
+      const r = await apiJSON(`${API}/__oc__/junction-move`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ src, dst, merge: $("jmMerge").checked }) });
+      if (r.error) {
+        toast(r.error + (r.locked ? "\n" + r.locked.join("\n") : ""));
+        return;
+      }
+      toast(t("jm.done", "搬家完成：{files} 个文件已迁移，原位置已建 Junction。").replace("{files}", r.files)
+        + (r.note ? " " + r.note : ""));
+      if (_anSeq === anSeq) openJunctionMove();
+    } catch (ex) {
+      toast(ex && ex.message || String(ex));
+    } finally {
+      if ($("jmGo")) { $("jmGo").disabled = false; $("jmGo").textContent = t("jm.go", "开始搬家"); }
     }
-    toast(t("jm.done", "搬家完成：{files} 个文件已迁移，原位置已建 Junction。").replace("{files}", r.files)
-      + (r.note ? " " + r.note : ""));
-    openJunctionMove();
   });
   const recs = await apiJSON(`${API}/__oc__/junction/list`, { method: "POST" }).catch(() => null);
+  if (_anSeq !== anSeq) return;
   const list = recs && recs.records || [];
-  if (list.length) {
-    $("modal").innerHTML += `<div class="mbody"><h3>${t("jm.records", "搬家记录（一键迁回）")}</h3>
+  const recBox = $("jmRecs");
+  if (list.length && recBox) {
+    recBox.innerHTML = `<div class="mbody"><h3>${t("jm.records", "搬家记录（一键迁回）")}</h3>
       ${list.map(r0 => `<div class="logrow"><div class="t">${esc(r0.src)} → ${esc(r0.dst)}
         <a href="javascript:void(0)" class="rcpt jm-rest" data-s="${esc(r0.src)}">${t("jm.restore", "迁回")}</a></div></div>`).join("")}
       </div>`;
-    [...document.querySelectorAll(".jm-rest")].forEach(a =>
+    [...recBox.querySelectorAll(".jm-rest")].forEach(a =>
       a.addEventListener("click", async () => {
-        const rr = await apiJSON(`${API}/__oc__/junction-restore`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ src: a.dataset.s }) });
-        toast(rr.error || t("jm.restored", "已迁回原位"));
-        openJunctionMove();
+        try {
+          const rr = await apiJSON(`${API}/__oc__/junction-restore`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ src: a.dataset.s }) });
+          toast(rr.error || t("jm.restored", "已迁回原位"));
+          if (_anSeq === anSeq) openJunctionMove();
+        } catch (ex) {
+          toast(ex && ex.message || String(ex));
+        }
       }));
   }
 }
@@ -5381,7 +5450,7 @@ async function openFsSearch(q) {
           <span class="freed">${m0.size_h}</span></div>
         <div class="d"><a href="javascript:void(0)" class="rcpt" data-p="${esc(m0.path)}">${t("bf.reveal", "在资源管理器中打开位置")}</a></div>
       </div>`).join("")
-      : `<div class="empty">${t("fs.searchNone2", r.error || "扫描缓存里没有匹配项")}</div>`}
+      : `<div class="empty">${r.error ? esc(r.error) : esc(t("fs.searchNone2", "扫描缓存里没有匹配项"))}</div>`}
     <div style="text-align:right;padding-top:10px">
       <button class="tiny" id="fsSClose">${t("cc.close", "关闭")}</button></div></div>`;
   $("fsSClose").addEventListener("click", closeModal);
@@ -6111,18 +6180,12 @@ $("ruleName").addEventListener("keydown", e => { if (e.key === "Enter") saveRule
   const _collectFsItems = (limit = 40) => {
     const out = [];
     if (FS && Array.isArray(FS.nodes)) {
-      const walk = list => {
-        for (const n of list || []) {
-          if (!n || !n.path) continue;
-          if (n.verdict === "unk" || !n.verdict) {
-            out.push({ path: n.path, size: n.size || 0, size_h: n.size_h || fmt(n.size || 0), kind: "dir" });
-          }
-          if (n.children && n.children.length) walk(n.children);
-        }
-      };
-      walk(FS.nodes);
+      for (const n of FS.nodes) {
+        if (!n || !n.path || n.hidden_sys || n.recognized) continue;
+        out.push({ path: n.path, size: n.size || 0, size_h: n.size_h || fmt(n.size || 0), kind: n.type || "dir" });
+      }
       for (const f of FS.rootfiles || []) {
-        if (f && f.path && (f.verdict === "unk" || !f.verdict)) {
+        if (f && f.path && !f.hidden_sys && !f.recognized) {
           out.push({ path: f.path, size: f.size || 0, size_h: f.size_h || fmt(f.size || 0), kind: "file" });
         }
       }
@@ -6638,7 +6701,11 @@ if ($("btnPackCatalog")) $("btnPackCatalog").addEventListener("click", async () 
   box.innerHTML = `<span class="spin"></span>${esc(t("packs.catLoading","正在匹配本机环境与社区包…"))}`;
   try {
     const r = await apiJSON(`${API}/__oc__/packs/catalog`);
-    const items = (r && r.items) || [];
+    if (!r || !r.ok || r.error) {
+      box.innerHTML = `<div class="empty">${esc((r && r.error) || t("up.fail", "加载失败"))}</div>`;
+      return;
+    }
+    const items = r.items || [];
     const envTxt = (r && r.env || []).join(" · ");
     box.innerHTML = `<div style="font-size:11.5px;color:var(--dim2);margin-bottom:6px">${esc(t("packs.envTag","已识别本机环境：") + (envTxt || "Windows"))}</div>` +
       items.map(it => `<div class="rule" style="margin-bottom:6px">
@@ -6692,13 +6759,13 @@ $("btnCommUpload").addEventListener("click", async () => {
     }
     if (r.mode === "gist") {
       msg.innerHTML = `<span class="res-ok">${esc(t("comm.gistOk","已发布公开 Gist（共 {n} 项）并复制 JSON：").replace("{n}", r.count))}</span> ` +
-        `<a href="${esc(r.gist_url)}" target="_blank" rel="noopener">Gist</a> · ` +
-        `<a href="${esc(r.issue_url)}" target="_blank" rel="noopener">${esc(t("comm.openIssue","打开 GitHub 提交页"))}</a>`;
+        `<a href="${esc(safeHttpUrl(r.gist_url))}" target="_blank" rel="noopener">Gist</a> · ` +
+        `<a href="${esc(safeHttpUrl(r.issue_url))}" target="_blank" rel="noopener">${esc(t("comm.openIssue","打开 GitHub 提交页"))}</a>`;
     } else {
       msg.innerHTML = `<span class="res-ok">${esc(t("comm.issueOk","已复制 {n} 项规则 JSON 并打开 GitHub 提交页（若未自动弹出请点击右侧链接）：").replace("{n}", r.count))}</span> ` +
-        `<a href="${esc(r.issue_url)}" target="_blank" rel="noopener">${esc(t("comm.openIssue","打开 GitHub 提交页"))}</a>`;
+        `<a href="${esc(safeHttpUrl(r.issue_url))}" target="_blank" rel="noopener">${esc(t("comm.openIssue","打开 GitHub 提交页"))}</a>`;
     }
-    if (r.issue_url) window.open(r.issue_url, "_blank", "noopener");
+    if (r.issue_url && /^https?:\/\//i.test(r.issue_url)) window.open(r.issue_url, "_blank", "noopener");
   } catch (e) {
     msg.innerHTML = `<span class="res-err">${esc(e && e.message || String(e))}</span>`;
   } finally {
@@ -6717,12 +6784,14 @@ $("btnUpCheck").addEventListener("click", async () => {
       msg.textContent = r.error || t("up.fail", "检查失败");
     } else if (r.newer) {
       const tag = "v" + (r.latest || "?") + (r.published ? " · " + r.published : "");
-      msg.innerHTML = `<a href="${esc(r.url || r.download)}" target="_blank" rel="noopener"
+      msg.innerHTML = `<a href="${esc(safeHttpUrl(r.url || r.download))}" target="_blank" rel="noopener"
         style="color:var(--ok)">${esc(tag)} — ${esc(t("up.newer", "有新版本，点击前往下载页"))}</a> ` +
         `<button type="button" class="tiny primary" id="btnSelfUpdate" style="margin-left:6px">${esc(t("up.autoBtn","一键校验升级"))}</button>`;
       const su = $("btnSelfUpdate");
       if (su) su.addEventListener("click", async () => {
+        if (!confirm(t("up.confirm", "确认下载并校验更新程序文件？（您的配置与历史记录将被保留）"))) return;
         su.disabled = true;
+        btn.disabled = true;
         su.textContent = t("up.updating", "下载校验中…");
         try {
           const ur = await apiJSON(`${API}/__oc__/app/self_update`, { method: "POST" });
@@ -6738,6 +6807,8 @@ $("btnUpCheck").addEventListener("click", async () => {
           toast(ex && ex.message || String(ex));
           su.disabled = false;
           su.textContent = t("up.autoBtn", "一键校验升级");
+        } finally {
+          btn.disabled = false;
         }
       });
     } else {
@@ -6763,8 +6834,8 @@ $("btnAiPlan").addEventListener("click", () => {
 });
 $("btnAiBatch")?.addEventListener("click", async () => {
   const btn = $("btnAiBatch"), old = btn.textContent;
-  const src = (FS && (FS.biggest || (FS.tree && FS.tree.children))) || [];
-  const unk = src.filter(x => x && (!x.info || !x.info.recognized) && (x.path || x.name)).slice(0, 25);
+  const src = (FS && Array.isArray(FS.nodes)) ? FS.nodes : [];
+  const unk = src.filter(x => x && !x.recognized && !x.hidden_sys && (x.path || x.name)).slice(0, 25);
   if (!unk.length) { toast(t("ai.batchNone", "当前视图没有未识别项")); return; }
   btn.disabled = true; btn.textContent = t("ai.working", "识别中…");
   try {
@@ -6772,7 +6843,7 @@ $("btnAiBatch")?.addEventListener("click", async () => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items: unk.map(x => ({
         path: x.path || "", name: x.name || "",
-        kind: x.kind || "dir", size_h: x.size_h || fmt(x.size || 0)
+        kind: x.type || x.kind || "dir", size_h: x.size_h || fmt(x.size || 0)
       })) }),
     });
     if (!r.ok) { toast(r.error || t("ai.batchFail", "批量识别失败")); return; }

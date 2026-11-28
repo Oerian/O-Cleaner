@@ -19,7 +19,7 @@ echo.
 rem 2026-11-05 P3-2: 'where python' is fooled by the Microsoft Store
 rem app-execution-alias stub on bare machines (a fake python.exe under
 rem %LOCALAPPDATA%\Microsoft\WindowsApps). Probe with a real version
-assert instead so only a working Python passes.
+rem assert instead so only a working Python passes.
 python -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>nul
 if errorlevel 1 goto nopython
 

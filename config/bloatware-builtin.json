@@ -64,7 +64,7 @@
     {
       "id": "kav",
       "name": "金山毒霸",
-      "match": ["金山毒霸", "Kingsoft Antivirus", "kingsoft"],
+      "match": ["金山毒霸", "Kingsoft Antivirus", "Kingsoft Internet Security"],
       "dirs": ["kingsoft\\KIS", "Kingsoft\\kingsoft antivirus"]
     },
     {

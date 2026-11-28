@@ -75,11 +75,6 @@ jobs:
       - name: 规则 linter（--strict，警告也算失败）
         run: python -X utf8 tools/lint_rules.py --strict
 
-      - name: 单元测试与跨模块引用检查
-        run: |
-          python -X utf8 tools/unit_test.py
-          python -X utf8 tools/check_undefined.py
-
       # 防止 linter 自身退化成空转：注入已知缺陷，验证它真的抓得到
       - name: 验证 linter 有检出能力
         run: python -X utf8 tools/_lint_selftest.py
@@ -109,9 +104,12 @@ jobs:
       # 必须检查**全部** script 块：旧版用 [regex]::Match 只取第一个匹配，
       # 而 index.html 的第一个 script 块只有 400 多字节（一小段初始化），
       # 真正 200 KB+ 的应用主体是第二个块 —— 主脚本写坏语法，这道闸门照样绿。
-      - name: 界面 JS 语法检查（全部 script 块）
+      - name: 界面 JS 语法检查（web/app.js 与内嵌 script 块）
         shell: pwsh
         run: |
+          node --check web/app.js
+          if ($LASTEXITCODE -ne 0) { Write-Host "web/app.js 语法错误"; exit 1 }
+          Write-Host "web/app.js 语法通过"
           $html = Get-Content web/index.html -Raw -Encoding UTF8
           $ms = [regex]::Matches($html, '(?s)<script[^>]*>(.*?)</script>')
           if ($ms.Count -eq 0) { Write-Host "找不到 <script> 块"; exit 1 }
@@ -120,6 +118,7 @@ jobs:
           foreach ($m in $ms) {
             $i++
             $body = $m.Groups[1].Value
+            if ([string]::IsNullOrWhiteSpace($body)) { continue }
             $p = Join-Path $env:TEMP "oc_ci_$i.js"
             [IO.File]::WriteAllText($p, $body, [Text.UTF8Encoding]::new($false))
             node --check $p

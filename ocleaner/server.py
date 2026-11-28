@@ -30,6 +30,7 @@ import ocleaner.core as _core
 
 class Handler(BaseHTTPRequestHandler):
     server_version = f"OCleaner/{_core.APP_VERSION}"
+    timeout = 30
 
     def log_message(self, fmt, *args):
         pass
@@ -45,38 +46,39 @@ class Handler(BaseHTTPRequestHandler):
     # 规则：写操作若带了 Origin/Referer 且来源不是本机，一律拒绝。
     # 用 curl 等工具不带 Origin 时仍放行（那是本机用户自己的操作）。
     def _host_ok(self) -> bool:
-        """防御 DNS Rebinding：Host 头必须指向本机回环地址。
-
-        外部审计（2026-11-05 报告 P1-1）指出：服务端此前不校验 Host，
-        恶意域名可通过 DNS Rebinding 重绑定到 127.0.0.1，使攻击脚本与
-        本地服务处于浏览器同源上下文 —— 写操作之外还能读全盘清单。
-        """
+        """防御 DNS Rebinding：Host 头必须指向本机回环地址及当前绑定端口。"""
         raw_host = (self.headers.get("Host") or "").strip().lower()
-        if not raw_host:
+        m = re.fullmatch(r"(127\.0\.0\.1|localhost|\[::1\]|::1)(?::(\d{1,5}))?", raw_host)
+        if not m:
             return False
-        # 剥离端口（兼容 IPv4:port 与 [::1]:port）
-        if raw_host.startswith("["):
-            host = raw_host.split("]")[0] + "]"
-        else:
-            host = raw_host.split(":")[0]
-        return host in ("127.0.0.1", "localhost", "::1", "[::1]")
+        bound = int(getattr(_core, "_BOUND_PORT", 0) or 0)
+        if bound and m.group(2) and int(m.group(2)) != bound:
+            return False
+        return True
 
     def _origin_ok(self) -> bool:
+        sfs = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if sfs == "cross-site":
+            return False
+        raw_host = (self.headers.get("Host") or "").strip().lower()
+        hm = re.search(r":(\d{1,5})$", raw_host)
+        expected_port = int(getattr(_core, "_BOUND_PORT", 0) or 0) or (int(hm.group(1)) if hm else 0)
         for h in ("Origin", "Referer"):
             v = self.headers.get(h)
             if not v:
                 continue
-            # 外部审计（2026-11-05 报告 P1-1）：sandbox iframe / data: URI
-            # 发起的跨站请求带 Origin: null，urlparse("null").hostname 为
-            # None → 旧代码算出空串 "" 恰好命中白名单被放行。显式拒绝
-            # "null"，且空串绝不放行。
             if v.strip().lower() == "null":
                 return False
             try:
-                host = (urlparse(v).hostname or "").lower()
+                u = urlparse(v)
+                host = (u.hostname or "").lower()
+                scheme = (u.scheme or "").lower()
+                port = u.port
             except Exception:
                 return False
-            if not host or host not in ("127.0.0.1", "localhost", "::1"):
+            if scheme not in ("http", "https") or host not in ("127.0.0.1", "localhost", "::1"):
+                return False
+            if expected_port and port and port != expected_port:
                 return False
         return True
 
@@ -114,11 +116,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-    def _send(self, code: int, body: bytes, ctype: str) -> None:
+    def _send(self, code: int, body: bytes, ctype: str, extra_headers: dict | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        for k, v in (extra_headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -214,15 +220,16 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             data = b""
         mime = _core._image_mime(data) if data else ""
-        if mime:
+        if mime and mime != "image/svg+xml":
             return self._send(200, data, mime)
         return self._send(200, _core._PLACEHOLDER_SVG.encode("utf-8"),
-                          "image/svg+xml")
+                          "image/svg+xml",
+                          {"Content-Security-Policy": "default-src 'none'; sandbox"})
 
     def _cover_placeholder_post(self, body: dict) -> None:
-        """保存 / 重置默认占位图。body.data 为 dataURL（PNG/JPEG/GIF/SVG），
+        """保存 / 重置默认占位图。body.data 为 dataURL（PNG/JPEG/GIF），
         body.reset 为真时删除自定义图回到内置 SVG。
-        校验：解码后 ≤ 2 MB、magic bytes 认得出的图片才落盘。"""
+        校验：解码后 ≤ 2 MB、magic bytes 认得出的位图才落盘（禁 SVG 防存储型 XSS）。"""
         if body.get("reset"):
             try:
                 _core.COVER_PLACEHOLDER_PATH.unlink(missing_ok=True)
@@ -240,9 +247,9 @@ class Handler(BaseHTTPRequestHandler):
         if len(data) > 2 * 1024 * 1024:
             return self._json({"error": "图片过大（上限 2 MB）"}, 400)
         mime = _core._image_mime(data)
-        if not mime:
+        if not mime or mime == "image/svg+xml":
             return self._json(
-                {"error": "只支持 PNG / JPEG / GIF / SVG 图片"}, 400)
+                {"error": "只支持 PNG / JPEG / GIF 图片"}, 400)
         try:
             _core.COVER_PLACEHOLDER_PATH.parent.mkdir(parents=True, exist_ok=True)
             _core.COVER_PLACEHOLDER_PATH.write_bytes(data)
@@ -250,28 +257,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": f"保存失败：{e}"}, 500)
         return self._json({"ok": True, "mime": mime, "size": len(data)})
 
-    def _body(self) -> dict:
-        """读请求体。畸形输入一律当成空对象返回，但会记下原因。
-
-        `_json.loads` 失败 / 不是对象 / 超长，以前全部静默变成 {}，于是
-        调用方只能回「没有选择任何清理项」这类牛头不对马嘴的错误 ——
-        用户以为是「没勾上」，实际是请求体坏了。现在把原因记在
-        `self._body_error` 里，由 do_POST 统一回 400「请求体非法」。
-        """
+    def _body(self, max_bytes: int = 4 * 1024 * 1024) -> dict:
+        """读请求体。畸形输入一律当成空对象返回，但会记下原因。"""
         self._body_error = ""
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             self._body_error = "Content-Length 非法"
             return {}
-        # 限制请求体大小：本工具的请求都很小，超大的必然是异常或恶意
-        if n <= 0:
+        if n < 0:
+            self._body_error = "Content-Length 不能为负数"
             return {}
-        if n > 4 * 1024 * 1024:
-            self._body_error = "请求体过大（上限 4 MB）"
+        if n == 0:
+            return {}
+        if n > max_bytes:
+            self._body_error = f"请求体过大（上限 {max_bytes // (1024 * 1024)} MB）"
             return {}
         try:
-            data = json.loads(self.rfile.read(n).decode("utf-8"))
+            def _no_const(c):
+                raise ValueError(f"invalid JSON constant: {c}")
+            data = json.loads(self.rfile.read(n).decode("utf-8"), parse_constant=_no_const)
         except Exception:
             self._body_error = "请求体不是合法 JSON"
             return {}
@@ -336,7 +341,7 @@ class Handler(BaseHTTPRequestHandler):
                                "remote": _core.load_packs_state().get("remote") or "",
                                "user_dir": str(_core.USER_PACKS_DIR)})
         if route == "/__oc__/packs/catalog":
-            return self._json(_integ.packs_catalog())
+            return self._json(_core.packs_catalog())
         if route == "/__oc__/ext-cache":
             letter = str(q.get("drive") or "C").rstrip(":/\\").upper()
             if not re.fullmatch(r"[A-Z]", letter):
@@ -528,7 +533,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._deny_csrf():
             return
         route = self.path.split("?")[0]
-        body = self._body()
+        body = self._body(32 * 1024 * 1024 if route == "/__oc__/backup/import" else 4 * 1024 * 1024)
         # 请求体坏掉就直说，别让各路由把「空对象」误判成「用户没选任何项」。
         # 所有 POST 都必须带合法 JSON 对象（少数无参路由前端本来就发 {}）。
         body_err = getattr(self, "_body_error", "")
@@ -1096,7 +1101,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, **rep})
         if route == "/__oc__/community/upload":
             try:
-                res = _integ.community_upload(body)
+                res = _core.community_upload(body)
             except ValueError as e:
                 return self._json({"error": str(e)}, 400)
             except (RuntimeError, OSError) as e:
@@ -1199,15 +1204,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(r0)
         if route == "/__oc__/bloatware/uninstall":
             # 官方卸载程序启动：命令由服务端从注册表实时读取（客户端只传
-            # reg_key），杜绝任意命令注入；reg_key 白名单限定 Uninstall 子树。
+            # reg_key），且必须命中毒瘤扫描结果，禁止执行任意 HKCU 卸载项。
             reg_key = str(body.get("reg_key") or "")
             parsed = _core._parse_uninstall_reg_key(reg_key)
             if not parsed:
                 return self._json({"error": "reg_key 非法"}, 400)
             if not _core.IS_WINDOWS:
                 return self._json({"error": "仅 Windows"}, 400)
+            bw_scan = _core.bloatware_scan()
+            matched_keys = {str(it.get("reg_key") or "").lower()
+                            for it in (bw_scan.get("installed") or []) if isinstance(it, dict)}
+            if reg_key.strip().lower() not in matched_keys:
+                return self._json({"error": "仅允许卸载已识别的毒瘤软件条目"}, 403)
             import winreg
             hprefix, sub_path = parsed
+            if hprefix == "HKCU" and _core.is_admin():
+                return self._json({"error": "提权模式下出于安全拒绝执行 HKCU 卸载命令"}, 403)
             hive = (winreg.HKEY_LOCAL_MACHINE if hprefix == "HKLM"
                     else winreg.HKEY_CURRENT_USER)
             cmd = ""
@@ -1222,30 +1234,67 @@ class Handler(BaseHTTPRequestHandler):
             if not cmd:
                 return self._json({"error": "注册表里找不到卸载命令"}, 404)
             try:
-                # Windows CreateProcessW 直接接受完整命令行（含引号路径与 /S /X 参数），
-                # 避免 os.startfile 把整串当成文件名导致 FileNotFoundError；
-                # 遇 WinError 740（需要提权）回退 os.startfile 触发 UAC。
                 subprocess.Popen(cmd, shell=False)
                 return self._json({"ok": True})
             except OSError as exc:
                 if getattr(exc, "winerror", 0) == 740:
                     try:
-                        os.startfile(cmd)
+                        import ctypes as _ct
+                        from ctypes import wintypes as _wt
+                        argc = _ct.c_int(0)
+                        _s32 = _ct.WinDLL("shell32", use_last_error=True)
+                        _s32.CommandLineToArgvW.argtypes = [_wt.LPCWSTR, _ct.POINTER(_ct.c_int)]
+                        _s32.CommandLineToArgvW.restype = _ct.POINTER(_wt.LPWSTR)
+                        argv = _s32.CommandLineToArgvW(cmd, _ct.byref(argc))
+                        if not argv or argc.value < 1:
+                            raise OSError("无法解析卸载命令行")
+                        try:
+                            exe_path = argv[0]
+                            params = subprocess.list2cmdline([argv[i] for i in range(1, argc.value)])
+                        finally:
+                            _ct.WinDLL("kernel32").LocalFree(argv)
+                        _s32.ShellExecuteW.argtypes = [
+                            _wt.HWND, _wt.LPCWSTR, _wt.LPCWSTR,
+                            _wt.LPCWSTR, _wt.LPCWSTR, _ct.c_int]
+                        _s32.ShellExecuteW.restype = _ct.c_void_p
+                        rc = _s32.ShellExecuteW(None, "runas", exe_path, params, None, 1)
+                        if not rc or rc <= 32:
+                            raise OSError(f"ShellExecuteW failed ({rc})")
                         return self._json({"ok": True})
                     except OSError as exc2:
                         return self._json({"error": f"启动失败：{exc2}"}, 500)
                 return self._json({"error": f"启动失败：{exc}"}, 500)
         if route == "/__oc__/bloatware/sweep":
-            self.server.busy = getattr(self.server, "busy", False)
-            if self.server.busy:
+            if getattr(self.server, "busy", False) or not _core._CLEAN_LOCK.acquire(blocking=False):
                 return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
             reg_key = str(body.get("reg_key") or "")
             dirs = body.get("dirs") or []
             if not isinstance(dirs, list) or (not dirs and not reg_key):
+                _core._CLEAN_LOCK.release()
                 return self._json({"error": "dirs/reg_key 不能同时为空"}, 400)
+            bw_scan = _core.bloatware_scan()
+            allowed_dirs: set[str] = set()
+            allowed_keys: set[str] = set()
+            for it in (bw_scan.get("installed") or []) + (bw_scan.get("orphans") or []):
+                if not isinstance(it, dict):
+                    continue
+                if it.get("reg_key"):
+                    allowed_keys.add(str(it["reg_key"]).strip().lower())
+                for d0 in (it.get("residue_dirs") or []):
+                    allowed_dirs.add(os.path.normpath(str(d0)).lower())
+                if it.get("path"):
+                    allowed_dirs.add(os.path.normpath(str(it["path"])).lower())
+            if reg_key and reg_key.strip().lower() not in allowed_keys:
+                _core._CLEAN_LOCK.release()
+                return self._json({"error": "仅允许清理已识别的毒瘤软件注册表项"}, 403)
+            safe_dirs = [str(x) for x in dirs
+                         if os.path.normpath(str(x)).lower() in allowed_dirs][:20]
+            if dirs and not safe_dirs:
+                _core._CLEAN_LOCK.release()
+                return self._json({"error": "仅允许清理已识别的毒瘤残留目录"}, 403)
             self.server.busy = True
             try:
-                r = _core.bloatware_sweep(reg_key, [str(x) for x in dirs][:20])
+                r = _core.bloatware_sweep(reg_key, safe_dirs)
                 _core._BLOAT_CACHE.update(ts=0.0, r=None)
                 try:
                     _core.append_history({
@@ -1271,9 +1320,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(r)
             finally:
                 self.server.busy = False
+                _core._CLEAN_LOCK.release()
         if route == "/__oc__/junction-move":
-            self.server.busy = getattr(self.server, "busy", False)
-            if self.server.busy:
+            if getattr(self.server, "busy", False) or not _core._CLEAN_LOCK.acquire(blocking=False):
                 return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
             self.server.busy = True
             try:
@@ -1284,16 +1333,18 @@ class Handler(BaseHTTPRequestHandler):
                     rename_conflict=bool(body.get("rename_conflict", True))))
             finally:
                 self.server.busy = False
+                _core._CLEAN_LOCK.release()
         if route == "/__oc__/junction-restore":
-            if getattr(self.server, "busy", False):
+            if getattr(self.server, "busy", False) or not _core._CLEAN_LOCK.acquire(blocking=False):
                 return self._json({"error": "已有清理任务在执行，请等待完成"}, 409)
             self.server.busy = True
             try:
                 return self._json(_core.junction_restore(str(body.get("src") or "")))
             finally:
                 self.server.busy = False
+                _core._CLEAN_LOCK.release()
         if route == "/__oc__/junction/list":
-            return self._json({"records": _core._load_json(_core.MOVED_JUNCTIONS_PATH, [])})
+            return self._json({"records": _core._load_json(_core.MOVED_JUNCTIONS_PATH, [], use_cache=False)})
         if route == "/__oc__/recycle-restore":
             paths_in = body.get("paths") or []
             if not isinstance(paths_in, list) or not paths_in:
@@ -1303,11 +1354,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_core.recycle_restore([str(x) for x in paths_in]))
         if route == "/__oc__/snapshot/diff":
             try:
-                days_n = int(body.get("days") or 7)
+                days_n = max(1, min(365, int(body.get("days") or 7)))
             except (TypeError, ValueError):
                 return self._json({"error": "days 必须是整数"}, 400)
-            return self._json(_core.snapshot_diff(
-                str(body.get("drive") or "C"), days_n))
+            drv_d = str(body.get("drive") or "C").rstrip(":/\\").upper()
+            if not re.fullmatch(r"[A-Z]", drv_d):
+                return self._json({"error": "drive 必须是单个盘符字母"}, 400)
+            return self._json(_core.snapshot_diff(drv_d, days_n))
         if route == "/__oc__/fs-search":
             return self._json(_core.fs_search(
                 str(body.get("drive") or "C"),
@@ -1470,11 +1523,12 @@ class Handler(BaseHTTPRequestHandler):
 
         # ---- 在资源管理器中打开 / 定位 ----
         if route == "/__oc__/reveal":
-            path = _core.expand(str(body.get("path") or ""))
-            if os.path.exists(path) and _core.IS_WINDOWS:
-                np = os.path.normpath(path)
-                if body.get("select"):
-                    # explorer /select：打开父级并高亮本项；项本身不存在时退回打开父级
+            raw_p = str(body.get("path") or "").strip()
+            if not re.match(r"^[A-Za-z]:\\", raw_p):
+                return self._json({"error": "仅支持本地盘符路径"}, 400)
+            if os.path.exists(raw_p) and _core.IS_WINDOWS:
+                np = os.path.normpath(raw_p)
+                if body.get("select") or not os.path.isdir(np):
                     target = np if os.path.exists(np) else os.path.dirname(np)
                     subprocess.Popen(["explorer.exe", "/select,", target],
                                      creationflags=_core.CREATE_NO_WINDOW)
@@ -1536,6 +1590,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True,
                                "packs": _core.load_packs(use_cache=False)["packs"]})
         if route == "/__oc__/packs/update":
+            if body.get("remote"):
+                rem = str(body["remote"]).strip()
+                bad = _core._is_unsafe_remote(rem)
+                if bad:
+                    return self._json({"error": f"拒绝不安全的远端地址：{bad}"}, 400)
             with _core._lock:  # P2-3：读-改-写串行化（防并发丢失更新）
                 if body.get("remote"):
                     st = _core.load_packs_state()
@@ -1546,15 +1605,21 @@ class Handler(BaseHTTPRequestHandler):
         # ---- 接入自有 AI（密钥只在服务端使用，不回传）----
         if route == "/__oc__/ai/config":
             patch = {k: v for k, v in (body or {}).items() if k in _core._AI_DEFAULTS}
-            # 前端回传空密钥表示「不改」，避免每次保存都把已存的密钥抹掉。
-            # 但这样一来界面上就永远清不掉 Key（用户想换供应商、或想彻底
-            # 删除留存的密钥时做不到）。所以另开一个显式开关：只有明确传了
-            # clear_api_key=True 才清空，空字符串仍然等于「不改」。
-            if body.get("clear_api_key"):
-                patch["api_key"] = ""
-            elif not str(patch.get("api_key") or "").strip():
-                patch.pop("api_key", None)
+            new_key = str(patch.get("api_key") or "").strip()
             with _core._lock:
+                if not body.get("clear_api_key") and not new_key and patch.get("base_url"):
+                    cur_ai = _core.load_ai_config()
+                    if cur_ai.get("api_key"):
+                        old_u = urlparse(str(cur_ai.get("base_url") or ""))
+                        new_u = urlparse(str(patch.get("base_url") or ""))
+                        if (old_u.scheme.lower(), (old_u.hostname or "").lower(), old_u.port) != (
+                                new_u.scheme.lower(), (new_u.hostname or "").lower(), new_u.port):
+                            return self._json(
+                                {"error": "修改接口地址时请重新填写或勾选清空 API Key"}, 400)
+                if body.get("clear_api_key"):
+                    patch["api_key"] = ""
+                elif not new_key:
+                    patch.pop("api_key", None)
                 _core.save_ai_config(patch)
             return self._json({"ok": True, "ai": _core.ai_public_config()})
         if route == "/__oc__/ai/test":
@@ -1605,7 +1670,7 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/app/update_check":
             return self._json(_core.app_update_check())
         if route == "/__oc__/app/self_update":
-            return self._json(_integ.app_self_update())
+            return self._json(_core.app_self_update())
         if route == "/__oc__/sys-slim":
             return self._json(_core.sys_slim_run(str((body or {}).get("action") or "")))
 

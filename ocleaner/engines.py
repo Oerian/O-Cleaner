@@ -16,8 +16,10 @@ import re
 import time
 import ctypes
 import struct
-import array
+from array import array
+import secrets
 import tempfile
+import threading
 import subprocess
 
 import ocleaner.core as _core
@@ -137,7 +139,7 @@ def wiztree_status() -> dict:
         try:
             out = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-Command",
-                 f"(Get-Item -LiteralPath '{path.replace(chr(39), chr(39)*2)}')"
+                 f"(Get-Item -LiteralPath '{_core._ps_sq(path)}')"
                  ".VersionInfo.FileVersion"],
                 capture_output=True, timeout=20,
                 creationflags=_core.CREATE_NO_WINDOW if _core.IS_WINDOWS else 0)
@@ -240,8 +242,8 @@ def acquire_wiztree(timeout: int = 300) -> dict:
         result["error"] = (f"解压完成但没找到 WizTree64.exe，"
                            f"请检查 {_core.WIZTREE_PORTABLE_DIR} 的内容")
         return result
-    sig = _core._authenticode_status(st["path"])
-    if sig != "Valid":
+    sig, subj = _core._authenticode_info(st["path"])
+    if sig != "Valid" or "antibody software" not in subj.lower():
         # 验签不通过必须清理已解压的未签名二进制并作废缓存，
         # 否则下次扫描会直接执行 portable/WizTree/ 里的可疑文件。
         import shutil as _sh
@@ -254,7 +256,7 @@ def acquire_wiztree(timeout: int = 300) -> dict:
                            f"（Authenticode 状态：{sig}），已清理下载文件并中止。"
                            f"请从官方地址重新下载后重试")
         return result
-    result["log"].append("WizTree64.exe 签名校验通过（Authenticode: Valid）")
+    result["log"].append("WizTree64.exe 签名校验通过（Authenticode: Valid, Antibody Software）")
     result.update(ok=True, path=st["path"], version=st["version"])
     result["log"].append(f"已就绪：{st['path']}")
     return result
@@ -282,7 +284,7 @@ def cleanup_stale_wiztree_exports() -> int:
     """
     n = 0
     try:
-        pat = re.compile(r"^oc-wiztree-[A-Z]-\d+\.csv$", re.I)
+        pat = re.compile(r"^oc-wiztree-[A-Z]-\d+(?:-[0-9a-f]+)?\.csv$", re.I)
         for name in os.listdir(tempfile.gettempdir()):
             if not pat.match(name):
                 continue
@@ -304,9 +306,13 @@ def _wiztree_export(drive: str, timeout: int = 300) -> tuple[str | None, str]:
     exe = (wiztree_available().get("path") or "")
     if not exe:
         return None, "未安装 WizTree"
+    sig, subj = _core._authenticode_info(exe)
+    if sig != "Valid" or "antibody software" not in subj.lower():
+        return None, f"WizTree 可执行文件签名校验未通过（{sig}），已拒绝执行"
     letter = (drive or "C").rstrip(":").upper() + ":"
-    csv_path = os.path.join(tempfile.gettempdir(),
-                            f"oc-wiztree-{letter.rstrip(':')}-{os.getpid()}.csv")
+    csv_path = os.path.join(
+        tempfile.gettempdir(),
+        f"oc-wiztree-{letter.rstrip(':')}-{os.getpid()}-{secrets.token_hex(4)}.csv")
     try:
         if os.path.exists(csv_path):
             os.remove(csv_path)
@@ -372,14 +378,16 @@ def _wiztree_parse(csv_path: str, on_progress=None) -> dict:
         total_bytes = max(1, os.path.getsize(csv_path))
     except OSError:
         total_bytes = 1
+    read_bytes = 0
     with open(csv_path, "r", encoding="utf-8-sig", errors="replace") as fh:
-        fh.readline()                  # WizTree 版本与捐赠提示
-        fh.readline()                  # 列名
+        read_bytes += len(fh.readline().encode("utf-8", "replace"))  # WizTree 版本与捐赠提示
+        read_bytes += len(fh.readline().encode("utf-8", "replace"))  # 列名
         for line in fh:
             n += 1
+            read_bytes += len(line.encode("utf-8", "replace"))
             if on_progress and n % 20000 == 0:
                 try:
-                    on_progress(min(1.0, fh.tell() / total_bytes))
+                    on_progress(min(1.0, read_bytes / total_bytes))
                 except Exception:
                     pass           # 报进度失败不影响解析
             # 路径一定被双引号包住，所以按「第一个引号闭合」切分比按逗号切分安全
@@ -390,7 +398,10 @@ def _wiztree_parse(csv_path: str, on_progress=None) -> dict:
             if end <= 1:
                 continue
             path = line[1:end]
-            parts = line[end + 1:].lstrip(",").split(",", 1)
+            rest = line[end + 1:]
+            if not rest.startswith(","):
+                continue
+            parts = rest[1:].split(",", 1)
             if not parts:
                 continue
             try:
@@ -477,22 +488,25 @@ def _mft_parse_at(buf: bytearray, off: int, frs_size: int,
     u64 = _S_U64
     usa_off = u16(buf, off + 4)[0]
     usa_cnt = u16(buf, off + 6)[0]
-    # 更新序列修正：每 512 字节扇区末 2 字节被检查值占用，须换回真实数据，
-    # 否则跨扇区边界的属性字段会读到脏字节（体积算错、名字乱码）。
-    if 0 < usa_off and usa_cnt > 1 and usa_off + usa_cnt * 2 <= frs_size:
-        for i in range(1, usa_cnt):
-            o = off + i * 512 - 2
-            if o + 2 > end:
-                return None
-            buf[o] = buf[off + usa_off + i * 2]
-            buf[o + 1] = buf[off + usa_off + i * 2 + 1]
+    if usa_off < 0x2A or usa_cnt <= 1 or usa_off + usa_cnt * 2 > frs_size:
+        return None
+    usn0 = buf[off + usa_off]
+    usn1 = buf[off + usa_off + 1]
+    for i in range(1, usa_cnt):
+        o = off + i * 512 - 2
+        if o + 2 > end or buf[o] != usn0 or buf[o + 1] != usn1:
+            return None
+        buf[o] = buf[off + usa_off + i * 2]
+        buf[o + 1] = buf[off + usa_off + i * 2 + 1]
     parent = -1
     name_raw = None
     size = 0
-    is_dir = False
+    is_dir = bool(buf[off + 0x16] & 0x02)
     mtime = 0
     # 热点路径全用预编译 Struct.unpack_from 直接内联，省去格式串查找与切片拷贝。
     used = u32(buf, off + 0x18)[0] or frs_size
+    if used > frs_size:
+        used = frs_size
     a = off + u16(buf, off + 0x14)[0]
     # 行走边界用「记录已用大小」：最后一条属性之后到记录尾部是零填充，
     # 读到 a_len==0 就当属性区结束（不能当损坏 —— 真实 MFT 大多如此）。
@@ -504,34 +518,31 @@ def _mft_parse_at(buf: bytearray, off: int, frs_size: int,
             break
         if a_len < 24 or a + a_len > end or a_len % 8:
             return None                      # 属性越界/未对齐：记录视为损坏
+        a_end = a + a_len
         nonres = buf[a + 8]
+        attr_nlen = buf[a + 9]
         if a_type == 0x30 and nonres == 0:   # $FILE_NAME（驻留）
             if name_raw is None:
                 c = a + u16(buf, a + 0x14)[0]
-                if 0x42 <= c - off <= frs_size - 0x42:
+                if a + 0x18 <= c and c + 0x42 <= a_end:
                     parent = u64(buf, c)[0] & 0xFFFFFFFFFFFF
                     nl = buf[c + 0x40]
                     ns = buf[c + 0x41]
-                    if ns != 2 and 0 < nl <= 255:   # ns==2 是 DOS 8.3 短名
+                    if ns != 2 and 0 < nl <= 255 and c + 0x42 + nl * 2 <= a_end:
                         name_raw = buf[c + 0x42:c + 0x42 + nl * 2]
-        elif a_type == 0x80:                 # $DATA
+        elif a_type == 0x80 and attr_nlen == 0:  # 主 $DATA 流
             if nonres:
-                if not size:
-                    size = u64(buf, a + 0x38)[0]
-            else:
+                if not size and a_len >= 0x40 and u64(buf, a + 0x10)[0] == 0:
+                    size = u64(buf, a + 0x30)[0]
+            elif a_len >= 0x18:
                 size = u32(buf, a + 0x10)[0]
-            # 主数据流已到且父已定 → 提前收工。NTFS 属性按类型码排序
-            # （0x10 < 0x30 < 0x80），$DATA 之后只可能是 DOS 短名/ADS 之类
-            # 解析用不上的尾巴 —— 真实记录（STD_INFO + Win32 名 + DOS 名 +
-            # DATA）每条省 2/5 的属性行走。$DATA 前置于 $FILE_NAME 的异常
-            # 记录 parent 仍为 -1，不 break，按旧路径走全。
-            if parent >= 0:
+            if parent >= 0 and is_dir:
                 break
         elif a_type == 0x90:                 # $INDEX_ROOT → 目录
             is_dir = True
         elif a_type == 0x10 and with_mtime and not mtime and nonres == 0:
             c = a + u16(buf, a + 0x14)[0]
-            if off + 0x18 <= c <= end - 0x18:  # 修改时间在 STD_INFO 内容 +8
+            if a + 0x18 <= c and c + 0x18 <= a_end:
                 mtime = u64(buf, c + 8)[0]
         a += a_len
     if parent < 0:
@@ -578,7 +589,7 @@ def _mft_open_volume(letter: str):
     k32 = _mft_k32()
     GENERIC_READ = 0x80000000
     h = k32.CreateFileW("\\\\.\\{}:".format(letter), GENERIC_READ, 3, None, 3, 0, None)
-    if not h:
+    if not h or h == ctypes.c_void_p(-1).value:
         return None
     return h
 
@@ -615,74 +626,80 @@ class _ExtSlot(ctypes.Structure):
     ]
 
 
+_MFT_FAST_LOCK = threading.Lock()
+
+
 def _load_mft_fast():
     """若同目录下存在编译好的 mft_fast.dll 且 ABI 匹配，加载之；否则回退纯 Python。"""
     global _MFT_FAST_CACHE
-    if _MFT_FAST_CACHE is not False:
-        return _MFT_FAST_CACHE
-    _MFT_FAST_CACHE = None
-    if os.name != "nt":
-        return None
-    candidates = [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "mft_fast.dll"),
-        os.path.join(str(_core.BASE_DIR), "ocleaner", "mft_fast.dll"),
-    ]
-    for dll_path in candidates:
-        if not os.path.isfile(dll_path):
-            continue
-        try:
-            lib = ctypes.CDLL(dll_path)
-            lib.mft_fast_version.restype = ctypes.c_int
-            if lib.mft_fast_version() != 4:
+    with _MFT_FAST_LOCK:
+        if _MFT_FAST_CACHE is not False:
+            return _MFT_FAST_CACHE
+        if os.name != "nt":
+            _MFT_FAST_CACHE = None
+            return None
+        candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "mft_fast.dll"),
+            os.path.join(str(_core.BASE_DIR), "ocleaner", "mft_fast.dll"),
+        ]
+        for dll_path in candidates:
+            if not os.path.isfile(dll_path):
                 continue
-            lib.mft_scan_chunk.argtypes = [
-                ctypes.c_void_p,                    # buf
-                ctypes.c_uint32,                    # usable
-                ctypes.c_uint32,                    # frs_size
-                ctypes.c_uint64,                    # f_floor
-                ctypes.c_int32,                     # ext_stats
-                ctypes.c_int32,                     # with_mtime
-                ctypes.POINTER(ctypes.c_int64),     # out_parent
-                ctypes.POINTER(ctypes.c_int64),     # out_size
-                ctypes.POINTER(ctypes.c_uint8),     # out_flags
-                ctypes.POINTER(ctypes.c_uint64),    # out_mtime
-                ctypes.POINTER(ctypes.c_uint32),    # out_name_idx
-                ctypes.POINTER(ctypes.c_uint32),    # out_name_off
-                ctypes.POINTER(ctypes.c_uint16),    # out_name_len
-                ctypes.POINTER(_ExtSlot),           # out_ext_tbl
-            ]
-            lib.mft_scan_chunk.restype = ctypes.c_int32
-            lib.mft_agg_tree.argtypes = [
-                ctypes.c_int32,                     # n_recs
-                ctypes.POINTER(ctypes.c_int64),     # parent
-                ctypes.POINTER(ctypes.c_int64),     # size
-                ctypes.POINTER(ctypes.c_uint8),     # flags
-                ctypes.c_uint64,                    # floor_bytes
-                ctypes.POINTER(ctypes.c_int64),     # out_dir_total
-                ctypes.POINTER(ctypes.c_uint8),     # out_in_tree
-                ctypes.POINTER(ctypes.c_int32),     # out_want_frns
-                ctypes.c_int32,                     # max_want
-            ]
-            lib.mft_agg_tree.restype = ctypes.c_int32
-            lib.mft_reader_open.argtypes = [
-                ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32,
-                ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_int64),
-                ctypes.c_int32,
-            ]
-            lib.mft_reader_open.restype = ctypes.c_void_p
-            lib.mft_reader_next.argtypes = [
-                ctypes.c_void_p,
-                ctypes.POINTER(ctypes.c_uint64),
-                ctypes.POINTER(ctypes.c_uint32),
-            ]
-            lib.mft_reader_next.restype = ctypes.c_int32
-            lib.mft_reader_close.argtypes = [ctypes.c_void_p]
-            lib.mft_reader_close.restype = None
-            _MFT_FAST_CACHE = lib
-            return lib
-        except OSError:
-            continue
-    return None
+            try:
+                lib = ctypes.CDLL(dll_path)
+                lib.mft_fast_version.argtypes = []
+                lib.mft_fast_version.restype = ctypes.c_int
+                if lib.mft_fast_version() != 4:
+                    continue
+                lib.mft_scan_chunk.argtypes = [
+                    ctypes.c_void_p,                    # buf
+                    ctypes.c_uint32,                    # usable
+                    ctypes.c_uint32,                    # frs_size
+                    ctypes.c_uint64,                    # f_floor
+                    ctypes.c_int32,                     # ext_stats
+                    ctypes.c_int32,                     # with_mtime
+                    ctypes.POINTER(ctypes.c_int64),     # out_parent
+                    ctypes.POINTER(ctypes.c_int64),     # out_size
+                    ctypes.POINTER(ctypes.c_uint8),     # out_flags
+                    ctypes.POINTER(ctypes.c_uint64),    # out_mtime
+                    ctypes.POINTER(ctypes.c_uint32),    # out_name_idx
+                    ctypes.POINTER(ctypes.c_uint32),    # out_name_off
+                    ctypes.POINTER(ctypes.c_uint16),    # out_name_len
+                    ctypes.POINTER(_ExtSlot),           # out_ext_tbl
+                ]
+                lib.mft_scan_chunk.restype = ctypes.c_int32
+                lib.mft_agg_tree.argtypes = [
+                    ctypes.c_int32,                     # n_recs
+                    ctypes.POINTER(ctypes.c_int64),     # parent
+                    ctypes.POINTER(ctypes.c_int64),     # size
+                    ctypes.POINTER(ctypes.c_uint8),     # flags
+                    ctypes.c_uint64,                    # floor_bytes
+                    ctypes.POINTER(ctypes.c_int64),     # out_dir_total
+                    ctypes.POINTER(ctypes.c_uint8),     # out_in_tree
+                    ctypes.POINTER(ctypes.c_int32),     # out_want_frns
+                    ctypes.c_int32,                     # max_want
+                ]
+                lib.mft_agg_tree.restype = ctypes.c_int32
+                lib.mft_reader_open.argtypes = [
+                    ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32,
+                    ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_int64),
+                    ctypes.c_int32,
+                ]
+                lib.mft_reader_open.restype = ctypes.c_void_p
+                lib.mft_reader_next.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.POINTER(ctypes.c_uint64),
+                    ctypes.POINTER(ctypes.c_uint32),
+                ]
+                lib.mft_reader_next.restype = ctypes.c_int32
+                lib.mft_reader_close.argtypes = [ctypes.c_void_p]
+                lib.mft_reader_close.restype = None
+                _MFT_FAST_CACHE = lib
+                return lib
+            except (OSError, AttributeError):
+                continue
+        _MFT_FAST_CACHE = None
+        return None
 
 
 def _mft_build_table(letter: str, root: str, on_progress=None,
@@ -764,11 +781,12 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
         floor = _core.DISK_TREE_MIN_CHILD_MB * 1024 * 1024
         # 文件名字保留门槛：目录树关心的是「达到目录门槛的文件」，
         # 大文件排行要更低的地板（10 MB 级）。目录门槛始终不变。
-        f_floor = (file_floor_mb or _core.DISK_TREE_MIN_CHILD_MB) * 1024 * 1024
+        f_floor = (_core.DISK_TREE_MIN_CHILD_MB
+                   if file_floor_mb is None else file_floor_mb) * 1024 * 1024
         t0 = time.time()
         arr_parent = array("q")
         arr_size = array("q")
-        arr_flags = bytearray()            # bit0: 目录
+        arr_flags = array("B")             # bit0: 目录（带 buffer_info 供 C 聚合使用）
         dir_names: dict[int, bytes] = {}   # frn -> 目录名（UTF-16LE 原始字节，
                                            # 2026-11-03 起惰性解码：35 万目录里
                                            # 最终进树的只有千余条，全量解码
@@ -902,7 +920,9 @@ def _mft_build_table(letter: str, root: str, on_progress=None,
                         pv = out_ptr.value
                         uv = out_use.value
                         mv = memoryview((ctypes.c_uint8 * uv).from_address(pv))
-                        _consume_c(ctypes.c_void_p(pv), uv, mv)
+                        if not _consume_c(ctypes.c_void_p(pv), uv, mv):
+                            used_c_reader = False
+                            break
                 finally:
                     fast_dll.mft_reader_close(rd_ctx)
 
@@ -1173,7 +1193,7 @@ def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str,
                         base = None
                         break
                     base = (base if base.endswith("\\") else base + "\\") \
-                        + _mft_name_decode(nm)
+                        + _mft_name_decode(nm).lower()
                     dir_path[f] = base
                     dir_total[f] = int(c_dir_total[f])
                 if base is None:
@@ -1198,20 +1218,23 @@ def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str,
         if 0 < p < n_recs:
             kids.setdefault(p, []).append(frn)
     order = [5]
+    in_tree = {5}
     qi = 0
     while qi < len(order):
         cur = order[qi]
         qi += 1
-        order.extend(kids.get(cur, ()))
+        for c in kids.get(cur, ()):
+            if c not in in_tree:
+                in_tree.add(c)
+                order.append(c)
     dir_total: dict[int, int] = {}
     for d in reversed(order):
         s = direct.get(d, 0)
         for c in kids.get(d, ()):
-            s += dir_total[c]
+            s += dir_total.get(c, 0)
         dir_total[d] = s
 
     # 谁需要路径：根 / 体积达标 / 一层（parent==5）/ 文件父目录
-    in_tree = set(order)
     want = {5}
     for frn in order:
         if frn != 5 and (dir_total.get(frn, 0) >= floor
@@ -1243,7 +1266,7 @@ def _mft_agg_paths(arr_parent, arr_size, arr_flags, dir_names, root: str,
                 base = None               # 链上有无名目录：与旧版一致不给路径
                 break
             base = (base if base.endswith("\\") else base + "\\") \
-                + _mft_name_decode(nm)
+                + _mft_name_decode(nm).lower()
             dir_path[f] = base
         if base is None:
             for f in chain:               # 回滚半截链

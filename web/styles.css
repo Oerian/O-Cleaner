@@ -280,7 +280,7 @@
   .failed{color:var(--warn)}
   .field{display:flex;align-items:center;gap:9px;margin-bottom:10px;font-size:13px;flex-wrap:wrap}
   .field label{color:var(--dim)}
-  input[type=number],input[type=text],select,textarea{
+  input[type=number],input[type=text],input[type=password],select,textarea{
       background:var(--bg);color:var(--fg);border:1px solid var(--line);
       border-radius:6px;padding:6px 9px;font:inherit;min-width:0;max-width:100%}
   input[type=text]{flex:1}
