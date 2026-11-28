@@ -30,12 +30,81 @@ let selPaths = new Set();
 // 不参与清理本身 —— 清理由底部的按钮与后端同一条链路完成。
 let AI_PICKS = [];
 
-function toast(msg) {
-  const t = $("toast");
-  t.textContent = msg; t.classList.add("on");
+function toast(msg, action) {
+  const el = $("toast");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("on"), 2600);
+  el.textContent = "";
+  const span = document.createElement("span");
+  span.textContent = msg;
+  el.appendChild(span);
+  if (action && action.label && typeof action.onClick === "function") {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tiny primary";
+    btn.textContent = action.label;
+    btn.addEventListener("click", () => {
+      el.classList.remove("on");
+      action.onClick();
+    });
+    el.appendChild(btn);
+  }
+  el.classList.add("on");
+  toastTimer = setTimeout(() => el.classList.remove("on"), action ? 5200 : 2600);
 }
+
+let _dlgQueue = Promise.resolve();
+function _openDlg({ title, msg, isPrompt, defVal, danger, okText, cancelText }) {
+  const run = () => new Promise(resolve => {
+    const mask = $("dlgMask"), box = $("dlgBox");
+    if (!mask || !box) { resolve(isPrompt ? null : false); return; }
+    const prev = document.activeElement;
+    const okCls = danger ? "danger" : "primary";
+    box.innerHTML = `
+      <h2 id="dlgTitle">${esc(title || (isPrompt ? t("dlg.prompt", "请输入") : t("dlg.confirm", "确认操作")))}</h2>
+      <div class="mbody">
+        <p class="dlgmsg">${esc(msg)}</p>
+        ${isPrompt ? `<input class="dlginp" id="dlgInp" type="text" value="${esc(defVal ?? "")}">` : ""}
+      </div>
+      <div class="mfoot">
+        <button type="button" class="ghost" id="dlgCancel">${esc(cancelText || t("dlg.cancel", "取消"))}</button>
+        <button type="button" class="${okCls}" id="dlgOk">${esc(okText || t("dlg.ok", "确定"))}</button>
+      </div>`;
+    let settled = false;
+    const done = val => {
+      if (settled) return;
+      settled = true;
+      mask.classList.remove("on");
+      document.removeEventListener("keydown", onKey, true);
+      mask.removeEventListener("click", onMask);
+      if (prev && typeof prev.focus === "function") { try { prev.focus(); } catch (_) {} }
+      resolve(val);
+    };
+    const submit = () => done(isPrompt ? ($("dlgInp") ? $("dlgInp").value : "") : true);
+    const onKey = ev => {
+      if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); done(isPrompt ? null : false); }
+      else if (ev.key === "Enter" && isPrompt) { ev.preventDefault(); ev.stopPropagation(); submit(); }
+    };
+    const onMask = ev => { if (ev.target === mask) done(isPrompt ? null : false); };
+    $("dlgCancel").addEventListener("click", () => done(isPrompt ? null : false));
+    $("dlgOk").addEventListener("click", submit);
+    mask.addEventListener("click", onMask);
+    document.addEventListener("keydown", onKey, true);
+    mask.classList.add("on");
+    if (isPrompt && $("dlgInp")) {
+      $("dlgInp").focus();
+      $("dlgInp").select();
+    } else if (danger) {
+      $("dlgCancel").focus();
+    } else {
+      $("dlgOk").focus();
+    }
+  });
+  const p = _dlgQueue.then(run, run);
+  _dlgQueue = p.catch(() => {});
+  return p;
+}
+function uiConfirm(msg, opts = {}) { return _openDlg({ ...opts, msg, isPrompt: false }); }
+function uiPrompt(msg, defVal = "", opts = {}) { return _openDlg({ ...opts, msg, defVal, isPrompt: true }); }
 
 /* 在资源管理器里打开/定位某个路径。白名单 + 同源校验都在后端做，
    前端只管发请求；被拒绝时给出提示而不是静默失败。
@@ -363,10 +432,10 @@ function renderPacks() {
     </div>`).join("");
   el.querySelectorAll("[data-pk-toggle]").forEach(n => n.addEventListener("change", () =>
     packOp("toggle", { id: n.closest(".packrow").dataset.id, enabled: n.checked })));
-  el.querySelectorAll("[data-pk-del]").forEach(n => n.addEventListener("click", () => {
+  el.querySelectorAll("[data-pk-del]").forEach(n => n.addEventListener("click", async () => {
     const row = n.closest(".packrow");
-    if (!confirm(t("packs.confirmDel","确定删除资源包「{n}」？\n").replace("{n}", row.dataset.id) +
-                 t("packs.confirmDel2","它提供的说明会立即失效，重新导入即可恢复。"))) return;
+    if (!(await uiConfirm(t("packs.confirmDel","确定删除资源包「{n}」？\n").replace("{n}", row.dataset.id) +
+                 t("packs.confirmDel2","它提供的说明会立即失效，重新导入即可恢复。"), { danger: true }))) return;
     packOp("delete", { id: row.dataset.id });
   }));
 }
@@ -1238,7 +1307,7 @@ function renderFsGroups() {
   box.querySelectorAll("[data-grename]").forEach(b => b.addEventListener("click", async () => {
     const g = groups.find(x => x.id === b.dataset.grename);
     if (!g) return;
-    const nn = prompt(t("grp.renamePrompt", "输入新的分组名称："), g.name);
+    const nn = await uiPrompt(t("grp.renamePrompt", "输入新的分组名称："), g.name);
     if (!nn || !nn.trim() || nn.trim() === g.name) return;
     try {
       await fsGroupOp("rename", { id: g.id, name: nn.trim() });
@@ -1250,7 +1319,7 @@ function renderFsGroups() {
   box.querySelectorAll("[data-gdel]").forEach(b => b.addEventListener("click", async () => {
     const g = groups.find(x => x.id === b.dataset.gdel);
     if (!g) return;
-    if (!confirm(t("grp.delConfirm", "确定删除聚合组「{n}」？（仅解散分组，不删除磁盘文件）").replace("{n}", g.name))) return;
+    if (!(await uiConfirm(t("grp.delConfirm", "确定删除聚合组「{n}」？（仅解散分组，不删除磁盘文件）").replace("{n}", g.name), { danger: true }))) return;
     try {
       await fsGroupOp("delete", { id: g.id });
       renderFsGroups();
@@ -1322,7 +1391,7 @@ function renderRules() {
   box.querySelectorAll("[data-rename]").forEach(b => b.addEventListener("click", async e => {
     e.stopPropagation();
     const r = rules.find(x => x.id === b.dataset.rename);
-    const name = prompt(t("rule.newNamePrompt","新的规则名："), r ? r.name : "");
+    const name = await uiPrompt(t("rule.newNamePrompt","新的规则名："), r ? r.name : "");
     if (!name || !name.trim()) return;
     const res = await apiJSON(`${API}/__oc__/custom-rules`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1334,7 +1403,7 @@ function renderRules() {
   box.querySelectorAll("[data-rdel]").forEach(b => b.addEventListener("click", async e => {
     e.stopPropagation();
     const r = rules.find(x => x.id === b.dataset.rdel);
-    if (!confirm(t("confirm.delRule","确定删除规则「{n}」？").replace("{n}", r ? r.name : ""))) return;
+    if (!(await uiConfirm(t("confirm.delRule","确定删除规则「{n}」？").replace("{n}", r ? r.name : ""), { danger: true }))) return;
     const res = await apiJSON(`${API}/__oc__/custom-rules`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "delete", id: b.dataset.rdel })
@@ -1349,9 +1418,9 @@ async function saveRule() {
   if (!name) { toast(t("rule.needName","请先给规则起个名字")); $("ruleName").focus(); return; }
   if (!selected.size) { toast(t("rule.needPick","请先勾选要保存的清理项")); return; }
   const auto = $("ruleAuto").checked;
-  if (auto && !confirm(
+  if (auto && !(await uiConfirm(
       t("rule.auto1","规则「{n}」将保存，并立即清理这 {m} 项，预计释放 ").replace("{n}", name).replace("{m}", selected.size) +
-      t("rule.auto2","{v}。\n\n直接删除、不经过回收站，确认继续？").replace("{v}", fmt(selTotal())))) return;
+      t("rule.auto2","{v}。\n\n直接删除、不经过回收站，确认继续？").replace("{v}", fmt(selTotal())), { danger: true }))) return;
 
   const res = await apiJSON(`${API}/__oc__/custom-rules`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -1370,8 +1439,8 @@ async function runRule(rule, silent) {
   const t0 = Date.now();
   if (!silent) {
     const freed = ruleFreed(rule);
-    if (!confirm(t("rule.run1","立即按规则「{n}」清理 {m} 项，").replace("{n}", rule.name).replace("{m}", ruleTargets(rule).length) +
-                 t("rule.run2","预计释放 {v}。\n\n直接删除、不经过回收站，确认继续？").replace("{v}", fmt(freed)))) return;
+    if (!(await uiConfirm(t("rule.run1","立即按规则「{n}」清理 {m} 项，").replace("{n}", rule.name).replace("{m}", ruleTargets(rule).length) +
+                 t("rule.run2","预计释放 {v}。\n\n直接删除、不经过回收站，确认继续？").replace("{v}", fmt(freed)), { danger: true }))) return;
   }
   try {
     const res = await fetch(`${API}/__oc__/run-rule?lang=${langParam()}`, {
@@ -1817,7 +1886,7 @@ function renderCustomLibs() {
   box.querySelectorAll(".cgdel").forEach(b => b.addEventListener("click", async () => {
     const g = libs[parseInt(b.dataset.i, 10)];
     if (!g) return;
-    if (!confirm(t("cg.delConfirm", "从概览移除「{n}」？磁盘内容不受影响。").replace("{n}", g.name))) return;
+    if (!(await uiConfirm(t("cg.delConfirm", "从概览移除「{n}」？磁盘内容不受影响。").replace("{n}", g.name)))) return;
     const r = await apiJSON(`${API}/__oc__/game-libs`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ op: "remove", path: g.path }),
@@ -2588,8 +2657,8 @@ function showCleanResult(e, stats, t0, title) {
   const pr = document.getElementById("btnPermRetry");
   if (pr) pr.addEventListener("click", async () => {
     if (!_lastCleanReq) { toast(t("cr.permNoReq", "找不到原始清理请求——请重新勾选后再试")); return; }
-    if (!confirm(t("cr.permConfirm",
-        "确定永久删除吗？将跳过回收站直接删除，无法从回收站还原！"))) return;
+    if (!(await uiConfirm(t("cr.permConfirm",
+        "确定永久删除吗？将跳过回收站直接删除，无法从回收站还原！"), { danger: true }))) return;
     pr.disabled = true; pr.innerHTML = `<span class="spin"></span>${t("cc.cleaning", "清理中")}`;
     try {
       const rr = await apiJSON(`${API}/__oc__/clean?lang=${langParam()}`, {
@@ -2786,7 +2855,7 @@ async function findLockHolders(bad, btn) {
     if (rbBtn) rbBtn.addEventListener("click", async () => {
       const files = locked.map(x => String((x && x.path) || "").trim()).filter(Boolean);
       if (!files.length) return;
-      if (!confirm(t("lk.rebootConfirm", "确定将以下 {n} 个占用文件登记为「下次重启 Windows 时自动删除」？（需管理员权限）").replace("{n}", files.length))) return;
+      if (!(await uiConfirm(t("lk.rebootConfirm", "确定将以下 {n} 个占用文件登记为「下次重启 Windows 时自动删除」？（需管理员权限）").replace("{n}", files.length), { danger: true }))) return;
       rbBtn.disabled = true;
       try {
         const rr = await apiJSON(`${API}/__oc__/delete-on-reboot`, {
@@ -2808,7 +2877,7 @@ async function findLockHolders(bad, btn) {
       const chks = [...pane.querySelectorAll(".lkPidChk:checked")];
       if (!chks.length) { toast(t("lk.stopNone","请先勾选要停止的进程")); return; }
       const desc = chks.map(c => `${c.dataset.name} (PID ${c.value})`).join("、");
-      if (!confirm(t("lk.stopConfirm","确定停止以下进程并重试清理？未保存的工作可能会丢失：\n") + desc)) return;
+      if (!(await uiConfirm(t("lk.stopConfirm","确定停止以下进程并重试清理？未保存的工作可能会丢失：\n") + desc, { danger: true }))) return;
       stopBtn.disabled = true;
       try {
         const sr = await apiJSON(`${API}/__oc__/process/stop`, {
@@ -5224,7 +5293,7 @@ async function openSysSlim() {
   slimBtns.forEach(b => b.addEventListener("click", async () => {
     const act = b.dataset.slim;
     const msg = $("slimMsg");
-    if (!confirm(t("slim.confirm", "确认执行该 Windows 官方维护操作？"))) return;
+    if (!(await uiConfirm(t("slim.confirm", "确认执行该 Windows 官方维护操作？")))) return;
     slimBtns.forEach(x => { x.disabled = true; });
     msg.innerHTML = `<span class="spin"></span>${esc(t("slim.running", "正在执行官方命令，请勿关闭窗口…"))}`;
     try {
@@ -5242,9 +5311,7 @@ async function openSysSlim() {
         ? t("slim.doneFreed", "执行完成，已释放 {v}。").replace("{v}", r.freed_h)
         : t("slim.done", "执行完成。");
       toast(note);
-      if (act === "hiber_off" || act === "hiber_on") {
-        try { await loadState(); } catch (_) {}
-      }
+      try { await loadState(); } catch (_) {}
       if (_anSeq === anSeq) openSysSlim();
     } catch (e) {
       if (_anSeq !== anSeq) return;
@@ -5805,13 +5872,18 @@ async function openDownloadsAdvice() {
     if (_anSeq === anSeq) openDownloadsAdvice();
   });
   $("dlArc").addEventListener("click", async () => {
-    if (!confirm(t("dl.arcConfirm", "把下载目录顶层的全部文件按类型移入分类子文件夹？（可在弹窗里一键撤销）"))) return;
+    if (!(await uiConfirm(t("dl.arcConfirm", "把下载目录顶层的全部文件按类型移入分类子文件夹？（可在弹窗里一键撤销）")))) return;
     $("dlArc").disabled = true; $("dlArc").textContent = t("dl.archiving", "归档中…");
     const rr = await apiJSON(`${API}/__oc__/downloads-archive`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
     }).catch(e => ({ error: String(e) }));
-    toast(rr.error || t("dl.arcDone", "已归档 {n} 个文件到 {cats}")
-      .replace("{n}", rr.moved).replace("{cats}", (rr.by_category || []).join("、")));
+    if (rr.error) {
+      toast(rr.error);
+    } else {
+      toast(t("dl.arcDone", "已归档 {n} 个文件到 {cats}")
+        .replace("{n}", rr.moved).replace("{cats}", (rr.by_category || []).join("、")),
+        rr.moved > 0 ? { label: t("dl.undoBtn", "撤销归档"), onClick: () => $("dlUndo")?.click() } : null);
+    }
     if (_anSeq === anSeq) openDownloadsAdvice();
   });
   $("dlUndo").addEventListener("click", async () => {
@@ -5828,8 +5900,8 @@ async function openDownloadsAdvice() {
     const picked = [...document.querySelectorAll("#modal .dlChk:checked")]
       .filter(x => x.dataset.dir !== "1").map(x => x.dataset.p);
     if (!picked.length) { toast(t("dl.none", "请先勾选要清理的文件")); return; }
-    if (!confirm(t("dl.confirm", "把选中的 {n} 个文件移入回收站？（可随时还原）")
-        .replace("{n}", picked.length))) return;
+    if (!(await uiConfirm(t("dl.confirm", "把选中的 {n} 个文件移入回收站？（可随时还原）")
+        .replace("{n}", picked.length), { danger: false }))) return;
     dlGo.disabled = true; dlGo.textContent = t("dl.working", "清理中…");
     const rr = await apiJSON(`${API}/__oc__/delete-paths`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -6727,7 +6799,7 @@ $("btnSchSave").addEventListener("click", async () => {
       msg.innerHTML = `<span class="res-err">${esc("备份文件超过 24 MB 体积上限")}</span>`;
       return;
     }
-    if (!confirm(t("bak.confirm", "确定从所选备份还原配置？当前自定义规则与分组将被合并/覆盖。"))) return;
+    if (!(await uiConfirm(t("bak.confirm", "确定从所选备份还原配置？当前自定义规则与分组将被合并/覆盖。"), { danger: true }))) return;
     const impBtn = $("btnBakImport");
     if (impBtn) impBtn.disabled = true;
     msg.textContent = t("bak.working", "正在还原备份…");
@@ -6883,7 +6955,7 @@ $("btnUpCheck").addEventListener("click", async () => {
         `<button type="button" class="tiny primary" id="btnSelfUpdate" style="margin-left:6px">${esc(t("up.autoBtn","一键校验升级"))}</button>`;
       const su = $("btnSelfUpdate");
       if (su) su.addEventListener("click", async () => {
-        if (!confirm(t("up.confirm", "确认下载并校验更新程序文件？（您的配置与历史记录将被保留）"))) return;
+        if (!(await uiConfirm(t("up.confirm", "确认下载并校验更新程序文件？（您的配置与历史记录将被保留）")))) return;
         su.disabled = true;
         btn.disabled = true;
         su.textContent = t("up.updating", "下载校验中…");
@@ -6989,7 +7061,8 @@ $("aiOut")?.addEventListener("click", async ev => {
 });
 $("btnAiClear").addEventListener("click", () => { AI_PICKS = []; $("aiOut").innerHTML = ""; });
 
-$("btnClearLog").addEventListener("click", async () => {  if (!confirm(t("confirm.clearHistory","确定清空全部清理历史？累计统计也会归零，此操作不可恢复。"))) return;
+$("btnClearLog").addEventListener("click", async () => {
+  if (!(await uiConfirm(t("confirm.clearHistory","确定清空全部清理历史？累计统计也会归零，此操作不可恢复。"), { danger: true }))) return;
   await fetch(`${API}/__oc__/history`, { method: "DELETE" });
   await loadState();
   toast(t("toast.historyCleared","历史已清空"));

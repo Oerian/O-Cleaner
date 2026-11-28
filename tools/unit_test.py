@@ -815,6 +815,31 @@ def main() -> int:
     finally:
         app.CONVERT_PATH = _orig_cp
 
+    # 11) sys_slim_run 释放空间计量 & POST /__oc__/sys-slim 写入历史（hiber_on 不记）
+    _orig_adm, _orig_pop, _orig_du = app.is_admin, app.subprocess.Popen, app.shutil.disk_usage
+    try:
+        class _FakeProc:
+            returncode = 0
+            def communicate(self, timeout=None):
+                return b"ok", b""
+        _du_calls = iter([type("_U", (), {"free": 1_000_000_000})(),
+                          type("_U", (), {"free": 1_524_288_000})()])
+        app.is_admin = lambda: True
+        app.subprocess.Popen = lambda *a, **kw: _FakeProc()
+        app.shutil.disk_usage = lambda *_a: next(_du_calls, type("_U", (), {"free": 1_524_288_000})())
+        _sr = app.sys_slim_run("dism_cleanup")
+        check("官方组件瘦身：DISM 清理按盘可用增量计量释放空间",
+              _sr.get("ok") and _sr.get("freed") == 524_288_000 and _sr.get("drive"),
+              f"{_sr}")
+    finally:
+        app.is_admin, app.subprocess.Popen, app.shutil.disk_usage = _orig_adm, _orig_pop, _orig_du
+
+    # 12) 前端零原生 confirm/prompt/alert 残留
+    _app_js = (app.BASE_DIR / "web" / "app.js").read_text(encoding="utf-8")
+    _bare_dlg = app.re.findall(r"(?<![A-Za-z0-9_$.])(?:confirm|prompt|alert)\s*\(", _app_js)
+    check("前端弹窗统一：web/app.js 已全部迁移至 uiConfirm/uiPrompt（无原生弹窗残留）",
+          len(_bare_dlg) == 0, f"found={_bare_dlg}")
+
     failed = [c for c in _checks if not c[1]]
     print(f"\n==== unit_test：通过 {len(_checks) - len(failed)} 项，"
           f"失败 {len(failed)} 项 ====")

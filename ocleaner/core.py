@@ -458,8 +458,14 @@ def sys_slim_run(action: str) -> dict:
 
     try:
         sys_drv = (os.environ.get("SystemDrive") or "C:").rstrip("\\/")
+        drv_letter = sys_drv.rstrip(":").upper() or "C"
         hiber_p = Path(sys_drv + "\\hiberfil.sys")
         before_sz = 0
+        free_before = 0
+        try:
+            free_before = shutil.disk_usage(sys_drv + "\\").free
+        except OSError:
+            pass
         if act == "hiber_off":
             try:
                 if hiber_p.exists():
@@ -486,7 +492,12 @@ def sys_slim_run(action: str) -> dict:
         freed = 0
         if act == "hiber_off" and before_sz > 0 and not hiber_p.exists():
             freed = before_sz
-        return {"ok": True, "action": act, "freed": freed,
+        elif act in ("dism_cleanup", "do_cache", "hiber_off") and free_before > 0:
+            try:
+                freed = max(0, shutil.disk_usage(sys_drv + "\\").free - free_before)
+            except OSError:
+                pass
+        return {"ok": True, "action": act, "drive": drv_letter, "freed": freed,
                 "freed_h": human(freed) if freed else "",
                 "output": out[:400]}
     except OSError as exc:

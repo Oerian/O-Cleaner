@@ -1693,6 +1693,31 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/__oc__/app/self_update":
             return self._json(_core.app_self_update())
         if route == "/__oc__/sys-slim":
-            return self._json(_core.sys_slim_run(str((body or {}).get("action") or "")))
+            act = str((body or {}).get("action") or "").strip()
+            res = _core.sys_slim_run(act)
+            if res.get("ok") and act in ("dism_cleanup", "hiber_off", "do_cache"):
+                _slim_labels = {
+                    "dism_cleanup": "Windows 组件存储清理 (DISM)",
+                    "hiber_off": "关闭休眠文件 (hiberfil.sys)",
+                    "do_cache": "清理传递优化缓存",
+                }
+                freed = int(res.get("freed") or 0)
+                drv = str(res.get("drive") or "C").upper()
+                _core.append_history({
+                    "time": _core.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "drive": drv,
+                    "targets": 1,
+                    "freed": freed,
+                    "freed_h": _core.human(freed),
+                    "results": [{
+                        "id": f"sys-slim-{act}",
+                        "label": _slim_labels.get(act, act),
+                        "freed": freed,
+                        "deleted": 1,
+                        "failed": 0,
+                        "drive": drv,
+                    }],
+                })
+            return self._json(res)
 
         return self._json({"error": "not found"}, 404)

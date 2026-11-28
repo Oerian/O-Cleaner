@@ -863,6 +863,11 @@ const I18N_EN = {
   "up.confirm": "Download, verify SHA-256, and update program files? (Your config and history will be preserved)",
   "bak.confirm": "Restore configuration from the selected backup? Current custom rules and groups may be updated.",
   "bak.working": "Restoring backup...",
+  "dlg.confirm": "Confirm Action",
+  "dlg.prompt": "Input Required",
+  "dlg.ok": "Confirm",
+  "dlg.cancel": "Cancel",
+  "dl.undoBtn": "Undo archive",
   "cc.close": "Close"
 };
 /* 动态文案取词：en 界面且有词条时用译文，否则回落到调用处的中文原文。
